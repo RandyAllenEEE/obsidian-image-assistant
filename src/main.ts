@@ -18,6 +18,7 @@ import { NonDestructiveResizePreset } from "./NonDestructiveResizeSettings";
 import { ContextMenu } from "./ContextMenu";
 // import { ImageAlignment } from './ImageAlignment';
 import { ImageAlignmentManager } from './ImageAlignmentManager';
+import { normalizePath } from "obsidian";
 import { ImageResizer } from "./ImageResizer";
 import { BatchImageProcessor } from "./BatchImageProcessor";
 import { ProcessSingleImageModal } from "./ProcessSingleImageModal";
@@ -77,6 +78,7 @@ export default class ImageConverterPlugin extends Plugin {
     
     private processedImage: ArrayBuffer | null = null;
     private temporaryBuffers: (ArrayBuffer | Blob | null)[] = [];
+    private tempFolderPath = ".obsidian/plugins/image-assistant/temp";
 
     async onload() {
         await this.loadSettings();
@@ -84,6 +86,9 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Initialize core components immediately
         this.supportedImageFormats = new SupportedImageFormats(this.app);
+
+        // Ensure temp folder exists for cloud upload
+        await this.ensureTempFolderExists();
 
         // Captions are time-sensitive
         if (this.settings.enableImageCaptions) {
@@ -1224,6 +1229,49 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     /**
+     * Ensure temp folder exists for cloud upload
+     */
+    private async ensureTempFolderExists(): Promise<void> {
+        try {
+            const exists = await this.app.vault.adapter.exists(this.tempFolderPath);
+            if (!exists) {
+                await this.app.vault.createFolder(this.tempFolderPath);
+                console.log(`Created temp folder: ${this.tempFolderPath}`);
+            }
+        } catch (error) {
+            console.error('Failed to create temp folder:', error);
+            // Don't throw, just log the error
+        }
+    }
+
+    /**
+     * Generate unique temp file path
+     */
+    private generateTempFilePath(fileName: string): string {
+        const timestamp = Date.now();
+        const random = Math.random().toString(36).substring(2, 8);
+        // Sanitize filename: remove path separators and special characters
+        const sanitizedName = fileName.replace(/[\\/:\*\?"<>\|]/g, '_');
+        const tempFileName = `.temp_${timestamp}_${random}_${sanitizedName}`;
+        return normalizePath(`${this.tempFolderPath}/${tempFileName}`);
+    }
+
+    /**
+     * Cleanup temp file safely
+     */
+    private async cleanupTempFile(filePath: string): Promise<void> {
+        try {
+            const file = this.app.vault.getAbstractFileByPath(filePath);
+            if (file instanceof TFile) {
+                await this.app.vault.delete(file);
+            }
+        } catch (error) {
+            console.warn(`Failed to delete temp file ${filePath}:`, error);
+            // Don't throw, just log the warning
+        }
+    }
+
+    /**
      * Handle drop event in cloud mode
      * Upload images to image hosting service and insert links
      */
@@ -1247,11 +1295,19 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Process each file
         for (const file of supportedFiles) {
+            let tempFile: TFile | null = null;
             try {
                 // Insert uploading placeholder
                 const timestamp = Date.now();
                 const placeholder = `![Uploading file...${timestamp}]()`;
                 editor.replaceRange(placeholder, cursor);
+
+                // Generate unique temp file path
+                const tempPath = this.generateTempFilePath(file.name);
+                
+                // Save file temporarily to vault for upload
+                const fileBuffer = await file.arrayBuffer();
+                tempFile = await this.app.vault.createBinary(tempPath, fileBuffer) as TFile;
 
                 // Create uploader manager
                 const uploaderManager = new UploaderManager(
@@ -1259,21 +1315,8 @@ export default class ImageConverterPlugin extends Plugin {
                     this
                 );
 
-                // Save file temporarily to vault for upload
-                const tempPath = `${activeFile.parent?.path || ''}/.temp_${timestamp}_${file.name}`;
-                const fileBuffer = await file.arrayBuffer();
-                const tempFile = await this.app.vault.createBinary(tempPath, fileBuffer) as TFile;
-
                 // Upload file
                 const uploadResult = await uploaderManager.upload([tempFile.path]);
-
-                // Delete temporary file
-                if (this.settings.cloudUploadSettings.deleteSource) {
-                    await this.app.vault.delete(tempFile);
-                } else {
-                    // Keep temp file, just delete it from the temp location
-                    await this.app.vault.delete(tempFile);
-                }
 
                 // Generate cloud link with size parameters
                 const cloudUrl = uploadResult.result[0];
@@ -1292,6 +1335,11 @@ export default class ImageConverterPlugin extends Plugin {
                 console.error('Upload failed:', error);
                 new Notice(`Upload failed: ${error.message}`);
                 // Leave placeholder in place for user to see the error
+            } finally {
+                // Always cleanup temp file
+                if (tempFile) {
+                    await this.cleanupTempFile(tempFile.path);
+                }
             }
         }
 
@@ -1327,11 +1375,19 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Process each file
         for (const file of supportedFiles) {
+            let tempFile: TFile | null = null;
             try {
                 // Insert uploading placeholder
                 const timestamp = Date.now();
                 const placeholder = `![Uploading file...${timestamp}]()`;
                 editor.replaceRange(placeholder, cursor);
+
+                // Generate unique temp file path
+                const tempPath = this.generateTempFilePath(file.name);
+                
+                // Save file temporarily to vault for upload
+                const fileBuffer = await file.arrayBuffer();
+                tempFile = await this.app.vault.createBinary(tempPath, fileBuffer) as TFile;
 
                 // Create uploader manager
                 const uploaderManager = new UploaderManager(
@@ -1339,21 +1395,8 @@ export default class ImageConverterPlugin extends Plugin {
                     this
                 );
 
-                // Save file temporarily to vault for upload
-                const tempPath = `${activeFile.parent?.path || ''}/.temp_${timestamp}_${file.name}`;
-                const fileBuffer = await file.arrayBuffer();
-                const tempFile = await this.app.vault.createBinary(tempPath, fileBuffer) as TFile;
-
                 // Upload file
                 const uploadResult = await uploaderManager.upload([tempFile.path]);
-
-                // Delete temporary file
-                if (this.settings.cloudUploadSettings.deleteSource) {
-                    await this.app.vault.delete(tempFile);
-                } else {
-                    // Always delete temp file after upload
-                    await this.app.vault.delete(tempFile);
-                }
 
                 // Generate cloud link with size parameters
                 const cloudUrl = uploadResult.result[0];
@@ -1372,6 +1415,11 @@ export default class ImageConverterPlugin extends Plugin {
                 console.error('Upload failed:', error);
                 new Notice(`Upload failed: ${error.message}`);
                 // Leave placeholder in place for user to see the error
+            } finally {
+                // Always cleanup temp file
+                if (tempFile) {
+                    await this.cleanupTempFile(tempFile.path);
+                }
             }
         }
 

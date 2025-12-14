@@ -491,7 +491,13 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             containerEl.removeClass("global-presets-visible");
         }
 
-        this.renderGlobalPresetSelector();
+        // --- Paste Handling Settings Section (render first to determine mode) ---
+        this.renderPasteHandlingSettingsSection(containerEl);
+
+        // Only render Drop/paste presets in local mode
+        if (this.plugin.settings.pasteHandlingMode === 'local') {
+            this.renderGlobalPresetSelector();
+        }
 
         // No need to check or update isFormExpanded here
         this.renderTabs();
@@ -499,8 +505,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         // Initialize the form container before rendering preset groups
         this.initializeFormContainer();
 
-        // Only render preset groups if globalPresetVisible is true
-        if (this.presetUIState.globalPresetVisible) {
+        // Only render preset groups if globalPresetVisible is true AND in local mode
+        if (this.presetUIState.globalPresetVisible && this.plugin.settings.pasteHandlingMode === 'local') {
             switch (this.activeTab) {
                 case "folder":
                     this.renderPresetGroup(
@@ -549,10 +555,6 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         if (this.editingPresetKey && this.formContainer) {
             this.formContainer.addClass("visible");
         }
-
-
-        // --- Paste Handling Settings Section ---
-        this.renderPasteHandlingSettingsSection(containerEl);
 
         // --- Image Alignment Settings Section ---
         this.renderImageAlignmentSettingsSection(containerEl);
