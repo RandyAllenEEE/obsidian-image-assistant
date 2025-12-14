@@ -25,6 +25,8 @@ import { ProcessFolderModal } from "./ProcessFolderModal";
 import { ProcessCurrentNote } from "./ProcessCurrentNote";
 import { ProcessAllVaultModal } from "./ProcessAllVaultModal"
 import { ImageCaptionManager } from "./ImageCaptionManager"
+import { UploaderManager } from "./uploader/index";
+import { CloudLinkFormatter } from "./CloudLinkFormatter";
 
 // Settings tab and all DEFAULTS
 import {
@@ -429,10 +431,21 @@ export default class ImageConverterPlugin extends Plugin {
                 );
 
                 if (hasSupportedFiles) {
+                    // Check paste handling mode
+                    if (this.settings.pasteHandlingMode === 'disabled') {
+                        // Disabled mode: do nothing, let Obsidian handle it
+                        return;
+                    }
+
                     evt.preventDefault(); // Prevent default behavior
 
-                    // We don't need setTimeout anymore since we're using the drop position
-                    await this.handleDrop(fileData, editor, evt, pos);
+                    if (this.settings.pasteHandlingMode === 'cloud') {
+                        // Cloud mode: upload to image hosting
+                        await this.handleDropCloud(fileData, editor, pos);
+                    } else {
+                        // Local mode: use original converter logic
+                        await this.handleDrop(fileData, editor, evt, pos);
+                    }
                 }
             })
         );
@@ -464,8 +477,21 @@ export default class ImageConverterPlugin extends Plugin {
                 );
 
                 if (hasSupportedItems) {
+                    // Check paste handling mode
+                    if (this.settings.pasteHandlingMode === 'disabled') {
+                        // Disabled mode: do nothing, let Obsidian handle it
+                        return;
+                    }
+
                     evt.preventDefault();
-                    await this.handlePaste(itemData, editor, cursor);
+
+                    if (this.settings.pasteHandlingMode === 'cloud') {
+                        // Cloud mode: upload to image hosting
+                        await this.handlePasteCloud(itemData, editor, cursor);
+                    } else {
+                        // Local mode: use original converter logic
+                        await this.handlePaste(itemData, editor, cursor);
+                    }
                 }
             })
         );
@@ -1194,6 +1220,164 @@ export default class ImageConverterPlugin extends Plugin {
                 this.temporaryBuffers[i] = null;
             }
             this.temporaryBuffers = [];
+        }
+    }
+
+    /**
+     * Handle drop event in cloud mode
+     * Upload images to image hosting service and insert links
+     */
+    private async handleDropCloud(
+        fileData: { name: string; type: string; file: File }[],
+        editor: Editor,
+        cursor: EditorPosition
+    ) {
+        // Filter supported files
+        const supportedFiles = fileData
+            .filter(data => this.supportedImageFormats.isSupported(data.type, data.name))
+            .map(data => data.file);
+
+        if (supportedFiles.length === 0) return;
+
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile) {
+            new Notice('No active file detected.');
+            return;
+        }
+
+        // Process each file
+        for (const file of supportedFiles) {
+            try {
+                // Insert uploading placeholder
+                const timestamp = Date.now();
+                const placeholder = `![Uploading file...${timestamp}]()`;
+                editor.replaceRange(placeholder, cursor);
+
+                // Create uploader manager
+                const uploaderManager = new UploaderManager(
+                    this.settings.cloudUploadSettings.uploader,
+                    this
+                );
+
+                // Save file temporarily to vault for upload
+                const tempPath = `${activeFile.parent?.path || ''}/.temp_${timestamp}_${file.name}`;
+                const fileBuffer = await file.arrayBuffer();
+                const tempFile = await this.app.vault.createBinary(tempPath, fileBuffer) as TFile;
+
+                // Upload file
+                const uploadResult = await uploaderManager.upload([tempFile.path]);
+
+                // Delete temporary file
+                if (this.settings.cloudUploadSettings.deleteSource) {
+                    await this.app.vault.delete(tempFile);
+                } else {
+                    // Keep temp file, just delete it from the temp location
+                    await this.app.vault.delete(tempFile);
+                }
+
+                // Generate cloud link with size parameters
+                const cloudUrl = uploadResult.result[0];
+                const cloudLink = CloudLinkFormatter.formatCloudLink(
+                    cloudUrl,
+                    this.settings.cloudUploadSettings
+                );
+
+                // Replace placeholder with actual link
+                const content = editor.getValue();
+                const newContent = content.replace(placeholder, cloudLink);
+                editor.setValue(newContent);
+
+                new Notice('Image uploaded successfully!');
+            } catch (error) {
+                console.error('Upload failed:', error);
+                new Notice(`Upload failed: ${error.message}`);
+                // Leave placeholder in place for user to see the error
+            }
+        }
+
+        // Refresh captions if enabled
+        if (this.settings.enableImageCaptions) {
+            this.captionManager.refresh();
+        }
+    }
+
+    /**
+     * Handle paste event in cloud mode
+     * Upload images to image hosting service and insert links
+     */
+    private async handlePasteCloud(
+        itemData: { kind: string; type: string; file: File | null }[],
+        editor: Editor,
+        cursor: EditorPosition
+    ) {
+        // Filter supported files
+        const supportedFiles = itemData
+            .filter(data => data.kind === "file" && data.file &&
+                this.supportedImageFormats.isSupported(data.type, data.file.name))
+            .map(data => data.file!)
+            .filter((file): file is File => file !== null);
+
+        if (supportedFiles.length === 0) return;
+
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile) {
+            new Notice('No active file detected.');
+            return;
+        }
+
+        // Process each file
+        for (const file of supportedFiles) {
+            try {
+                // Insert uploading placeholder
+                const timestamp = Date.now();
+                const placeholder = `![Uploading file...${timestamp}]()`;
+                editor.replaceRange(placeholder, cursor);
+
+                // Create uploader manager
+                const uploaderManager = new UploaderManager(
+                    this.settings.cloudUploadSettings.uploader,
+                    this
+                );
+
+                // Save file temporarily to vault for upload
+                const tempPath = `${activeFile.parent?.path || ''}/.temp_${timestamp}_${file.name}`;
+                const fileBuffer = await file.arrayBuffer();
+                const tempFile = await this.app.vault.createBinary(tempPath, fileBuffer) as TFile;
+
+                // Upload file
+                const uploadResult = await uploaderManager.upload([tempFile.path]);
+
+                // Delete temporary file
+                if (this.settings.cloudUploadSettings.deleteSource) {
+                    await this.app.vault.delete(tempFile);
+                } else {
+                    // Always delete temp file after upload
+                    await this.app.vault.delete(tempFile);
+                }
+
+                // Generate cloud link with size parameters
+                const cloudUrl = uploadResult.result[0];
+                const cloudLink = CloudLinkFormatter.formatCloudLink(
+                    cloudUrl,
+                    this.settings.cloudUploadSettings
+                );
+
+                // Replace placeholder with actual link
+                const content = editor.getValue();
+                const newContent = content.replace(placeholder, cloudLink);
+                editor.setValue(newContent);
+
+                new Notice('Image uploaded successfully!');
+            } catch (error) {
+                console.error('Upload failed:', error);
+                new Notice(`Upload failed: ${error.message}`);
+                // Leave placeholder in place for user to see the error
+            }
+        }
+
+        // Refresh captions if enabled
+        if (this.settings.enableImageCaptions) {
+            this.captionManager.refresh();
         }
     }
 }

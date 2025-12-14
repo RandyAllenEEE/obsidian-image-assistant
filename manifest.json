@@ -1,11 +1,10 @@
 {
-  "id": "image-converter",
-  "name": "Image Converter",
-  "version": "1.3.18",
+  "id": "image-Assistant",
+  "name": "Image Assistant",
+  "version": "2.0.0",
   "minAppVersion": "0.15.0",
-  "description": "Convert, compress, resize, annotate, markup, draw, crop, rotate, flip, align images directly in Obsidian. Drag-resize, rename with variables, batch process. WEBP, JPG, PNG, HEIC, TIF.",
-  "author": "xRyul",
-  "authorUrl": "https://github.com/xryul",
-  "isDesktopOnly": false,
-  "fundingUrl": "https://ko-fi.com/xryul"
+  "description": "This help you convert, compress images or upload images automatically when pasted from clipboard.",
+  "author": "RandyAllen",
+  "authorUrl": "https://github.com/RandyAllenEEE/obsidian-image-assistant",
+  "isDesktopOnly": true
 }

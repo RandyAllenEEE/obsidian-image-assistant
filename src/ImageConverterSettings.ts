@@ -20,6 +20,25 @@ import Sortable from "sortablejs";
 // --- Typedefs and Interfaces ---
 export type ModalBehavior = "always" | "never" | "ask";
 
+// Paste handling mode types
+export type PasteHandlingMode = "local" | "cloud" | "disabled";
+
+// Cloud upload settings interface
+export interface CloudUploadSettings {
+    uploader: string;
+    uploadServer: string;
+    deleteServer: string;
+    picgoCorePath: string;
+    remoteServerMode: boolean;
+    imageSizeWidth: number | undefined;
+    imageSizeHeight: number | undefined;
+    workOnNetWork: boolean;
+    newWorkBlackDomains: string;
+    applyImage: boolean;
+    deleteSource: boolean;
+    uploadedImages?: Record<string, any>[];
+}
+
 export type FolderPresetType =
     | "DEFAULT"
     | "ROOT"
@@ -92,6 +111,7 @@ interface PresetUIState {
     linkformat: PresetCategoryUIState<LinkFormatPreset>
     globalPresetVisible: boolean; // Track visibility of preset categories
     resize: PresetCategoryUIState<NonDestructiveResizePreset>;
+    pasteHandlingSectionCollapsed: boolean;
     imageAlignmentSectionCollapsed: boolean;
     imageDragResizeSectionCollapsed: boolean;
     imageCaptionSectionCollapsed: boolean; // ADDED: Track caption section collapse state
@@ -219,6 +239,10 @@ export interface ImageConverterSettings {
     captionBorder: string;
     captionMarginTop: string;
     captionAlignment: string;
+
+    // Paste handling mode and cloud upload settings
+    pasteHandlingMode: PasteHandlingMode;
+    cloudUploadSettings: CloudUploadSettings;
 }
 
 // --- Default Settings ---
@@ -411,7 +435,23 @@ export const DEFAULT_SETTINGS: ImageConverterSettings = {
     captionLetterSpacing: 'normal',
     captionBorder: 'none',
     captionMarginTop: '4px',
-    captionAlignment: 'center'
+    captionAlignment: 'center',
+
+    // Paste handling mode and cloud upload settings
+    pasteHandlingMode: 'local',
+    cloudUploadSettings: {
+        uploader: 'PicGo',
+        uploadServer: 'http://127.0.0.1:36677/upload',
+        deleteServer: 'http://127.0.0.1:36677/delete',
+        picgoCorePath: '',
+        remoteServerMode: false,
+        imageSizeWidth: undefined,
+        imageSizeHeight: undefined,
+        workOnNetWork: false,
+        newWorkBlackDomains: '',
+        applyImage: true,
+        deleteSource: false
+    }
 };
 
 // --- Settings Tab Class ---
@@ -432,6 +472,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             linkformat: { editingPreset: null, newPreset: null },
             globalPresetVisible: true,
             resize: { editingPreset: null, newPreset: null },
+            pasteHandlingSectionCollapsed: false,
             imageAlignmentSectionCollapsed: true,
             imageDragResizeSectionCollapsed: true,
             imageCaptionSectionCollapsed: true // ADDED: Initialize caption section collapse state
@@ -509,6 +550,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             this.formContainer.addClass("visible");
         }
 
+
+        // --- Paste Handling Settings Section ---
+        this.renderPasteHandlingSettingsSection(containerEl);
 
         // --- Image Alignment Settings Section ---
         this.renderImageAlignmentSettingsSection(containerEl);
@@ -729,6 +773,203 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         }
                     ).open();
                 });
+        }
+    }
+
+    renderPasteHandlingSettingsSection(containerEl: HTMLElement): void {
+        // --- Paste Handling Settings Section ---
+        const pasteHandlingSection = containerEl.createDiv("image-converter-settings-section");
+        pasteHandlingSection.addClass("paste-handling-settings-section");
+
+        // --- Clickable Header with Chevron ---
+        const togglePasteHandlingVisibilityEl = pasteHandlingSection.createDiv("settings-section-header");
+
+        // Chevron Icon (for collapsing/expanding)
+        const pasteHandlingChevronIcon = togglePasteHandlingVisibilityEl.createEl("i");
+        setIcon(pasteHandlingChevronIcon, "chevron-down");
+        pasteHandlingChevronIcon.addClass("settings-section-chevron-icon");
+
+        // Section Title
+        togglePasteHandlingVisibilityEl.createEl("span", { text: "Paste handling", cls: "settings-section-title" });
+
+        // --- APPLY COLLAPSED STATE FROM UI STATE ---
+        if (this.presetUIState.pasteHandlingSectionCollapsed) {
+            pasteHandlingSection.addClass("settings-section-collapsed");
+            setIcon(pasteHandlingChevronIcon, "chevron-right");
+        }
+
+        togglePasteHandlingVisibilityEl.onClickEvent((event: MouseEvent) => {
+            event.stopPropagation();
+            this.presetUIState.pasteHandlingSectionCollapsed = !this.presetUIState.pasteHandlingSectionCollapsed;
+            pasteHandlingSection.toggleClass("settings-section-collapsed", this.presetUIState.pasteHandlingSectionCollapsed);
+
+            if (this.presetUIState.pasteHandlingSectionCollapsed) {
+                setIcon(pasteHandlingChevronIcon, "chevron-right");
+            } else {
+                setIcon(pasteHandlingChevronIcon, "chevron-down");
+            }
+        });
+
+        // --- Paste Handling Mode Setting ---
+        new Setting(pasteHandlingSection)
+            .setName("Paste handling mode")
+            .setDesc("Choose how to handle pasted/dropped images")
+            .addDropdown(dropdown => dropdown
+                .addOption("local", "本地模式 - Process and save locally")
+                .addOption("cloud", "图床模式 - Upload to cloud")
+                .addOption("disabled", "关闭 - No processing")
+                .setValue(this.plugin.settings.pasteHandlingMode)
+                .onChange(async (value: PasteHandlingMode) => {
+                    this.plugin.settings.pasteHandlingMode = value;
+                    await this.plugin.saveSettings();
+                    this.display(); // Re-render to show/hide cloud settings
+                })
+            );
+
+        // --- Cloud Upload Settings (only show when cloud mode is selected) ---
+        if (this.plugin.settings.pasteHandlingMode === "cloud") {
+            const cloudSettingsContainer = pasteHandlingSection.createDiv("cloud-settings-container");
+
+            // Uploader Type
+            new Setting(cloudSettingsContainer)
+                .setName("Uploader")
+                .setDesc("Choose the uploader type")
+                .addDropdown(dropdown => dropdown
+                    .addOption("PicGo", "PicGo")
+                    .addOption("PicGo-Core", "PicGo-Core")
+                    .addOption("PicList", "PicList")
+                    .setValue(this.plugin.settings.cloudUploadSettings.uploader)
+                    .onChange(async (value: string) => {
+                        this.plugin.settings.cloudUploadSettings.uploader = value;
+                        await this.plugin.saveSettings();
+                        this.display(); // Re-render to show/hide relevant settings
+                    })
+                );
+
+            // Show PicGo server settings for PicGo and PicList
+            if (this.plugin.settings.cloudUploadSettings.uploader === "PicGo" || 
+                this.plugin.settings.cloudUploadSettings.uploader === "PicList") {
+                
+                new Setting(cloudSettingsContainer)
+                    .setName("Upload server")
+                    .setDesc("PicGo/PicList upload server address")
+                    .addText(text => text
+                        .setPlaceholder("http://127.0.0.1:36677/upload")
+                        .setValue(this.plugin.settings.cloudUploadSettings.uploadServer)
+                        .onChange(async (value) => {
+                            this.plugin.settings.cloudUploadSettings.uploadServer = value;
+                            await this.plugin.saveSettings();
+                        })
+                    );
+
+                if (this.plugin.settings.cloudUploadSettings.uploader === "PicList") {
+                    new Setting(cloudSettingsContainer)
+                        .setName("Delete server")
+                        .setDesc("PicList delete server address")
+                        .addText(text => text
+                            .setPlaceholder("http://127.0.0.1:36677/delete")
+                            .setValue(this.plugin.settings.cloudUploadSettings.deleteServer)
+                            .onChange(async (value) => {
+                                this.plugin.settings.cloudUploadSettings.deleteServer = value;
+                                await this.plugin.saveSettings();
+                            })
+                        );
+                }
+            }
+
+            // Show PicGo-Core path for PicGo-Core
+            if (this.plugin.settings.cloudUploadSettings.uploader === "PicGo-Core") {
+                new Setting(cloudSettingsContainer)
+                    .setName("PicGo-Core path")
+                    .setDesc("Path to PicGo-Core executable")
+                    .addText(text => text
+                        .setPlaceholder("/path/to/picgo")
+                        .setValue(this.plugin.settings.cloudUploadSettings.picgoCorePath)
+                        .onChange(async (value) => {
+                            this.plugin.settings.cloudUploadSettings.picgoCorePath = value;
+                            await this.plugin.saveSettings();
+                        })
+                    );
+            }
+
+            // Image Size Settings
+            const imageSizeDesc = cloudSettingsContainer.createEl("div", { cls: "setting-item-description" });
+            imageSizeDesc.createEl("span", { text: "Set image display size (leave empty for original size)" });
+
+            new Setting(cloudSettingsContainer)
+                .setName("Image width")
+                .setDesc("Width in pixels (optional)")
+                .addText(text => text
+                    .setPlaceholder("e.g., 800")
+                    .setValue(this.plugin.settings.cloudUploadSettings.imageSizeWidth?.toString() || "")
+                    .onChange(async (value) => {
+                        this.plugin.settings.cloudUploadSettings.imageSizeWidth = value ? parseInt(value) : undefined;
+                        await this.plugin.saveSettings();
+                    })
+                );
+
+            new Setting(cloudSettingsContainer)
+                .setName("Image height")
+                .setDesc("Height in pixels (optional)")
+                .addText(text => text
+                    .setPlaceholder("e.g., 600")
+                    .setValue(this.plugin.settings.cloudUploadSettings.imageSizeHeight?.toString() || "")
+                    .onChange(async (value) => {
+                        this.plugin.settings.cloudUploadSettings.imageSizeHeight = value ? parseInt(value) : undefined;
+                        await this.plugin.saveSettings();
+                    })
+                );
+
+            // Network Image Settings
+            new Setting(cloudSettingsContainer)
+                .setName("Upload network images")
+                .setDesc("Also upload images from URLs")
+                .addToggle(toggle => toggle
+                    .setValue(this.plugin.settings.cloudUploadSettings.workOnNetWork)
+                    .onChange(async (value) => {
+                        this.plugin.settings.cloudUploadSettings.workOnNetWork = value;
+                        await this.plugin.saveSettings();
+                        this.display();
+                    })
+                );
+
+            if (this.plugin.settings.cloudUploadSettings.workOnNetWork) {
+                new Setting(cloudSettingsContainer)
+                    .setName("Network image domain blacklist")
+                    .setDesc("Comma-separated list of domains to exclude (e.g., example.com, test.org)")
+                    .addTextArea(text => text
+                        .setPlaceholder("example.com, test.org")
+                        .setValue(this.plugin.settings.cloudUploadSettings.newWorkBlackDomains)
+                        .onChange(async (value) => {
+                            this.plugin.settings.cloudUploadSettings.newWorkBlackDomains = value;
+                            await this.plugin.saveSettings();
+                        })
+                    );
+            }
+
+            // Apply Image Settings
+            new Setting(cloudSettingsContainer)
+                .setName("Upload when clipboard contains both text and image")
+                .setDesc("Upload image even if clipboard also contains text")
+                .addToggle(toggle => toggle
+                    .setValue(this.plugin.settings.cloudUploadSettings.applyImage)
+                    .onChange(async (value) => {
+                        this.plugin.settings.cloudUploadSettings.applyImage = value;
+                        await this.plugin.saveSettings();
+                    })
+                );
+
+            // Delete Source Settings
+            new Setting(cloudSettingsContainer)
+                .setName("Delete local source file after upload")
+                .setDesc("Automatically delete the local file after successful upload")
+                .addToggle(toggle => toggle
+                    .setValue(this.plugin.settings.cloudUploadSettings.deleteSource)
+                    .onChange(async (value) => {
+                        this.plugin.settings.cloudUploadSettings.deleteSource = value;
+                        await this.plugin.saveSettings();
+                    })
+                );
         }
     }
 
@@ -3475,6 +3716,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             linkformat: { editingPreset: null, newPreset: null },
             resize: { editingPreset: null, newPreset: null },
             globalPresetVisible: true,
+            pasteHandlingSectionCollapsed: false,
             imageAlignmentSectionCollapsed: false,
             imageDragResizeSectionCollapsed: false,
             imageCaptionSectionCollapsed: false // ADDED: Reset caption section collapse state
