@@ -246,6 +246,14 @@ export interface ImageConverterSettings {
     // Paste handling mode and cloud upload settings
     pasteHandlingMode: PasteHandlingMode;
     cloudUploadSettings: CloudUploadSettings;
+
+    // Unused file cleaner settings
+    cleanerSettings: {
+        basePath: string;  // 基准路径，相对于库根目录
+        trashMode: 'system' | 'obsidian' | 'custom';  // 删除模式：系统回收站/Obsidian回收站/自定义路径
+        customTrashPath: string;  // 自定义回收站路径
+        fileTypes: string;  // 要清理的文件类型，逗号分隔，如 "jpg,png,pdf"
+    };
 }
 
 // --- Default Settings ---
@@ -456,6 +464,14 @@ export const DEFAULT_SETTINGS: ImageConverterSettings = {
         applyImage: true,
         deleteSource: false,
         downloadPath: 'attachments'  // 默认下载路径
+    },
+
+    // Unused file cleaner settings
+    cleanerSettings: {
+        basePath: 'attachments',  // 默认扫描 attachments 文件夹
+        trashMode: 'obsidian',  // 默认移动到 Obsidian 回收站
+        customTrashPath: '.trash',  // 自定义回收站默认路径
+        fileTypes: 'jpg,jpeg,png,gif,webp,bmp,svg,pdf,mp4,mp3'  // 默认清理的文件类型
     }
 };
 
@@ -570,6 +586,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // --- Image Captions Settings Section ---  // ADDED: Call renderImageCaptionSettingsSection here
         this.renderImageCaptionSettingsSection(containerEl);
+
+        // --- Unused File Cleaner Settings Section ---
+        this.renderUnusedFileCleanerSettingsSection(containerEl);
 
         new Setting(containerEl)
             .setName("Right-click menu 🛈")
@@ -1524,6 +1543,129 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                     text.inputEl.setAttr('spellcheck', 'false');
                 });
         }
+    }
+
+    /**
+     * 渲染无用文件清理设置区域
+     */
+    renderUnusedFileCleanerSettingsSection(containerEl: HTMLElement): void {
+        const cleanerSection = containerEl.createDiv({ cls: "cleaner-settings-section" });
+
+        // 标题和折叠控制
+        const cleanerHeaderEl = cleanerSection.createDiv({ cls: "cleaner-settings-header" });
+        const chevronIcon = cleanerHeaderEl.createEl("i");
+        setIcon(chevronIcon, "chevron-down");
+        chevronIcon.addClass("cleaner-chevron-icon");
+        cleanerHeaderEl.createEl("span", { text: "🗑️ 无用文件清理设置", cls: "settings-section-title" });
+
+        // 设置内容容器
+        const cleanerContentEl = cleanerSection.createDiv({ cls: "cleaner-settings-content" });
+
+        // 默认折叠状态
+        let isCollapsed = true;
+        cleanerContentEl.hide();
+        setIcon(chevronIcon, "chevron-right");
+
+        // 点击标题切换折叠
+        cleanerHeaderEl.onClickEvent((event: MouseEvent) => {
+            event.stopPropagation();
+            isCollapsed = !isCollapsed;
+            
+            if (isCollapsed) {
+                cleanerContentEl.hide();
+                setIcon(chevronIcon, "chevron-right");
+            } else {
+                cleanerContentEl.show();
+                setIcon(chevronIcon, "chevron-down");
+            }
+        });
+
+        // 基准路径设置
+        new Setting(cleanerContentEl)
+            .setName("默认扫描文件夹")
+            .setDesc("指定要清理的默认文件夹路径（相对于库根目录）")
+            .addText(text => {
+                text
+                    .setPlaceholder("例如: attachments")
+                    .setValue(this.plugin.settings.cleanerSettings.basePath)
+                    .onChange(async (value) => {
+                        this.plugin.settings.cleanerSettings.basePath = value;
+                        await this.plugin.saveSettings();
+                    });
+                text.inputEl.style.width = "100%";
+            });
+
+        // 删除模式设置
+        new Setting(cleanerContentEl)
+            .setName("删除模式")
+            .setDesc("选择删除文件时的处理方式")
+            .addDropdown(dropdown => {
+                dropdown
+                    .addOption("system", "系统回收站")
+                    .addOption("obsidian", "Obsidian 回收站 (.trash)")
+                    .addOption("custom", "自定义路径")
+                    .setValue(this.plugin.settings.cleanerSettings.trashMode)
+                    .onChange(async (value: 'system' | 'obsidian' | 'custom') => {
+                        this.plugin.settings.cleanerSettings.trashMode = value;
+                        await this.plugin.saveSettings();
+                        // 重新渲染以显示/隐藏自定义路径输入
+                        this.display();
+                    });
+            });
+
+        // 自定义回收站路径（仅当 trashMode 为 'custom' 时显示）
+        if (this.plugin.settings.cleanerSettings.trashMode === 'custom') {
+            new Setting(cleanerContentEl)
+                .setName("自定义回收站路径")
+                .setDesc("指定自定义回收站的路径（相对于库根目录）")
+                .addText(text => {
+                    text
+                        .setPlaceholder("例如: .trash")
+                        .setValue(this.plugin.settings.cleanerSettings.customTrashPath)
+                        .onChange(async (value) => {
+                            this.plugin.settings.cleanerSettings.customTrashPath = value;
+                            await this.plugin.saveSettings();
+                        });
+                    text.inputEl.style.width = "100%";
+                });
+        }
+
+        // 文件类型设置
+        new Setting(cleanerContentEl)
+            .setName("文件类型")
+            .setDesc("指定要清理的文件类型，用逗号分隔（例如: jpg,png,pdf,mp4）")
+            .addTextArea(text => {
+                text
+                    .setPlaceholder("jpg,jpeg,png,gif,webp,bmp,svg,pdf,mp4,mp3")
+                    .setValue(this.plugin.settings.cleanerSettings.fileTypes)
+                    .onChange(async (value) => {
+                        this.plugin.settings.cleanerSettings.fileTypes = value;
+                        await this.plugin.saveSettings();
+                    });
+                text.inputEl.setAttr('spellcheck', 'false');
+                text.inputEl.style.width = "100%";
+                text.inputEl.rows = 3;
+            });
+
+        // 使用说明
+        const usageDesc = cleanerContentEl.createDiv({ cls: "cleaner-usage-desc" });
+        usageDesc.createEl("p", { 
+            text: "💡 使用方法：",
+            cls: "usage-title"
+        });
+        usageDesc.createEl("p", { 
+            text: "1. 通过命令面板输入 'Clean: Scan and delete unused files' 打开清理面板"
+        });
+        usageDesc.createEl("p", { 
+            text: "2. 在面板中指定要扫描的文件夹，点击'开始扫描'"
+        });
+        usageDesc.createEl("p", { 
+            text: "3. 查看扫描结果，确认后删除未引用的文件"
+        });
+        usageDesc.createEl("p", { 
+            text: "⚠️ 删除操作可能不可逆，请谨慎确认后再删除！",
+            cls: "warning-text"
+        });
     }
 
 

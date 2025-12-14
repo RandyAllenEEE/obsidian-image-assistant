@@ -61,6 +61,7 @@ import {
 } from "./UploadModals";
 import { CloudImageDeleter } from "./CloudImageDeleter";
 import { NetworkImageDownloader } from "./NetworkImageDownloader";
+import { UnusedFileCleanerModal } from "./UnusedFileCleanerModal";
 
 export default class ImageConverterPlugin extends Plugin {
     settings: ImageConverterSettings;
@@ -99,6 +100,8 @@ export default class ImageConverterPlugin extends Plugin {
     uploadHelper: UploadHelper;
     // network image downloader
     networkDownloader: NetworkImageDownloader;
+    // unused file cleaner
+    unusedFileCleaner: UnusedFileCleanerModal | null = null;
     
     private processedImage: ArrayBuffer | null = null;
     private temporaryBuffers: (ArrayBuffer | Blob | null)[] = [];
@@ -361,6 +364,15 @@ export default class ImageConverterPlugin extends Plugin {
             name: 'Cloud: Download all network images in current note',
             callback: async () => {
                 await this.downloadAllImages();
+            }
+        });
+
+        // 清理无用文件
+        this.addCommand({
+            id: 'clean-unused-files',
+            name: 'Clean: Scan and delete unused files',
+            callback: () => {
+                new UnusedFileCleanerModal(this.app, this).open();
             }
         });
 

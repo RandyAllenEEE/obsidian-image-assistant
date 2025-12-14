@@ -3755,3 +3755,356 @@ html[data-theme='dark'] {
     white-space: pre-line;
     color: var(--text-muted);
 }
+
+/* ==========================
+   Unused File Cleaner Styles
+   ========================== */
+
+/* Modal Styles */
+.unused-file-cleaner-modal {
+    max-width: 800px;
+    width: 90%;
+}
+
+.unused-file-cleaner-modal .modal-content {
+    padding: 20px;
+}
+
+/* Description */
+.cleaner-description {
+    margin-bottom: 20px;
+    padding: 15px;
+    background-color: var(--background-secondary);
+    border-radius: 6px;
+    font-size: 0.95em;
+}
+
+.cleaner-description .warning-text {
+    color: var(--text-error);
+    font-weight: 500;
+    margin-top: 10px;
+}
+
+/* Folder Selection */
+.folder-selection {
+    margin-bottom: 20px;
+}
+
+.folder-selection .button-container {
+    margin-top: 10px;
+    text-align: right;
+}
+
+/* Status */
+.cleaner-status {
+    margin: 15px 0;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.status-info {
+    color: var(--text-accent);
+    font-weight: 500;
+}
+
+.status-success {
+    color: var(--text-success);
+    font-weight: 500;
+}
+
+.status-error {
+    color: var(--text-error);
+    font-weight: 500;
+}
+
+.status-hint {
+    color: var(--text-muted);
+    font-style: italic;
+    margin-top: 5px;
+}
+
+/* Progress */
+.cleaner-progress {
+    margin: 20px 0;
+}
+
+.progress-info {
+    margin-bottom: 10px;
+}
+
+.progress-bar-container {
+    width: 100%;
+    height: 20px;
+    background-color: var(--background-secondary);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    height: 100%;
+    background-color: var(--interactive-accent);
+    transition: width 0.3s ease;
+}
+
+/* Result */
+.cleaner-result {
+    margin: 20px 0;
+}
+
+.result-summary {
+    padding: 15px;
+    background-color: var(--background-secondary);
+    border-radius: 6px;
+    margin-bottom: 20px;
+}
+
+.result-summary h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+}
+
+.unreferenced-count {
+    color: var(--text-error);
+    font-weight: 600;
+}
+
+.referenced-count {
+    color: var(--text-success);
+    font-weight: 600;
+}
+
+.success-message {
+    color: var(--text-success);
+    font-weight: 500;
+    text-align: center;
+    padding: 20px;
+}
+
+/* File List */
+.file-list {
+    margin: 15px 0;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.file-list-header {
+    padding: 12px 15px;
+    background-color: var(--background-secondary);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+}
+
+.file-list-header h3 {
+    margin: 0;
+    font-size: 1.1em;
+}
+
+.toggle-button {
+    padding: 4px 12px;
+    font-size: 0.85em;
+    background-color: var(--interactive-normal);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text-normal);
+}
+
+.toggle-button:hover {
+    background-color: var(--interactive-hover);
+}
+
+.file-list-content {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* File Item */
+.file-item {
+    padding: 12px 15px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.file-item:last-child {
+    border-bottom: none;
+}
+
+.file-info {
+    margin-bottom: 10px;
+}
+
+.file-path {
+    font-size: 0.85em;
+    color: var(--text-muted);
+}
+
+/* References */
+.file-references {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: var(--background-secondary);
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.references-title {
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-accent);
+}
+
+.references-list {
+    margin: 5px 0;
+    padding-left: 10px;
+    list-style: none;
+}
+
+/* 笔记项样式 */
+.note-item {
+    margin: 12px 0;
+    padding: 10px;
+    background-color: var(--background-primary);
+    border-radius: 4px;
+    border-left: 3px solid var(--interactive-accent);
+}
+
+.note-header {
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.note-path {
+    color: var(--text-accent);
+    font-weight: 500;
+    font-size: 0.95em;
+}
+
+.ref-count {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    font-weight: normal;
+}
+
+/* 引用位置列表 */
+.ref-locations-list {
+    margin: 5px 0;
+    padding-left: 15px;
+    list-style: none;
+}
+
+.ref-location-item {
+    margin: 6px 0;
+    padding: 5px;
+    background-color: var(--background-secondary-alt);
+    border-radius: 3px;
+}
+
+.line-number {
+    color: var(--text-accent);
+    font-weight: 500;
+    font-size: 0.85em;
+}
+
+.ref-content {
+    display: inline-block;
+    padding: 2px 6px;
+    background-color: var(--background-primary);
+    border-radius: 3px;
+    font-size: 0.85em;
+    word-wrap: break-word;
+    font-family: var(--font-monospace);
+}
+
+/* 旧的引用样式（向后兼容） */
+.file-references ul {
+    margin: 5px 0;
+    padding-left: 20px;
+}
+
+.file-references li {
+    margin: 8px 0;
+}
+
+.ref-location {
+    color: var(--text-accent);
+    font-weight: 500;
+}
+
+/* Delete Actions */
+.cleaner-actions {
+    margin: 20px 0;
+}
+
+.delete-warning {
+    padding: 15px;
+    background-color: var(--background-secondary-alt);
+    border-left: 4px solid var(--text-error);
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+.cleaner-actions .button-container {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+/* Settings Section */
+.cleaner-settings-section {
+    margin: 20px 0;
+}
+
+.cleaner-settings-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background-color 0.2s;
+}
+
+.cleaner-settings-header:hover {
+    background-color: var(--background-modifier-hover);
+}
+
+.cleaner-chevron-icon {
+    width: 16px;
+    height: 16px;
+    transition: transform 0.2s;
+}
+
+.cleaner-settings-content {
+    margin-top: 10px;
+    padding: 0 10px;
+}
+
+.cleaner-usage-desc {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: var(--background-secondary);
+    border-radius: 6px;
+    font-size: 0.9em;
+}
+
+.cleaner-usage-desc .usage-title {
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+.cleaner-usage-desc p {
+    margin: 5px 0;
+    line-height: 1.6;
+}
+
+.unreferenced-files .file-list-content {
+    background-color: var(--background-primary);
+}
+
+.referenced-files .file-list-content {
+    background-color: var(--background-primary);
+}
