@@ -32,10 +32,13 @@ export interface CloudUploadSettings {
     remoteServerMode: boolean;
     imageSizeWidth: number | undefined;
     imageSizeHeight: number | undefined;
+    // 图片尺寸参数来源: 'settings' = 使用设置面板配置的宽高, 'actual' = 使用ImageResizer读取的实际尺寸
+    imageSizeSource: 'settings' | 'actual';
     workOnNetWork: boolean;
     newWorkBlackDomains: string;
     applyImage: boolean;
     deleteSource: boolean;
+    downloadPath: string;  // 下载图片的目标路径
     uploadedImages?: Record<string, any>[];
 }
 
@@ -447,10 +450,12 @@ export const DEFAULT_SETTINGS: ImageConverterSettings = {
         remoteServerMode: false,
         imageSizeWidth: undefined,
         imageSizeHeight: undefined,
+        imageSizeSource: 'settings', // 默认使用设置面板配置的宽高
         workOnNetWork: false,
         newWorkBlackDomains: '',
         applyImage: true,
-        deleteSource: false
+        deleteSource: false,
+        downloadPath: 'attachments'  // 默认下载路径
     }
 };
 
@@ -494,19 +499,18 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         // --- Paste Handling Settings Section (render first to determine mode) ---
         this.renderPasteHandlingSettingsSection(containerEl);
 
-        // Only render Drop/paste presets in local mode
+        // Only render Drop/paste presets and related UI in local mode
         if (this.plugin.settings.pasteHandlingMode === 'local') {
             this.renderGlobalPresetSelector();
-        }
-
-        // No need to check or update isFormExpanded here
-        this.renderTabs();
-
-        // Initialize the form container before rendering preset groups
-        this.initializeFormContainer();
-
-        // Only render preset groups if globalPresetVisible is true AND in local mode
-        if (this.presetUIState.globalPresetVisible && this.plugin.settings.pasteHandlingMode === 'local') {
+            
+            // Render tabs for preset configuration
+            this.renderTabs();
+            
+            // Initialize the form container before rendering preset groups
+            this.initializeFormContainer();
+            
+            // Only render preset groups if globalPresetVisible is true
+            if (this.presetUIState.globalPresetVisible) {
             switch (this.activeTab) {
                 case "folder":
                     this.renderPresetGroup(
@@ -551,10 +555,11 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             }
         }
 
-        // Set the form container to visible if editingPresetKey is not null
-        if (this.editingPresetKey && this.formContainer) {
-            this.formContainer.addClass("visible");
-        }
+            // Set the form container to visible if editingPresetKey is not null
+            if (this.editingPresetKey && this.formContainer) {
+                this.formContainer.addClass("visible");
+            }
+        } // Close local mode condition block
 
         // --- Image Alignment Settings Section ---
         this.renderImageAlignmentSettingsSection(containerEl);
@@ -898,29 +903,52 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             const imageSizeDesc = cloudSettingsContainer.createEl("div", { cls: "setting-item-description" });
             imageSizeDesc.createEl("span", { text: "Set image display size (leave empty for original size)" });
 
+            // Image size source selection
             new Setting(cloudSettingsContainer)
-                .setName("Image width")
-                .setDesc("Width in pixels (optional)")
-                .addText(text => text
-                    .setPlaceholder("e.g., 800")
-                    .setValue(this.plugin.settings.cloudUploadSettings.imageSizeWidth?.toString() || "")
-                    .onChange(async (value) => {
-                        this.plugin.settings.cloudUploadSettings.imageSizeWidth = value ? parseInt(value) : undefined;
+                .setName("Image size source 🛈")
+                .setDesc("Choose how to determine image size parameters in markdown links")
+                .setTooltip(
+                    "Settings: Use width/height configured below\n" +
+                    "Actual: Use actual image dimensions detected by ImageResizer\n" +
+                    "Note: When both width and height are empty, no size parameter will be added"
+                )
+                .addDropdown(dropdown => dropdown
+                    .addOption("settings", "Use settings (manual width/height)")
+                    .addOption("actual", "Use actual image size (auto-detect)")
+                    .setValue(this.plugin.settings.cloudUploadSettings.imageSizeSource)
+                    .onChange(async (value: 'settings' | 'actual') => {
+                        this.plugin.settings.cloudUploadSettings.imageSizeSource = value;
                         await this.plugin.saveSettings();
+                        this.display(); // Refresh to show/hide width/height inputs
                     })
                 );
 
-            new Setting(cloudSettingsContainer)
-                .setName("Image height")
-                .setDesc("Height in pixels (optional)")
-                .addText(text => text
-                    .setPlaceholder("e.g., 600")
-                    .setValue(this.plugin.settings.cloudUploadSettings.imageSizeHeight?.toString() || "")
-                    .onChange(async (value) => {
-                        this.plugin.settings.cloudUploadSettings.imageSizeHeight = value ? parseInt(value) : undefined;
-                        await this.plugin.saveSettings();
-                    })
-                );
+            // Only show width/height inputs when using 'settings' mode
+            if (this.plugin.settings.cloudUploadSettings.imageSizeSource === 'settings') {
+                new Setting(cloudSettingsContainer)
+                    .setName("Image width")
+                    .setDesc("Width in pixels (optional, leave empty for auto)")
+                    .addText(text => text
+                        .setPlaceholder("e.g., 800")
+                        .setValue(this.plugin.settings.cloudUploadSettings.imageSizeWidth?.toString() || "")
+                        .onChange(async (value) => {
+                            this.plugin.settings.cloudUploadSettings.imageSizeWidth = value ? parseInt(value) : undefined;
+                            await this.plugin.saveSettings();
+                        })
+                    );
+
+                new Setting(cloudSettingsContainer)
+                    .setName("Image height")
+                    .setDesc("Height in pixels (optional, leave empty for auto)")
+                    .addText(text => text
+                        .setPlaceholder("e.g., 600")
+                        .setValue(this.plugin.settings.cloudUploadSettings.imageSizeHeight?.toString() || "")
+                        .onChange(async (value) => {
+                            this.plugin.settings.cloudUploadSettings.imageSizeHeight = value ? parseInt(value) : undefined;
+                            await this.plugin.saveSettings();
+                        })
+                    );
+            }
 
             // Network Image Settings
             new Setting(cloudSettingsContainer)

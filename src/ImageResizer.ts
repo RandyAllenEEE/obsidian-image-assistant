@@ -1009,6 +1009,23 @@ export class ImageResizer {
             return;
         }
 
+        // Handle external/cloud images based on settings
+        if (this.isExternalLink(imageName)) {
+            // Check cloud upload settings
+            const cloudSettings = this.plugin.settings.cloudUploadSettings;
+            
+            // Only update markdown if user chose 'actual' size source
+            if (cloudSettings.imageSizeSource !== 'actual') {
+                console.log('[ImageResizer] Skipping markdown update for external image (imageSizeSource is not "actual"):', imageName);
+                // Only update visual size
+                image.style.width = `${Math.round(newWidth)}px`;
+                image.style.height = `${Math.round(newHeight)}px`;
+                return;
+            }
+            // If imageSizeSource is 'actual', continue to update markdown with actual dimensions
+            console.log('[ImageResizer] Updating markdown with actual dimensions for external image:', imageName);
+        }
+
         const { editor } = this;
         const normalizedTargetName = this.isBase64Image(imageName) ? imageName : this.getFilenameFromPath(imageName);
 

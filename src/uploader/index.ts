@@ -9,6 +9,7 @@ import type { Image } from "./types";
 export function getUploader(uploader: string) {
   switch (uploader) {
     case "PicGo":
+    case "PicList": // PicList uses the same protocol as PicGo
       return PicGoUploader;
     case "PicGo-Core":
       return PicGoCoreUploader;

@@ -34,32 +34,33 @@ export class CloudLinkFormatter {
     /**
      * 根据配置生成尺寸参数
      * @param settings 图床配置
-     * @returns 尺寸参数字符串,如 "|300x200" 或空字符串
+     * @returns 尺寸参数字符串,如 "|300x200"、"|500"、"|x300" 或空字符串
      */
     private static generateSizeParameter(settings: CloudUploadSettings): string {
         const { imageSizeWidth, imageSizeHeight } = settings;
         
-        // 如果两者都未配置,返回空字符串
-        if (imageSizeWidth === undefined && imageSizeHeight === undefined) {
+        // 检查是否有有效的宽度值
+        const hasWidth = imageSizeWidth !== undefined && imageSizeWidth !== null;
+        // 检查是否有有效的高度值
+        const hasHeight = imageSizeHeight !== undefined && imageSizeHeight !== null;
+        
+        // 如果两者都没有配置,返回空字符串(不添加尺寸参数)
+        if (!hasWidth && !hasHeight) {
             return "";
         }
         
         // 如果都配置了,返回 |WxH
-        if (imageSizeWidth !== undefined && imageSizeHeight !== undefined) {
+        if (hasWidth && hasHeight) {
             return `|${imageSizeWidth}x${imageSizeHeight}`;
         }
         
-        // 只配置了宽度,返回 |Wx
-        if (imageSizeWidth !== undefined) {
-            return `|${imageSizeWidth}x`;
+        // 只配置了宽度,返回 |W
+        if (hasWidth) {
+            return `|${imageSizeWidth}`;
         }
         
         // 只配置了高度,返回 |xH
-        if (imageSizeHeight !== undefined) {
-            return `|x${imageSizeHeight}`;
-        }
-        
-        return "";
+        return `|x${imageSizeHeight}`;
     }
 
     /**

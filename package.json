@@ -44,6 +44,7 @@
 		"vitest": "^3.2.4"
 	},
 	"dependencies": {
+		"image-type": "^6.0.0",
 		"path-browserify": "^1.0.1",
 		"piexifjs": "^1.0.6"
 	}

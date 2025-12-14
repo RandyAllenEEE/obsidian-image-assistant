@@ -11,6 +11,7 @@ import {
 	MenuItem,
 	MarkdownView,
 	Editor,
+	Modal,
 } from 'obsidian';
 import * as path from 'path';
 import ImageConverterPlugin from "./main";
@@ -20,6 +21,7 @@ import { VariableProcessor, VariableContext } from './VariableProcessor';
 import { ImageAnnotationModal } from './ImageAnnotation';
 import { Crop } from './Crop';
 import { ProcessSingleImageModal } from "./ProcessSingleImageModal";
+import { CloudImageDeleter } from './CloudImageDeleter';
 
 interface ImageMatch {
 	lineNumber: number;
@@ -30,6 +32,7 @@ interface ImageMatch {
 export class ContextMenu extends Component {
 	private contextMenuRegistered = false;
 	private currentMenu: Menu | null = null;
+	private cloudDeleter: CloudImageDeleter;
 
 	private readonly stopPropagationHandler = (e: Event) => e.stopPropagation();
 	private readonly documentClickHandler = (event: MouseEvent) => {
@@ -46,6 +49,7 @@ export class ContextMenu extends Component {
 		private variableProcessor: VariableProcessor,
 	) {
 		super();
+		this.cloudDeleter = new CloudImageDeleter(plugin);
 		this.registerContextMenuListener();
 	}
 
@@ -171,7 +175,10 @@ export class ContextMenu extends Component {
 
 		this.addAnnotateImageMenuItem(menu, img);
 
-
+		// Add upload option for local images in cloud mode
+		if (this.plugin.settings.pasteHandlingMode === 'cloud') {
+			this.addUploadToCloudMenuItem(menu, img, event);
+		}
 
 		menu.addSeparator();
 
@@ -983,11 +990,14 @@ export class ContextMenu extends Component {
 						}
 					}
 				} else if (isExternal && (linkPath.startsWith('http://') || linkPath.startsWith('https://'))) {
-					matches.push({ lineNumber: i, line, fullMatch });
-					// console.log('External link match found:', {
-					// 	linkPath,
-					// 	fullMatch
-					// });
+					// For external images, check if the URL matches the imagePath
+					if (imagePath && linkPath === imagePath) {
+						matches.push({ lineNumber: i, line, fullMatch });
+						// console.log('External link match found:', {
+						// 	linkPath,
+						// 	fullMatch
+						// });
+					}
 				}
 			}
 		}
@@ -1608,6 +1618,65 @@ export class ContextMenu extends Component {
 	}
 
 	/*-----------------------------------------------------------------*/
+	/*                  UPLOAD TO CLOUD                                */
+	/*-----------------------------------------------------------------*/
+
+	/**
+	 * Adds the "Upload to Cloud" menu item for local images.
+	 * @param menu - The Menu object to add the item to.
+	 * @param img - The HTMLImageElement
+	 * @param event - The MouseEvent object.
+	 */
+	addUploadToCloudMenuItem(menu: Menu, img: HTMLImageElement, event: MouseEvent) {
+		const src = img.getAttribute('src');
+		if (!src) return;
+
+		// Only show for local images (not network URLs)
+		if (src.startsWith('http://') || src.startsWith('https://')) {
+			return; // Skip cloud images
+		}
+
+		menu.addItem((item) => {
+			item.setTitle('Upload to Cloud')
+				.setIcon('cloud-upload')
+				.onClick(async () => {
+					await this.uploadImageToCloud(img);
+				});
+		});
+	}
+
+	/**
+	 * Upload a local image to cloud storage
+	 * 上传本地图片到图床
+	 * @param img - The HTMLImageElement
+	 */
+	private async uploadImageToCloud(img: HTMLImageElement) {
+		try {
+			// Get image path
+			const imagePath = this.folderAndFilenameManagement.getImagePath(img);
+			if (!imagePath) {
+				new Notice('⚠️ Cannot resolve image path. This may be a network image.');
+				console.warn('[Upload] Cannot resolve image path for:', img.getAttribute('src'));
+				return;
+			}
+
+			// Get TFile object
+			const file = this.app.vault.getAbstractFileByPath(imagePath);
+			if (!(file instanceof TFile)) {
+				new Notice('⚠️ Image file not found in vault');
+				console.warn('[Upload] File not found:', imagePath);
+				return;
+			}
+
+			// Call the plugin's uploadSingleFile method
+			await this.plugin.uploadSingleFile(file);
+		} catch (error) {
+			console.error('[Upload] Error uploading image:', error);
+			new Notice(`Upload failed: ${error.message}`);
+		}
+	}
+
+	/*-----------------------------------------------------------------*/
 	/*                  DELETE IMAGE AND LINK                          */
 	/*-----------------------------------------------------------------*/
 
@@ -1618,7 +1687,7 @@ export class ContextMenu extends Component {
 	 */
 	addDeleteImageAndLinkMenuItem(menu: Menu, event: MouseEvent) {
 		menu.addItem((item) => {
-			item.setTitle('Delete Image and Link')
+			item.setTitle('Auto Delete Image and Link')
 				.setIcon('trash')
 				.onClick(async () => {
 					await this.deleteImageAndLinkFromNote(event);
@@ -1628,6 +1697,9 @@ export class ContextMenu extends Component {
 
 	/**
 	 * Deletes both the image file and its link from the note.
+	 * Auto-detects whether it's a local or cloud image and handles accordingly.
+	 * - Local images: Deletes text link and local file
+	 * - Cloud images: Deletes text link and cloud image (PicList only)
 	 * @param event - The MouseEvent object.
 	 */
 	async deleteImageAndLinkFromNote(event: MouseEvent) {
@@ -1644,6 +1716,7 @@ export class ContextMenu extends Component {
 		try {
 			const { editor } = activeView;
 
+			// Handle Base64 images
 			if (src.startsWith('data:image/')) {
 				const found = await this.processBase64Image(editor, src, async (editor, lineNumber, line, fullMatch) => {
 					await this.removeImageLinkFromEditor(editor, lineNumber, line, fullMatch, false);
@@ -1654,10 +1727,17 @@ export class ContextMenu extends Component {
 				return;
 			}
 
-			const imagePath = (src.startsWith('http://') || src.startsWith('https://'))
-				? null
-				: this.folderAndFilenameManagement.getImagePath(img);
+			// Check if it's a cloud image
+			const isCloudImage = this.cloudDeleter.isCloudImage(src);
+			
+			if (isCloudImage) {
+				// Handle cloud image deletion
+				await this.deleteCloudImageAndLink(editor, src);
+				return;
+			}
 
+			// Handle local image deletion
+			const imagePath = this.folderAndFilenameManagement.getImagePath(img);
 			const isExternal = !imagePath;
 			const matches = await this.findImageMatches(editor, imagePath, isExternal);
 
@@ -1694,12 +1774,12 @@ export class ContextMenu extends Component {
 
 				new Notice('Image link(s) removed from note');
 
-				// Delete the actual image file if it exists in the vault
+				// Delete the actual local image file if it exists in the vault
 				if (imagePath) {
 					const imageFile = this.app.vault.getAbstractFileByPath(imagePath);
 					if (imageFile instanceof TFile) {
 						await this.app.vault.trash(imageFile, true);
-						new Notice('Image file moved to trash');
+						new Notice('Local image file moved to trash');
 					}
 				}
 			};
@@ -1746,6 +1826,160 @@ export class ContextMenu extends Component {
 		} catch (error) {
 			console.error('Error deleting image:', error);
 			new Notice('Failed to delete image. Check console for details.');
+		}
+	}
+
+	/**
+	 * Delete cloud image and its link from the note
+	 * 删除云端图片及其在笔记中的链接
+	 * - 单次引用：直接删除
+	 * - 多次引用：弹出确认框，让用户选择只删除一个还是全部删除
+	 * @param editor - The Editor instance
+	 * @param cloudUrl - The cloud image URL
+	 */
+	private async deleteCloudImageAndLink(editor: Editor, cloudUrl: string) {
+		try {
+			console.log('[Cloud Delete] Starting cloud image deletion for:', cloudUrl);
+
+			// Find all matches of this cloud image in the note
+			const matches = await this.findImageMatches(editor, cloudUrl, true);
+
+			if (matches.length === 0) {
+				new Notice('Failed to find cloud image link in the current note.');
+				return;
+			}
+
+			// Remove duplicates
+			const uniqueMatchesMap: Map<string, ImageMatch> = new Map();
+			for (const match of matches) {
+				const key = `${match.lineNumber}-${match.line}-${match.fullMatch}`;
+				if (!uniqueMatchesMap.has(key)) {
+					uniqueMatchesMap.set(key, match);
+				}
+			}
+			const uniqueMatches: ImageMatch[] = Array.from(uniqueMatchesMap.values());
+
+			if (uniqueMatches.length === 0) {
+				new Notice('Failed to find unique cloud image links in the current note.');
+				return;
+			}
+
+			// 删除单个图片链接和云端文件的函数
+			const deleteSingleImage = async (match: ImageMatch) => {
+				await this.removeImageLinkFromEditor(editor, match.lineNumber, match.line, match.fullMatch, false);
+				new Notice('Cloud image link removed from note');
+
+				// Try to delete from cloud storage (PicList only)
+				const cloudDeleteSuccess = await this.cloudDeleter.deleteImage({ url: cloudUrl });
+				
+				if (cloudDeleteSuccess) {
+					new Notice('Cloud image deleted successfully!');
+				} else {
+					const uploader = this.plugin.settings.cloudUploadSettings.uploader;
+					if (uploader === 'PicList') {
+						new Notice('Cloud image link removed, but failed to delete from cloud storage. Image may not be in upload history.');
+					} else {
+						new Notice(`Cloud image link removed. (${uploader} does not support automatic deletion)`);
+					}
+				}
+			};
+
+			// 删除所有图片链接和云端文件的函数
+			const deleteAllImages = async () => {
+				// Sort matches by line number in descending order
+				const sortedMatches = uniqueMatches.sort((matchA, matchB) => matchB.lineNumber - matchA.lineNumber);
+
+				// Delete all text links from editor
+				for (const match of sortedMatches) {
+					await this.removeImageLinkFromEditor(editor, match.lineNumber, match.line, match.fullMatch, false);
+				}
+
+				new Notice(`Removed ${uniqueMatches.length} cloud image link(s) from note`);
+
+				// Try to delete from cloud storage (PicList only)
+				const cloudDeleteSuccess = await this.cloudDeleter.deleteImage({ url: cloudUrl });
+				
+				if (cloudDeleteSuccess) {
+					new Notice('Cloud image deleted successfully!');
+				} else {
+					const uploader = this.plugin.settings.cloudUploadSettings.uploader;
+					if (uploader === 'PicList') {
+						new Notice('Cloud image link removed, but failed to delete from cloud storage. Image may not be in upload history.');
+					} else {
+						new Notice(`Cloud image link removed. (${uploader} does not support automatic deletion)`);
+					}
+				}
+			};
+
+			// 如果只有一次引用，直接删除
+			if (uniqueMatches.length === 1) {
+				await deleteSingleImage(uniqueMatches[0]);
+			} else {
+				// 多次引用，显示确认对话框
+				const detailsFragment = document.createDocumentFragment();
+				const messageContainer = document.createElement('div');
+				detailsFragment.appendChild(messageContainer);
+
+				const introText = document.createElement('p');
+				introText.textContent = `Found ${uniqueMatches.length} references to this cloud image in the current note. What would you like to delete?`;
+				messageContainer.appendChild(introText);
+
+				// 列出所有引用位置
+				const listTitle = document.createElement('p');
+				listTitle.style.fontWeight = 'bold';
+				listTitle.style.marginTop = '10px';
+				listTitle.textContent = 'References:';
+				messageContainer.appendChild(listTitle);
+
+				uniqueMatches.forEach((match, index) => {
+					const lineNumber = match.lineNumber + 1;
+					const lineContent = match.line.trim();
+					const detailDiv = document.createElement('div');
+					detailDiv.style.marginBottom = '5px';
+					detailDiv.style.fontSize = '0.9em';
+					detailDiv.innerHTML = `  ${index + 1}. Line ${lineNumber}: ${lineContent.substring(0, 60)}${lineContent.length > 60 ? '...' : ''}`;
+					messageContainer.appendChild(detailDiv);
+				});
+
+				// 创建自定义确认对话框，带有两个按钮
+				const modal = new Modal(this.app);
+				modal.titleEl.setText('Delete Cloud Image');
+				modal.contentEl.empty();
+				modal.contentEl.appendChild(detailsFragment);
+
+				// 按钮容器
+				const buttonContainer = modal.contentEl.createDiv({ cls: 'modal-button-container' });
+				buttonContainer.style.display = 'flex';
+				buttonContainer.style.justifyContent = 'flex-end';
+				buttonContainer.style.gap = '10px';
+				buttonContainer.style.marginTop = '20px';
+
+				// "Delete Only This One" 按钮
+				const deleteOneBtn = buttonContainer.createEl('button', { text: 'Delete Only This One' });
+				deleteOneBtn.addEventListener('click', async () => {
+					modal.close();
+					await deleteSingleImage(uniqueMatches[0]); // 删除第一个匹配（用户点击的）
+				});
+
+				// "Delete All" 按钮
+				const deleteAllBtn = buttonContainer.createEl('button', { text: `Delete All ${uniqueMatches.length}`, cls: 'mod-warning' });
+				deleteAllBtn.addEventListener('click', async () => {
+					modal.close();
+					await deleteAllImages();
+				});
+
+				// "Cancel" 按钮
+				const cancelBtn = buttonContainer.createEl('button', { text: 'Cancel' });
+				cancelBtn.addEventListener('click', () => {
+					modal.close();
+				});
+
+				modal.open();
+			}
+
+		} catch (error) {
+			console.error('[Cloud Delete] Error deleting cloud image:', error);
+			new Notice('Failed to delete cloud image. Check console for details.');
 		}
 	}
 
