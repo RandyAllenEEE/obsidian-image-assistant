@@ -58,7 +58,6 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
                 .onChange(async (value: "SimpleTex" | "Pix2Tex" | "Texify" | "LLM") => {
                     plugin.settings.ocrSettings.latexProvider = value;
                     await plugin.saveSettings();
-                    // 不再触发 display()，避免刷新打断交互
                 });
         });
 
@@ -74,7 +73,6 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
                 .onChange(async (value: "Texify" | "LLM") => {
                     plugin.settings.ocrSettings.markdownProvider = value;
                     await plugin.saveSettings();
-                    // 不再触发 display()，避免刷新打断交互
                 });
         });
 
@@ -84,15 +82,47 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         cls: "ocr-subsection-header" 
     });
 
-    // SimpleTex 配置（永久显示）
-    const simpleTexLabel = ocrContentEl.createEl("div", { 
+    // SimpleTex 配置
+    const simpletexLabel = ocrContentEl.createEl("div", { 
         text: "▸ SimpleTex", 
         cls: "ocr-provider-label" 
     });
 
-    new Setting(ocrContentEl)
+    // 添加折叠功能
+    const simpletexContentEl = ocrContentEl.createDiv({ cls: "ocr-provider-content" });
+    simpletexContentEl.hide();
+
+    simpletexLabel.addEventListener("click", () => {
+        const isVisible = !simpletexContentEl.isShown();
+        // 修复：使用正确的 toggle 方法
+        if (simpletexContentEl.isShown()) {
+            simpletexContentEl.hide();
+        } else {
+            simpletexContentEl.show();
+        }
+        simpletexLabel.textContent = isVisible ? "▾ SimpleTex" : "▸ SimpleTex";
+    });
+
+    // 添加认证方式开关
+    new Setting(simpletexContentEl)
+        .setName("认证方式")
+        .setDesc("选择 SimpleTeX 认证方式")
+        .addDropdown(dropdown => {
+            dropdown
+                .addOption("token", "Token (不推荐，可能会遇到CORS问题)")
+                .addOption("app", "App ID & Secret (推荐，避免CORS问题)")
+                .setValue(plugin.settings.ocrSettings.simpleTexAppId && plugin.settings.ocrSettings.simpleTexAppSecret ? "app" : "token")
+                .onChange(async (value: "token" | "app") => {
+                    // 不需要保存认证方式到设置中，只需在调用时判断使用哪种方式
+                    // 这里可以添加 UI 切换逻辑，但目前我们只保存设置值
+                    await plugin.saveSettings();
+                });
+        });
+
+    // Token 配置
+    new Setting(simpletexContentEl)
         .setName("Token")
-        .setDesc("输入 SimpleTex API Token")
+        .setDesc("输入 SimpleTex API Token (不推荐，可能会遇到CORS问题)")
         .addText(text => {
             text
                 .setPlaceholder("Your SimpleTex token")
@@ -103,6 +133,48 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
                 });
             text.inputEl.style.width = "100%";
         });
+
+    // 新增：SimpleTex APP ID 和 Secret 配置（推荐方式）
+    new Setting(simpletexContentEl)
+        .setName("App ID")
+        .setDesc("输入 SimpleTex App ID (推荐，避免CORS问题)")
+        .addText(text => {
+            text
+                .setPlaceholder("Your SimpleTex App ID")
+                .setValue(plugin.settings.ocrSettings.simpleTexAppId)
+                .onChange(async (value) => {
+                    plugin.settings.ocrSettings.simpleTexAppId = value;
+                    await plugin.saveSettings();
+                });
+            text.inputEl.style.width = "100%";
+        });
+
+    new Setting(simpletexContentEl)
+        .setName("App Secret")
+        .setDesc("输入 SimpleTex App Secret (推荐，避免CORS问题)")
+        .addText(text => {
+            text
+                .setPlaceholder("Your SimpleTex App Secret")
+                .setValue(plugin.settings.ocrSettings.simpleTexAppSecret)
+                .onChange(async (value) => {
+                    plugin.settings.ocrSettings.simpleTexAppSecret = value;
+                    await plugin.saveSettings();
+                });
+            text.inputEl.style.width = "100%";
+            text.inputEl.type = "password"; // 隐藏密码输入
+        });
+
+    new Setting(simpletexContentEl)
+        .setName("认证方式说明")
+        .setDesc(createFragment((frag) => {
+            frag.createEl("p", { text: "推荐使用 App ID + App Secret 方式，可以避免 CORS 问题。" });
+            frag.createEl("p", { text: "获取方式：" });
+            const ol = frag.createEl("ol");
+            ol.createEl("li", { text: "访问 SimpleTeX 开发者平台: https://simpletex.cn/open_platform" });
+            ol.createEl("li", { text: "登录账号并创建应用" });
+            ol.createEl("li", { text: "获取 App ID 和 App Secret" });
+            frag.createEl("p", { text: "Token 方式可能会遇到 CORS 问题，仅供临时测试使用。" });
+        }));
 
     // Pix2Tex 配置（永久显示）
     const pix2texLabel = ocrContentEl.createEl("div", { 

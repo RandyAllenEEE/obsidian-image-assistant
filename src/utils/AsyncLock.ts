@@ -1,4 +1,4 @@
-// Helper class for async locking
+// Helper class for async locking with concurrent queue support
 export class AsyncLock {
     private locks: Map<string, Promise<void>> = new Map();
 
@@ -24,5 +24,53 @@ export class AsyncLock {
             this.locks.delete(key);
             resolve();
         };
+    }
+}
+
+// Concurrent queue for rate limiting
+export class ConcurrentQueue {
+    private running = 0;
+    private queue: Array<() => Promise<void>> = [];
+
+    constructor(private concurrency: number = 3) {}
+
+    async run<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
+        const results: T[] = [];
+        let index = 0;
+
+        const wrappedTasks = tasks.map((task, i) => async () => {
+            try {
+                results[i] = await task();
+            } catch (error) {
+                console.error(`Task ${i} failed:`, error);
+                throw error;
+            }
+        });
+
+        return new Promise((resolve, reject) => {
+            const next = () => {
+                if (index >= wrappedTasks.length && this.running === 0) {
+                    resolve(results);
+                    return;
+                }
+
+                while (this.running < this.concurrency && index < wrappedTasks.length) {
+                    const task = wrappedTasks[index++];
+                    this.running++;
+
+                    task()
+                        .then(() => {
+                            this.running--;
+                            next();
+                        })
+                        .catch((error) => {
+                            this.running--;
+                            reject(error);
+                        });
+                }
+            };
+
+            next();
+        });
     }
 }

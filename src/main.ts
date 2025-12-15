@@ -18,6 +18,7 @@ import { LinkFormatPreset } from "./settings/LinkFormatSettings";
 import { LinkFormatter } from "./utils/LinkFormatter";
 import { NonDestructiveResizePreset } from "./settings/NonDestructiveResizeSettings";
 import { ContextMenu } from "./ui/ContextMenu";
+import { ConcurrentQueue } from "./utils/AsyncLock";
 // import { ImageAlignment } from './ui/ImageAlignment';
 import { ImageAlignmentManager } from './ui/ImageAlignmentManager';
 import { normalizePath } from "obsidian";
@@ -107,10 +108,30 @@ export default class ImageConverterPlugin extends Plugin {
     networkDownloader: NetworkImageDownloader;
     // unused file cleaner
     unusedFileCleaner: UnusedFileCleanerModal | null = null;
+    // Concurrent queue for rate limiting
+    private concurrentQueue: ConcurrentQueue = new ConcurrentQueue(3);
     
     private processedImage: ArrayBuffer | null = null;
     private temporaryBuffers: (ArrayBuffer | Blob | null)[] = [];
     private tempFolderPath = ".obsidian/plugins/image-assistant/temp";
+
+    // Memory cleanup method
+    private clearMemory() {
+        // Clear processed image
+        if (this.processedImage) {
+            this.processedImage = null;
+        }
+        
+        // Clear temporary buffers
+        if (this.temporaryBuffers.length > 0) {
+            this.temporaryBuffers = [];
+        }
+        
+        // Force garbage collection hint
+        if (typeof global !== 'undefined' && global.gc) {
+            global.gc();
+        }
+    }
 
     async onload() {
         await this.loadSettings();
@@ -344,7 +365,7 @@ export default class ImageConverterPlugin extends Plugin {
         
         this.addCommand({
             id: 'process-all-vault-images',
-            name: 'Image Assistant: Process all images in vault',
+            name: 'Process all images in vault',
             callback: () => {
                 if (!this.batchImageProcessor) {
                     new Notice('请稍候，插件正在初始化...');
@@ -356,7 +377,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         this.addCommand({
             id: 'process-all-images-current-note',
-            name: 'Image Assistant: Process all images in current note',
+            name: 'Process all images in current note',
             callback: () => {
                 if (!this.batchImageProcessor) {
                     new Notice('请稍候，插件正在初始化...');
@@ -373,14 +394,14 @@ export default class ImageConverterPlugin extends Plugin {
 
         this.addCommand({
             id: 'open-image-converter-settings',
-            name: 'Image Assistant: Open settings',
+            name: 'Open settings',
             callback: () => this.commandOpenSettingsTab()
         });
 
         // 批量上传当前笔记的所有本地图片到图床
         this.addCommand({
             id: 'upload-all-images',
-            name: 'Image Assistant: Upload all images in current note',
+            name: 'Upload all images in current note',
             callback: async () => {
                 // 只在图床模式下可用
                 if (this.settings.pasteHandlingMode !== 'cloud') {
@@ -394,7 +415,7 @@ export default class ImageConverterPlugin extends Plugin {
         // 批量下载当前笔记的所有网络图片到本地
         this.addCommand({
             id: 'download-all-images',
-            name: 'Image Assistant: Download all network images in current note',
+            name: 'Download all network images in current note',
             callback: async () => {
                 await this.downloadAllImages();
             }
@@ -403,7 +424,7 @@ export default class ImageConverterPlugin extends Plugin {
         // 清理无用文件
         this.addCommand({
             id: 'clean-unused-files',
-            name: 'Image Assistant: Scan and delete unused files',
+            name: 'Scan and delete unused files',
             callback: () => {
                 new UnusedFileCleanerModal(this.app, this).open();
             }
@@ -412,7 +433,7 @@ export default class ImageConverterPlugin extends Plugin {
         // Frontmatter 模式控制命令
         this.addCommand({
             id: 'configure-paste-mode-current-note',
-            name: 'Image Assistant: Configure paste mode for current note',
+            name: 'Configure paste mode for current note',
             callback: async () => {
                 await this.showPasteModeConfigModal();
             }
@@ -421,7 +442,7 @@ export default class ImageConverterPlugin extends Plugin {
         // OCR 命令（不依赖其他组件，可以立即执行）
         this.addCommand({
             id: 'ocr-latex-multiline',
-            name: 'Image Assistant: Generate multiline LaTeX from clipboard image',
+            name: 'Generate multiline LaTeX from clipboard image',
             callback: async () => {
                 await this.handleOCRLatex(true);
             }
@@ -429,7 +450,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         this.addCommand({
             id: 'ocr-latex-inline',
-            name: 'Image Assistant: Generate inline LaTeX from clipboard image',
+            name: 'Generate inline LaTeX from clipboard image',
             callback: async () => {
                 await this.handleOCRLatex(false);
             }
@@ -437,7 +458,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         this.addCommand({
             id: 'ocr-markdown',
-            name: 'Image Assistant: Generate markdown from clipboard image',
+            name: 'Generate markdown from clipboard image',
             callback: async () => {
                 await this.handleOCRMarkdown();
             }
@@ -513,7 +534,7 @@ export default class ImageConverterPlugin extends Plugin {
     addReloadCommand() {
         this.addCommand({
             id: 'reload-plugin',
-            name: 'Image Assistant: Reload plugin',
+            name: 'Reload plugin',
             callback: async () => {
                 new Notice('Reloading Image Converter plugin...');
 
@@ -638,6 +659,9 @@ export default class ImageConverterPlugin extends Plugin {
         } catch (error) {
             console.error('[OCR] LaTeX conversion error:', error);
             new Notice(`OCR 转换失败: ${error.message}`);
+        } finally {
+            // Clear memory after OCR processing
+            this.clearMemory();
         }
     }
     
@@ -664,6 +688,9 @@ export default class ImageConverterPlugin extends Plugin {
         } catch (error) {
             console.error('[OCR] Markdown conversion error:', error);
             new Notice(`OCR 转换失败: ${error.message}`);
+        } finally {
+            // Clear memory after OCR processing
+            this.clearMemory();
         }
     }
 
@@ -1488,21 +1515,6 @@ export default class ImageConverterPlugin extends Plugin {
         return preset;
     }
 
-    private clearMemory() {
-        // Clear the processed image buffer
-        if (this.processedImage) {
-            this.processedImage = null;
-        }
-
-        // Following might be pointless, but lets do it still  - clear any ArrayBuffers or Blobs in memory
-        if (this.temporaryBuffers) {
-            for (let i = 0; i < this.temporaryBuffers.length; i++) {
-                this.temporaryBuffers[i] = null;
-            }
-            this.temporaryBuffers = [];
-        }
-    }
-
     /**
      * Ensure temp folder exists for cloud upload
      */
@@ -1628,6 +1640,9 @@ export default class ImageConverterPlugin extends Plugin {
                 console.error('[Cloud Upload] Error stack:', error.stack);
                 new Notice(`Upload failed: ${error.message}`);
                 // Leave placeholder in place for user to see the error
+            } finally {
+                // Clear memory after processing
+                this.clearMemory();
             }
         }
 
@@ -1829,17 +1844,19 @@ export default class ImageConverterPlugin extends Plugin {
             console.log('[Batch Upload] Uploading files:', pathsToUpload);
             console.log('[Batch Upload] Remote mode:', this.settings.cloudUploadSettings.remoteServerMode);
 
-            // 上传所有图片
-            const uploadResult = await uploaderManager.upload(pathsToUpload);
-            console.log('[Batch Upload] Upload result:', uploadResult);
-
-            if (!uploadResult.success) {
-                new Notice(`Batch upload failed: ${uploadResult.msg || 'Unknown error'}`);
-                console.error('[Batch Upload] Upload failed:', uploadResult.msg);
-                return;
-            }
-
-            const uploadedUrls = uploadResult.result;
+            // Upload images with concurrent control (3 at a time)
+            const uploadResult = await this.concurrentQueue.run(
+                pathsToUpload.map(path => async () => {
+                    const result = await uploaderManager.upload([path]);
+                    if (!result.success) {
+                        throw new Error(result.msg || 'Upload failed');
+                    }
+                    return result.result[0];
+                })
+            );
+            
+            const uploadedUrls = uploadResult;
+            console.log('[Batch Upload] Upload result:', uploadedUrls);
 
             // 检查上传结果数量
             if (uploadedUrls.length !== uploadTasks.length) {
@@ -2002,6 +2019,9 @@ export default class ImageConverterPlugin extends Plugin {
         } catch (error) {
             console.error('[Batch Upload] Upload failed:', error);
             new Notice(`Batch upload failed: ${error.message}`);
+        } finally {
+            // Clear memory after batch upload
+            this.clearMemory();
         }
     }
 
@@ -2144,6 +2164,9 @@ export default class ImageConverterPlugin extends Plugin {
                 console.error('[Cloud Upload] Error stack:', error.stack);
                 new Notice(`Upload failed: ${error.message}`);
                 // Leave placeholder in place for user to see the error
+            } finally {
+                // Clear memory after processing
+                this.clearMemory();
             }
         }
 
@@ -2238,6 +2261,9 @@ export default class ImageConverterPlugin extends Plugin {
             } catch (error) {
                 console.error('[Cloud Upload] Error uploading network image:', error);
                 new Notice(`Error uploading ${imageUrl}: ${error.message}`);
+            } finally {
+                // Clear memory after processing
+                this.clearMemory();
             }
         }
 

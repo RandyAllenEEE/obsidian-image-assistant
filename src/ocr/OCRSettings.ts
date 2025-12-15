@@ -6,6 +6,8 @@ export interface OCRProvider {
 // OCR 设置接口
 export interface OCRSettings {
     simpleTexToken: string;
+    simpleTexAppId: string;  // 新增：SimpleTex App ID
+    simpleTexAppSecret: string;  // 新增：SimpleTex App Secret
     latexProvider: "SimpleTex" | "Pix2Tex" | "Texify" | "LLM";
     markdownProvider: "Texify" | "LLM";
     texify: {
@@ -33,6 +35,8 @@ export interface OCRSettings {
 // 默认 OCR 设置
 export const DEFAULT_OCR_SETTINGS: OCRSettings = {
     simpleTexToken: "",
+    simpleTexAppId: "",  // 新增：SimpleTex App ID默认值
+    simpleTexAppSecret: "",  // 新增：SimpleTex App Secret默认值
     latexProvider: "SimpleTex",
     markdownProvider: "Texify",
     texify: {
