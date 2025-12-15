@@ -65,7 +65,7 @@ import { UnusedFileCleanerModal } from "./utils/UnusedFileCleanerModal";
 import { PasteModeConfigModal } from "./ui/modals/PasteModeConfigModal";
 
 // OCR imports
-import { EditorInteract } from "./ocr/EditorInteract";
+import EditorInteract from "./ocr/EditorInteract";
 import { getLatexProvider, getMarkdownProvider } from "./ocr/providers/index";
 
 export default class ImageConverterPlugin extends Plugin {
@@ -122,10 +122,18 @@ export default class ImageConverterPlugin extends Plugin {
         // Ensure temp folder exists for cloud upload
         await this.ensureTempFolderExists();
 
+        // ✅ 立即注册所有命令（在 onLayoutReady 之前）
+        // 这确保命令可以在 Obsidian 设置界面中绑定快捷键
+        this.registerAllCommands();
+
         // Captions are time-sensitive
         if (this.settings.enableImageCaptions) {
             this.captionManager = new ImageCaptionManager(this);
             this.register(() => this.captionManager.cleanup());
+            // Delay refresh to avoid startup issues
+            this.app.workspace.onLayoutReady(() => {
+                this.captionManager.refresh();
+            });
         }
 
 
@@ -136,9 +144,11 @@ export default class ImageConverterPlugin extends Plugin {
                 this,
                 this.supportedImageFormats,
             );
+            // 同步等待初始化完成,确保缓存加载和事件注册完成
             await this.ImageAlignmentManager.initialize();
-
-            // This helps when opening into note with alignments set and fires less often than e.g. active-leaf-change
+            
+            // ✅ 提前在 onload 中注册 file-open 事件
+            // 参考 image-converter 的成功模式,确保事件优先级
             this.registerEvent(
                 this.app.workspace.on('file-open', (file) => {
                     if (file) {
@@ -229,10 +239,13 @@ export default class ImageConverterPlugin extends Plugin {
 
         if (this.settings.isImageResizeEnbaled) {
             this.imageResizer = new ImageResizer(this);
-            const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-            if (activeView) {
-                this.imageResizer.onload(activeView);
-            }
+            // Delay initialization to avoid startup issues
+            this.app.workspace.onLayoutReady(() => {
+                const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+                if (activeView) {
+                    this.imageResizer?.onload(activeView);
+                }
+            });
         }
 
         // Initialize components that depend on others
@@ -270,11 +283,6 @@ export default class ImageConverterPlugin extends Plugin {
                 this.variableProcessor
             );
         }
-
-        // REDUNDANT as it is already initialized inside ImageAssistantSettings %%Initialize NonDestructiveResizeSettings if needed%%
-        // if (!this.settings.nonDestructiveResizeSettings) {
-        //     this.settings.nonDestructiveResizeSettings = new NonDestructiveResizeSettings();
-        // }
 
         // Register PASTE/DROP events
         this.dropPasteRegisterEvents();
@@ -320,20 +328,40 @@ export default class ImageConverterPlugin extends Plugin {
                 }
             })
         );
+    }
 
-        // Register commands
+    /**
+     * 注册所有命令
+     * 重要：必须在 onload() 中立即调用，不能延迟到 onLayoutReady
+     * 否则命令无法在 Obsidian 设置界面中绑定快捷键
+     */
+    registerAllCommands() {
+        // 注：这些命令在 onload 时注册，但依赖的组件在 onLayoutReady 中初始化
+        // 因此 callback 中需要检查组件是否已初始化
+        
+        // 注意：所有命令名称统一使用 "Image Assistant:" 前缀（与 manifest.json 的 name 一致）
+        // 这样 Obsidian 快捷键设置的搜索功能才能正确工作
+        
         this.addCommand({
             id: 'process-all-vault-images',
-            name: 'Convert: Process all images in vault',
+            name: 'Image Assistant: Process all images in vault',
             callback: () => {
+                if (!this.batchImageProcessor) {
+                    new Notice('请稍候，插件正在初始化...');
+                    return;
+                }
                 new ProcessAllVaultModal(this.app, this, this.batchImageProcessor).open();
             }
         });
 
         this.addCommand({
             id: 'process-all-images-current-note',
-            name: 'Convert: Process all images in current note',
+            name: 'Image Assistant: Process all images in current note',
             callback: () => {
+                if (!this.batchImageProcessor) {
+                    new Notice('请稍候，插件正在初始化...');
+                    return;
+                }
                 const activeFile = this.app.workspace.getActiveFile();
                 if (activeFile) {
                     new ProcessCurrentNote(this.app, this, activeFile, this.batchImageProcessor).open();
@@ -345,14 +373,14 @@ export default class ImageConverterPlugin extends Plugin {
 
         this.addCommand({
             id: 'open-image-converter-settings',
-            name: 'Open Image Assistant Settings',
+            name: 'Image Assistant: Open settings',
             callback: () => this.commandOpenSettingsTab()
         });
 
         // 批量上传当前笔记的所有本地图片到图床
         this.addCommand({
             id: 'upload-all-images',
-            name: 'Cloud: Upload all images in current note',
+            name: 'Image Assistant: Upload all images in current note',
             callback: async () => {
                 // 只在图床模式下可用
                 if (this.settings.pasteHandlingMode !== 'cloud') {
@@ -366,7 +394,7 @@ export default class ImageConverterPlugin extends Plugin {
         // 批量下载当前笔记的所有网络图片到本地
         this.addCommand({
             id: 'download-all-images',
-            name: 'Cloud: Download all network images in current note',
+            name: 'Image Assistant: Download all network images in current note',
             callback: async () => {
                 await this.downloadAllImages();
             }
@@ -375,7 +403,7 @@ export default class ImageConverterPlugin extends Plugin {
         // 清理无用文件
         this.addCommand({
             id: 'clean-unused-files',
-            name: 'Clean: Scan and delete unused files',
+            name: 'Image Assistant: Scan and delete unused files',
             callback: () => {
                 new UnusedFileCleanerModal(this.app, this).open();
             }
@@ -390,26 +418,26 @@ export default class ImageConverterPlugin extends Plugin {
             }
         });
 
-        // OCR 命令
+        // OCR 命令（不依赖其他组件，可以立即执行）
         this.addCommand({
             id: 'ocr-latex-multiline',
-            name: 'OCR: Generate multiline LaTeX from clipboard image',
+            name: 'Image Assistant: Generate multiline LaTeX from clipboard image',
             callback: async () => {
                 await this.handleOCRLatex(true);
             }
         });
-        
+
         this.addCommand({
             id: 'ocr-latex-inline',
-            name: 'OCR: Generate inline LaTeX from clipboard image',
+            name: 'Image Assistant: Generate inline LaTeX from clipboard image',
             callback: async () => {
                 await this.handleOCRLatex(false);
             }
         });
-        
+
         this.addCommand({
             id: 'ocr-markdown',
-            name: 'OCR: Generate markdown from clipboard image',
+            name: 'Image Assistant: Generate markdown from clipboard image',
             callback: async () => {
                 await this.handleOCRMarkdown();
             }
@@ -485,7 +513,7 @@ export default class ImageConverterPlugin extends Plugin {
     addReloadCommand() {
         this.addCommand({
             id: 'reload-plugin',
-            name: 'Reload plugin',
+            name: 'Image Assistant: Reload plugin',
             callback: async () => {
                 new Notice('Reloading Image Converter plugin...');
 
@@ -594,29 +622,22 @@ export default class ImageConverterPlugin extends Plugin {
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
-                new Notice('No markdown view found');
+                new Notice('请先打开一个 Markdown 文档');
                 return;
             }
 
-            const editorInteract = new EditorInteract(view);
             const image = this.getClipboardImage();
             if (!image) return;
 
+            const editorInteract = new EditorInteract(view);
             editorInteract.insertLoadingText();
             
-            try {
-                const provider = getLatexProvider(isMultiline, this.settings.ocrSettings);
-                const parsedLatex = await provider.sendRequest(image);
-                editorInteract.insertResponseToEditor(parsedLatex);
-            } catch (error) {
-                console.error('OCR LaTeX error:', error);
-                // 移除 loading text
-                editorInteract.insertResponseToEditor('');
-                new Notice(`Error while fetching LaTeX: ${error.message}`);
-            }
+            const provider = getLatexProvider(isMultiline, this.settings.ocrSettings);
+            const parsedLatex = await provider.sendRequest(image);
+            editorInteract.insertResponseToEditor(parsedLatex);
         } catch (error) {
-            console.error('OCR LaTeX handler error:', error);
-            new Notice('Error while processing LaTeX');
+            console.error('[OCR] LaTeX conversion error:', error);
+            new Notice(`OCR 转换失败: ${error.message}`);
         }
     }
     
@@ -627,29 +648,22 @@ export default class ImageConverterPlugin extends Plugin {
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
-                new Notice('No markdown view found');
+                new Notice('请先打开一个 Markdown 文档');
                 return;
             }
 
-            const editorInteract = new EditorInteract(view);
             const image = this.getClipboardImage();
             if (!image) return;
 
+            const editorInteract = new EditorInteract(view);
             editorInteract.insertLoadingText();
             
-            try {
-                const provider = getMarkdownProvider(this.settings.ocrSettings);
-                const result = await provider.sendRequest(image);
-                editorInteract.insertResponseToEditor(result);
-            } catch (error) {
-                console.error('OCR Markdown error:', error);
-                // 移除 loading text
-                editorInteract.insertResponseToEditor('');
-                new Notice(`Error while converting to Markdown: ${error.message}`);
-            }
+            const provider = getMarkdownProvider(this.settings.ocrSettings);
+            const result = await provider.sendRequest(image);
+            editorInteract.insertResponseToEditor(result);
         } catch (error) {
-            console.error('OCR Markdown handler error:', error);
-            new Notice('Error while converting to Markdown');
+            console.error('[OCR] Markdown conversion error:', error);
+            new Notice(`OCR 转换失败: ${error.message}`);
         }
     }
 

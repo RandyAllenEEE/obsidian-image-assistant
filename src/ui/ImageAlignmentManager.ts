@@ -54,14 +54,10 @@ export class ImageAlignmentManager {
     public async initialize() {
         await this.loadCache();
         this.registerEvents();
-        // this.setupIsmageObserver(); // STILL needed for managing images inside callouts etc
         this.scheduleCacheCleanup();
-
-        // Apply alignments immediately
-        const currentFile = this.app.workspace.getActiveFile();
-        if (currentFile) {
-            this.applyAlignmentsToNote(currentFile.path);
-        }
+        
+        // ❌ 移除立即应用对齐,避免触发 CodeMirror "Measure loop restarted" 警告
+        // 对齐操作将由 file-open 事件触发,确保 DOM 稳定后执行
     }
 
     // Simple method for imageAlignment instance
