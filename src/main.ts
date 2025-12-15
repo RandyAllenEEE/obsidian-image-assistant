@@ -10,42 +10,42 @@ import {
     FileSystemAdapter,
     requestUrl
 } from "obsidian";
-import { SupportedImageFormats } from "./SupportedImageFormats";
-import { FolderAndFilenameManagement } from "./FolderAndFilenameManagement";
-import { ImageProcessor } from "./ImageProcessor";
-import { VariableProcessor } from "./VariableProcessor";
-import { LinkFormatPreset } from "./LinkFormatSettings";
-import { LinkFormatter } from "./LinkFormatter";
-import { NonDestructiveResizePreset } from "./NonDestructiveResizeSettings";
-import { ContextMenu } from "./ContextMenu";
-// import { ImageAlignment } from './ImageAlignment';
-import { ImageAlignmentManager } from './ImageAlignmentManager';
+import { SupportedImageFormats } from "./local/SupportedImageFormats";
+import { FolderAndFilenameManagement } from "./local/FolderAndFilenameManagement";
+import { ImageProcessor } from "./local/ImageProcessor";
+import { VariableProcessor } from "./local/VariableProcessor";
+import { LinkFormatPreset } from "./settings/LinkFormatSettings";
+import { LinkFormatter } from "./utils/LinkFormatter";
+import { NonDestructiveResizePreset } from "./settings/NonDestructiveResizeSettings";
+import { ContextMenu } from "./ui/ContextMenu";
+// import { ImageAlignment } from './ui/ImageAlignment';
+import { ImageAlignmentManager } from './ui/ImageAlignmentManager';
 import { normalizePath } from "obsidian";
-import { ImageResizer } from "./ImageResizer";
-import { BatchImageProcessor } from "./BatchImageProcessor";
-import { ProcessSingleImageModal } from "./ProcessSingleImageModal";
-import { ProcessFolderModal } from "./ProcessFolderModal";
-import { ProcessCurrentNote } from "./ProcessCurrentNote";
-import { ProcessAllVaultModal } from "./ProcessAllVaultModal"
-import { ImageCaptionManager } from "./ImageCaptionManager"
-import { UploaderManager } from "./uploader/index";
-import { CloudLinkFormatter } from "./CloudLinkFormatter";
-import { UploadHelper, ImageLink } from "./UploadHelper";
+import { ImageResizer } from "./ui/ImageResizer";
+import { BatchImageProcessor } from "./local/BatchImageProcessor";
+import { ProcessSingleImageModal } from "./ui/modals/ProcessSingleImageModal";
+import { ProcessFolderModal } from "./ui/modals/ProcessFolderModal";
+import { ProcessCurrentNote } from "./ui/modals/ProcessCurrentNote";
+import { ProcessAllVaultModal } from "./ui/modals/ProcessAllVaultModal"
+import { ImageCaptionManager } from "./ui/ImageCaptionManager"
+import { UploaderManager } from "./cloud/uploader/index";
+import { CloudLinkFormatter } from "./cloud/CloudLinkFormatter";
+import { UploadHelper, ImageLink } from "./utils/UploadHelper";
 import { basename, dirname, extname, join } from "path-browserify";
 import { resolve } from "path-browserify";
 
 // Settings tab and all DEFAULTS
 import {
-    ImageConverterSettings,
+    ImageAssistantSettings,
     DEFAULT_SETTINGS,
     ImageConverterSettingTab,
     ConversionPreset,
     FilenamePreset,
     FolderPreset,
     ConfirmDialog
-} from "./ImageConverterSettings";
+} from "./settings/ImageAssistantSettings";
 
-import { PresetSelectionModal } from "./PresetSelectionModal";
+import { PresetSelectionModal } from "./ui/modals/PresetSelectionModal";
 import {
     UploadErrorDialog,
     NoReferenceUploadDialog,
@@ -58,13 +58,18 @@ import {
     BatchDownloadProgressDialog,
     DownloadTaskInfo,
     FileMatchInfo  // 添加 FileMatchInfo 导入
-} from "./UploadModals";
-import { CloudImageDeleter } from "./CloudImageDeleter";
-import { NetworkImageDownloader } from "./NetworkImageDownloader";
-import { UnusedFileCleanerModal } from "./UnusedFileCleanerModal";
+} from "./ui/modals/UploadModals";
+import { CloudImageDeleter } from "./cloud/CloudImageDeleter";
+import { NetworkImageDownloader } from "./cloud/NetworkImageDownloader";
+import { UnusedFileCleanerModal } from "./utils/UnusedFileCleanerModal";
+import { PasteModeConfigModal } from "./ui/modals/PasteModeConfigModal";
+
+// OCR imports
+import { EditorInteract } from "./ocr/EditorInteract";
+import { getLatexProvider, getMarkdownProvider } from "./ocr/providers/index";
 
 export default class ImageConverterPlugin extends Plugin {
-    settings: ImageConverterSettings;
+    settings: ImageAssistantSettings;
 
     // Check supported image formats
     supportedImageFormats: SupportedImageFormats;
@@ -74,7 +79,7 @@ export default class ImageConverterPlugin extends Plugin {
     imageProcessor: ImageProcessor;
     // Handle variable processing
     variableProcessor: VariableProcessor;
-    // linkFormatSettings: LinkFormatSettings;     // Link format - it is initialised via ImageConverterSettings
+    // linkFormatSettings: LinkFormatSettings;     // Link format - it is initialised via ImageAssistantSettings
     // Link formatter
     linkFormatter: LinkFormatter;
     // Context menu
@@ -266,7 +271,7 @@ export default class ImageConverterPlugin extends Plugin {
             );
         }
 
-        // REDUNDANT as it is already initialized inside ImageConverterSettings %%Initialize NonDestructiveResizeSettings if needed%%
+        // REDUNDANT as it is already initialized inside ImageAssistantSettings %%Initialize NonDestructiveResizeSettings if needed%%
         // if (!this.settings.nonDestructiveResizeSettings) {
         //     this.settings.nonDestructiveResizeSettings = new NonDestructiveResizeSettings();
         // }
@@ -373,6 +378,40 @@ export default class ImageConverterPlugin extends Plugin {
             name: 'Clean: Scan and delete unused files',
             callback: () => {
                 new UnusedFileCleanerModal(this.app, this).open();
+            }
+        });
+
+        // Frontmatter 模式控制命令
+        this.addCommand({
+            id: 'configure-paste-mode-current-note',
+            name: 'Image Assistant: Configure paste mode for current note',
+            callback: async () => {
+                await this.showPasteModeConfigModal();
+            }
+        });
+
+        // OCR 命令
+        this.addCommand({
+            id: 'ocr-latex-multiline',
+            name: 'OCR: Generate multiline LaTeX from clipboard image',
+            callback: async () => {
+                await this.handleOCRLatex(true);
+            }
+        });
+        
+        this.addCommand({
+            id: 'ocr-latex-inline',
+            name: 'OCR: Generate inline LaTeX from clipboard image',
+            callback: async () => {
+                await this.handleOCRLatex(false);
+            }
+        });
+        
+        this.addCommand({
+            id: 'ocr-markdown',
+            name: 'OCR: Generate markdown from clipboard image',
+            callback: async () => {
+                await this.handleOCRMarkdown();
             }
         });
 
@@ -485,6 +524,135 @@ export default class ImageConverterPlugin extends Plugin {
         });
     }
 
+    // Frontmatter 模式控制相关方法
+    
+    /**
+     * 获取当前笔记的有效粘贴模式
+     * 优先级: 笔记级别 Frontmatter > 全局设置
+     */
+    private getEffectivePasteMode(): 'local' | 'cloud' | 'disabled' {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile) {
+            return this.settings.pasteHandlingMode;
+        }
+        
+        const cache = this.app.metadataCache.getFileCache(activeFile);
+        const frontmatter = cache?.frontmatter;
+        
+        if (frontmatter && 'image_paste_mode' in frontmatter) {
+            const override = frontmatter['image_paste_mode'];
+            if (override === 'local' || override === 'cloud') {
+                return override;
+            }
+        }
+        
+        return this.settings.pasteHandlingMode;
+    }
+    
+    /**
+     * 显示粘贴模式配置模态框
+     */
+    private async showPasteModeConfigModal() {
+        const modal = new PasteModeConfigModal(this.app, this);
+        modal.open();
+    }
+
+    // OCR 功能相关方法
+    
+    /**
+     * 获取剪贴板中的图片数据
+     */
+    private getClipboardImage(): Uint8Array | null {
+        try {
+            // 动态导入 electron,避免在非桌面端报错
+            // @ts-ignore
+            const { clipboard } = require('electron');
+            
+            const availableFormats = clipboard.availableFormats();
+            const hasImage = availableFormats.some((format: string) => 
+                format.includes('image/png') || format.includes('image/jpeg')
+            );
+            
+            if (!hasImage) {
+                new Notice('No image found in clipboard');
+                return null;
+            }
+            
+            const nativeImage = clipboard.readImage();
+            return new Uint8Array(nativeImage.toPNG());
+        } catch (error) {
+            console.error('Failed to read clipboard image:', error);
+            new Notice('Failed to read clipboard image. Make sure you are running on desktop.');
+            return null;
+        }
+    }
+    
+    /**
+     * 处理 OCR 转 LaTeX
+     */
+    private async handleOCRLatex(isMultiline: boolean) {
+        try {
+            const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+            if (!view) {
+                new Notice('No markdown view found');
+                return;
+            }
+
+            const editorInteract = new EditorInteract(view);
+            const image = this.getClipboardImage();
+            if (!image) return;
+
+            editorInteract.insertLoadingText();
+            
+            try {
+                const provider = getLatexProvider(isMultiline, this.settings.ocrSettings);
+                const parsedLatex = await provider.sendRequest(image);
+                editorInteract.insertResponseToEditor(parsedLatex);
+            } catch (error) {
+                console.error('OCR LaTeX error:', error);
+                // 移除 loading text
+                editorInteract.insertResponseToEditor('');
+                new Notice(`Error while fetching LaTeX: ${error.message}`);
+            }
+        } catch (error) {
+            console.error('OCR LaTeX handler error:', error);
+            new Notice('Error while processing LaTeX');
+        }
+    }
+    
+    /**
+     * 处理 OCR 转 Markdown
+     */
+    private async handleOCRMarkdown() {
+        try {
+            const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+            if (!view) {
+                new Notice('No markdown view found');
+                return;
+            }
+
+            const editorInteract = new EditorInteract(view);
+            const image = this.getClipboardImage();
+            if (!image) return;
+
+            editorInteract.insertLoadingText();
+            
+            try {
+                const provider = getMarkdownProvider(this.settings.ocrSettings);
+                const result = await provider.sendRequest(image);
+                editorInteract.insertResponseToEditor(result);
+            } catch (error) {
+                console.error('OCR Markdown error:', error);
+                // 移除 loading text
+                editorInteract.insertResponseToEditor('');
+                new Notice(`Error while converting to Markdown: ${error.message}`);
+            }
+        } catch (error) {
+            console.error('OCR Markdown handler error:', error);
+            new Notice('Error while converting to Markdown');
+        }
+    }
+
     private dropPasteRegisterEvents() {
         // On mobile DROP events are not supported, but lets still check as a precaution
         if (Platform.isMobile) return;
@@ -517,15 +685,18 @@ export default class ImageConverterPlugin extends Plugin {
                 );
 
                 if (hasSupportedFiles) {
+                    // Get effective paste mode (may be overridden by Frontmatter)
+                    const effectiveMode = this.getEffectivePasteMode();
+                    
                     // Check paste handling mode
-                    if (this.settings.pasteHandlingMode === 'disabled') {
+                    if (effectiveMode === 'disabled') {
                         // Disabled mode: do nothing, let Obsidian handle it
                         return;
                     }
 
                     evt.preventDefault(); // Prevent default behavior
 
-                    if (this.settings.pasteHandlingMode === 'cloud') {
+                    if (effectiveMode === 'cloud') {
                         // Cloud mode: upload to image hosting
                         await this.handleDropCloud(fileData, editor, pos);
                     } else {
@@ -566,15 +737,18 @@ export default class ImageConverterPlugin extends Plugin {
                 );
 
                 if (hasSupportedItems) {
+                    // Get effective paste mode (may be overridden by Frontmatter)
+                    const effectiveMode = this.getEffectivePasteMode();
+                    
                     // Check paste handling mode
-                    if (this.settings.pasteHandlingMode === 'disabled') {
+                    if (effectiveMode === 'disabled') {
                         // Disabled mode: do nothing, let Obsidian handle it
                         return;
                     }
 
                     evt.preventDefault();
 
-                    if (this.settings.pasteHandlingMode === 'cloud') {
+                    if (effectiveMode === 'cloud') {
                         // Cloud mode: upload to image hosting
                         await this.handlePasteCloud(itemData, editor, cursor, clipboardText);
                     } else {
@@ -1474,6 +1648,17 @@ export default class ImageConverterPlugin extends Plugin {
         // 过滤图片链接（本地图片 + 符合条件的网络图片）
         const filteredImageLinks = allImageLinks.filter(img => {
             const isNetworkImage = img.path.startsWith('http://') || img.path.startsWith('https://');
+            
+            // 🔴 跳过已上传图片
+            if (this.settings.cloudUploadSettings.uploadedImages && this.settings.cloudUploadSettings.uploadedImages.length > 0) {
+                const uploadedUrls = new Set(
+                    this.settings.cloudUploadSettings.uploadedImages.map(item => item.imgUrl)
+                );
+                if (uploadedUrls.has(img.path)) {
+                    console.log('[Batch Upload] Skipping already uploaded image:', img.path);
+                    return false;
+                }
+            }
             
             if (isNetworkImage) {
                 // 检查是否启用网络图片上传

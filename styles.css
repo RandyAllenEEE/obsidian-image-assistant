@@ -967,6 +967,179 @@ html[data-theme='dark'] {
 /* ----------------------------------------------------------------------- */
 
 
+/* --------------- OCR & LATEX SETTINGS ------------------------------ */
+/* ----------------------------------------------------------------------- */
+
+/* OCR Section Container */
+.ocr-settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    cursor: pointer;
+    margin-bottom: 10px;
+}
+
+/* OCR Header */
+.ocr-settings-header {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 8px 0;
+}
+
+.ocr-chevron-icon {
+    margin-right: 5px;
+    transition: transform 0.2s ease;
+}
+
+.ocr-settings-header .settings-section-title {
+    margin-left: 0.5em;
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+/* OCR Content */
+.ocr-settings-content {
+    padding-top: 15px;
+}
+
+.ocr-settings-content .setting-item {
+    padding-left: 1.5em;
+    border-top: none;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+/* Subsection Headers */
+.ocr-subsection-header {
+    font-size: 1em;
+    font-weight: 600;
+    color: var(--text-normal);
+    margin-top: 20px;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    padding-left: 1.5em;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* Provider Labels */
+.ocr-provider-label {
+    font-size: 0.95em;
+    font-weight: 500;
+    color: var(--text-accent);
+    margin-top: 15px;
+    margin-bottom: 8px;
+    padding-left: 1.5em;
+}
+
+/* Prompts Label (indented) */
+.ocr-prompts-label {
+    font-size: 0.9em;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-top: 12px;
+    margin-bottom: 8px;
+    padding-left: 2.5em;
+}
+
+/* Provider-specific settings indentation - remove this rule */
+/* .ocr-provider-label ~ .setting-item {
+    padding-left: 20px !important;
+} */
+
+/* Usage Description */
+.ocr-usage-desc {
+    margin-top: 25px;
+    margin-left: 1.5em;
+    padding: 15px;
+    background-color: var(--background-secondary);
+    border-radius: 6px;
+    border-left: 3px solid var(--interactive-accent);
+}
+
+.ocr-usage-desc p {
+    margin: 5px 0;
+    font-size: 0.9em;
+    line-height: 1.5;
+}
+
+.ocr-usage-desc .usage-title {
+    font-weight: 600;
+    font-size: 1em;
+    margin-bottom: 10px;
+}
+
+.ocr-usage-desc .feature-highlight {
+    color: var(--text-accent);
+    font-style: italic;
+    margin-top: 10px;
+}
+
+/* ----------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------- */
+
+
+/* --------------- OTHER SETTINGS SECTION ------------------------------ */
+/* ----------------------------------------------------------------------- */
+
+.other-settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    cursor: pointer;
+    margin-bottom: 10px;
+}
+
+.other-settings-header {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 8px 0;
+}
+
+.other-chevron-icon {
+    margin-right: 5px;
+    transition: transform 0.2s ease;
+}
+
+.other-settings-header .settings-section-title {
+    margin-left: 0.5em;
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.other-settings-content {
+    padding-top: 15px;
+}
+
+.other-settings-content .setting-item {
+    padding-left: 1.5em;
+    border-top: none;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+/* ----------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------- */
+
+
+/* --------------- PASTE HANDLING SECTION ------------------------------ */
+/* ----------------------------------------------------------------------- */
+
+.paste-handling-settings-section {
+    margin-bottom: 10px;
+}
+
+.paste-handling-settings-section .setting-item {
+    border-top: none;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+/* ----------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------- */
+
+
 
 
 
@@ -4055,17 +4228,18 @@ html[data-theme='dark'] {
 
 /* Settings Section */
 .cleaner-settings-section {
-    margin: 20px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    cursor: pointer;
+    margin-bottom: 10px;
 }
 
 .cleaner-settings-header {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px;
-    cursor: pointer;
-    border-radius: 6px;
-    transition: background-color 0.2s;
+    width: 100%;
+    padding: 8px 0;
 }
 
 .cleaner-settings-header:hover {
@@ -4073,14 +4247,25 @@ html[data-theme='dark'] {
 }
 
 .cleaner-chevron-icon {
-    width: 16px;
-    height: 16px;
-    transition: transform 0.2s;
+    margin-right: 5px;
+    transition: transform 0.2s ease;
+}
+
+.cleaner-settings-header .settings-section-title {
+    margin-left: 0.5em;
+    font-weight: 600;
+    margin-bottom: 5px;
 }
 
 .cleaner-settings-content {
-    margin-top: 10px;
-    padding: 0 10px;
+    padding-top: 15px;
+}
+
+.cleaner-settings-content .setting-item {
+    padding-left: 1.5em;
+    border-top: none;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
 }
 
 .cleaner-usage-desc {
