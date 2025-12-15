@@ -1,12 +1,12 @@
 # Image Assistant for Obsidian
 
-**Image Assistant** 是一个功能强大的 Obsidian 图片管理插件，集成了**本地图片处理**与**云端图床管理**功能。它能够自动转换、压缩、调整图片大小，并支持将图片上传至图床或下载网络图片到本地，让您的笔记图片管理更加便捷高效。
+**Image Assistant** 是一个功能强大的 Obsidian 图片管理插件，集成了**本地图片处理**、**云端图床管理**和**OCR识别**功能。它能够自动转换、压缩、调整图片大小，支持将图片上传至图床或下载网络图片到本地，还能将剪贴板中的图像（如数学公式截图）转换为 LaTeX 公式或 Markdown 文本，让您的笔记图片管理更加便捷高效。
 
-> 本项目基于 **[Image Converter](https://github.com/xRyul/obsidian-image-converter)** 和 **[Image Auto Upload](https://github.com/renmu123/obsidian-image-auto-upload-plugin)** 开发。
+> 本项目基于 **[Image Converter](https://github.com/xRyul/obsidian-image-converter)**、**[Image Auto Upload](https://github.com/renmu123/obsidian-image-auto-upload-plugin)** 和 **[Image2LaTEX](https://github.com/Hugo-Persson/obsidian-ocrlatex)** 开发.
 > 
-> 核心图片处理逻辑归功于原作者 **xRyul**，云端上传功能归功于 **renmu123**。本项目在此基础上进行了深度整合与定制化增强，实现了本地处理与云端管理的无缝切换。
->
-> This project is an enhanced integration based on **[Image Converter](https://github.com/xRyul/obsidian-image-converter)** and **[Image Auto Upload Plugin](https://github.com/renmu123/obsidian-image-auto-upload-plugin)**. All credits for core image processing go to **xRyul**, and cloud upload features to **renmu123**. This version provides seamless switching between local processing and cloud management.
+> 核心图片处理逻辑归功于原作者 **xRyul**，云端上传功能归功于 **renmu123**，OCR识别功能归功于 **Hugo Persson**。本项目在此基础上进行了深度整合与定制化增强，实现了本地处理、云端管理和OCR识别的一站式解决方案.
+
+> This project is an enhanced integration based on **[Image Converter](https://github.com/xRyul/obsidian-image-converter)**, **[Image Auto Upload Plugin](https://github.com/renmu123/obsidian-image-auto-upload-plugin)** and **[Image2LaTEX](https://github.com/Hugo-Persson/obsidian-ocrlatex)**. All credits for core image processing go to **xRyul**, cloud upload features to **renmu123**, and OCR recognition features to **Hugo Persson**. This version provides a one-stop solution for local processing, cloud management, and OCR recognition.
 
 ---
 
@@ -14,7 +14,7 @@
 
 ### 🎛️ 智能粘贴处理模式
 
-**三种模式自由切换**，满足不同场景需求：
+**四种模式自由切换**，满足不同场景需求：
 
 1. **本地模式 (Local Mode)**：
    - 自动转换、压缩、重命名粘贴/拖放的图片
@@ -26,7 +26,12 @@
    - 自动插入带尺寸标记的图床链接
    - 支持批量上传当前笔记的所有本地图片
 
-3. **关闭模式 (Disabled)**：
+3. **OCR识别模式 (OCR Mode)**：
+   - 自动识别剪贴板中的图像（如数学公式截图）
+   - 转换为 LaTeX 公式或 Markdown 文本
+   - 支持多种OCR服务商（SimpleTex、Texify、Pix2Tex、LLM）
+
+4. **关闭模式 (Disabled)**：
    - 使用 Obsidian 默认行为
    - 不进行任何处理
 
@@ -91,6 +96,19 @@
   - 本地图片：删除文件和链接
   - 图床图片：同步删除云端文件（需配置 PicList）
 
+### 🔍 OCR识别功能 (OCR Recognition) 🆕
+
+- **剪贴板图像识别**：直接读取剪贴板中的图片进行转换
+- **多种转换模式**：
+  * **Inline LaTeX**: 行内公式 `$ ... $`
+  * **Multiline LaTeX**: 多行公式块 `$$...$$`
+  * **Markdown**: 直接转换为 Markdown 文本
+- **多服务商支持**：
+  * **LLM (New!)**: 支持 OpenAI 格式的 API（如 GPT-4o, Claude, 本地模型等），在自定义的prompt下可以适用于Inline/Multiline/包含公式的文本等
+  * **SimpleTex**: 免费且高精度的在线公式识别服务
+  * **Texify**: 自托管的 Markdown 转换服务
+  * **Pix2Tex**: 自托管的 LaTeX OCR 服务
+
 ### 📁 文件管理 (File Management)
 
 - **自定义重命名**: 支持变量 (如 `{noteName}`, `{fileName}`, `{date}` 等)
@@ -129,6 +147,7 @@
 3. 选择您需要的模式：
    - **本地模式**: 处理并保存到本地
    - **图床模式**: 上传到图床
+   - **OCR识别模式**: 启用OCR识别功能
    - **关闭**: 不处理
 
 #### 配置图床（仅图床模式）
@@ -138,12 +157,52 @@
 3. （可选）设置图片尺寸参数
 4. （可选）配置域名黑名单
 
+#### 配置OCR（仅OCR识别模式）
+
+在 Obsidian 的插件设置页中，您可以选择 LaTeX 和 Markdown 的默认提供商：
+
+##### 1. 🤖 LLM (大语言模型) - *推荐*
+本版本新增功能。您可以使用任何兼容 OpenAI 接口的模型（如 GPT-4 Vision, Claude 3.5 Sonnet 或本地多模态模型）进行识别。
+
+* **Endpoint**: API 终端地址 (例如: `https://api.openai.com/v1/chat/completions` 或本地 `http://localhost:11434/v1/...`)。
+* **Model**: 模型名称 (例如: `gpt-4o`, `gpt-4-turbo`, `llava`)。
+* **API Key**: 您的 API 密钥。
+* **Max Tokens**: 生成的最大 Token 数 (默认为 300)。
+* **Prompts**: 您可以自定义提示词来优化 LaTeX 或 Markdown 的输出结果。
+
+##### 2. ☁️ SimpleTex
+一个免费且高精度的在线服务（推荐用于 LaTeX）。
+
+1.  访问 [SimpleTex API Dashboard](https://simpletex.cn/api)。
+2.  注册/登录账户。
+3.  创建一个 Token。
+4.  将 Token 粘贴到插件设置的 `SimpleTex Token` 栏中。
+
+##### 3. 🏠 Texify (自托管)
+适用于将图像转换为 Markdown 文本。
+
+* 需要自托管模型，详见：[texify-web-api](https://github.com/Hugo-Persson/texify-wep-api)。
+* 部署后，在设置中填入 API URL (例如 `http://localhost:5000/predict`)。
+
+##### 4. 🐳 Pix2Tex (自托管)
+LaTeX OCR 的替代方案。
+
+* 可以通过 Docker 或 Python 运行。
+* Docker部署: 参考 [pix2tex Docker](https://hub.docker.com/r/lukasblecher/pix2tex)。
+* Python部署:
+    ```bash
+    pip install pix2tex[api]
+    python -m pix2tex.api.run
+    ```
+* 在设置中填入 URL (例如 `http://localhost:8502/predict/`)。
+
 ### 2. 日常使用
 
 #### 粘贴/拖放图片
 
 - **本地模式**: 图片自动转换、压缩、重命名并保存
 - **图床模式**: 图片自动上传到图床，插入带尺寸的链接
+- **OCR识别模式**: 自动识别剪贴板中的图像并转换为LaTeX或Markdown
 - **关闭模式**: 使用 Obsidian 默认行为
 
 #### 批量上传到图床
@@ -160,6 +219,15 @@
    - 选择要下载的图片（支持全选/取消）
    - 选择下载模式（下载并替换/仅下载/仅替换）
    - 点击 **"开始"**
+
+#### OCR识别图片
+
+1.  截图或复制包含数学公式的图片到剪贴板。
+2.  在 Obsidian 中打开命令面板 (`Ctrl/Cmd + P`)。
+3.  运行以下命令之一：
+    * `Image Assistant: Generate inline LaTeX from clipboard image` (生成行内公式)
+    * `Image Assistant: Generate multiline LaTeX from clipboard image` (生成多行公式块)
+    * `Image Assistant: Generate markdown from clipboard image` (生成 Markdown)
 
 #### 右键菜单
 
@@ -307,6 +375,7 @@ MIT License - see [LICENSE](LICENSE)
 
 - **[xRyul](https://github.com/xRyul)** - Image Converter 核心功能
 - **[renmu123](https://github.com/renmu123)** - Image Auto Upload 云端上传功能
+- **[Hugo Persson](https://github.com/Hugo-Persson)** - Image2LaTEX OCR识别功能
 - **[musug](https://github.com/musug)** - 最初的图片粘贴处理灵感
 - **[FabricJS](https://fabricjs.com/)** - 强大的标注工具库
 
