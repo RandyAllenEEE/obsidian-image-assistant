@@ -2,15 +2,18 @@ import { App, Modal, Notice, Setting, TFile } from "obsidian";
 import { basename } from "path-browserify";
 
 // 引用匹配结果接口
+// 引用匹配结果接口
+export interface ImageMatch {
+    lineNumber: number;
+    line: string;
+    original: string;
+}
+
 export interface ImageMatchResult {
     totalCount: number;
     files: Array<{
         path: string;
-        matches: Array<{
-            lineNumber: number;
-            line: string;
-            original: string;
-        }>;
+        matches: Array<ImageMatch>;
     }>;
 }
 
@@ -407,7 +410,7 @@ export class BatchUploadConfirmDialog extends Modal {
         contentEl.createEl("h2", { text: "批量上传确认" });
 
         const content = contentEl.createDiv();
-        content.createEl("p", { 
+        content.createEl("p", {
             text: `✓ 已成功上传 ${this.totalImages} 张图片`,
             cls: "upload-success-text"
         });
@@ -550,7 +553,7 @@ export class BatchDownloadPreviewDialog extends Modal {
         contentEl.createEl("h2", { text: "批量下载预览" });
 
         const content = contentEl.createDiv();
-        
+
         // 统计信息
         content.createEl("p", {
             text: `📊 找到 ${this.tasks.length} 张网络图片`,
@@ -590,7 +593,7 @@ export class BatchDownloadPreviewDialog extends Modal {
         // 预估大小
         const totalSize = this.tasks.reduce((sum, task) => sum + (task.estimatedSize || 0), 0);
         if (totalSize > 0) {
-            const sizeText = totalSize > 1024 * 1024 
+            const sizeText = totalSize > 1024 * 1024
                 ? `${(totalSize / (1024 * 1024)).toFixed(2)} MB`
                 : `${(totalSize / 1024).toFixed(2)} KB`;
             content.createEl("p", {
@@ -609,7 +612,7 @@ export class BatchDownloadPreviewDialog extends Modal {
         const imageList = listContainer.createEl("div", { cls: "download-image-list" });
         this.tasks.slice(0, 10).forEach((task, index) => {
             const itemEl = imageList.createDiv({ cls: "download-image-item" });
-            
+
             // 复选框
             const checkbox = itemEl.createEl("input", {
                 type: "checkbox",
@@ -624,7 +627,7 @@ export class BatchDownloadPreviewDialog extends Modal {
             const infoEl = itemEl.createDiv({ cls: "download-image-info" });
             const urlText = task.url.length > 60 ? task.url.substring(0, 60) + "..." : task.url;
             infoEl.createEl("span", { text: urlText, cls: "download-image-url" });
-            
+
             if (task.estimatedSize) {
                 const sizeText = task.estimatedSize > 1024 * 1024
                     ? `${(task.estimatedSize / (1024 * 1024)).toFixed(2)} MB`

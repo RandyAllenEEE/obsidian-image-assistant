@@ -160,7 +160,21 @@ export class BatchImageProcessor {
 
                 // Update links only if the file was renamed
                 if (oldPath !== newFilePath) {
-                    await this.updateLinksInNote(noteFile, oldPath, newFilePath);
+                    await this.plugin.vaultReferenceManager.updateReferences(oldPath, (loc) => {
+                        // Simple rename logic: replace the old link path with the new filename base
+                        // If the link was "img.png", and we rename to "img.webp", it becomes "img.webp"
+                        // We rely on the fact that we are renaming in-place, so paths structure is preserved.
+                        // loc.link is the path inside the link, e.g. "img.png"
+
+                        // We need to be careful: loc.link might be "Assets/img.png".
+                        // newFileName is just "img.webp". 
+                        // We want "Assets/img.webp".
+                        // So we replace the basename+ext of loc.link with newFileName.
+
+                        // Helper to swap filename in a path string
+                        const updatedLinkPath = loc.link.replace(linkedFile.name, newFileName);
+                        return loc.original.replace(loc.link, updatedLinkPath);
+                    });
                 }
 
                 const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -498,7 +512,10 @@ export class BatchImageProcessor {
 
                 // Update links in all notes to point to the renamed file
                 if (oldPath !== newFilePath) {
-                    await this.updateLinksInAllNotes(oldPath, newFilePath);
+                    await this.plugin.vaultReferenceManager.updateReferences(oldPath, (loc) => {
+                        const updatedLinkPath = loc.link.replace(image.name, newFileName);
+                        return loc.original.replace(loc.link, updatedLinkPath);
+                    });
                 }
 
                 const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -588,75 +605,16 @@ export class BatchImageProcessor {
         return true;
     }
 
-    async updateLinksInAllNotes(
-        oldPath: string,
-        newPath: string
-    ): Promise<void> {
-        const allMarkdownFiles = this.app.vault.getMarkdownFiles();
-        for (const note of allMarkdownFiles) {
-            await this.updateLinksInNote(note, oldPath, newPath);
-        }
+    // updateLinksInAllNotes removed
+    // updateLinksInNote removed
+    // escapeRegexCharacters removed
+    // updateCanvasFileLinks removed
 
-        // Update links in canvas files as well
-        const canvasFiles = this.app.vault
-            .getFiles()
-            .filter((file) => file.extension === "canvas");
-        for (const canvasFile of canvasFiles) {
-            await this.updateCanvasFileLinks(canvasFile, oldPath, newPath);
-        }
-    }
 
-    async updateLinksInNote(
-        noteFile: TFile,
-        oldPath: string,
-        newPath: string
-    ): Promise<void> {
-        const oldLinkText = this.escapeRegexCharacters(oldPath);
-        const content = await this.app.vault.read(noteFile);
 
-        // Improve regex to avoid partial matches (e.g. matching "img.png" inside "img.png.bak")
-        // We ensure the match is not followed by a word character or a dot.
-        const regex = new RegExp(oldLinkText + '(?![\\w\\.])', 'g');
-        const newContent = content.replace(regex, newPath);
 
-        if (content !== newContent) {
-            await this.app.vault.modify(noteFile, newContent);
-            console.log(`Links updated in ${noteFile.path}`);
-        }
-    }
 
-    private escapeRegexCharacters(text: string): string {
-        return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
 
-    async updateCanvasFileLinks(
-        canvasFile: TFile,
-        oldPath: string,
-        newPath: string
-    ) {
-        try {
-            const content = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(content);
-
-            const updateNodePaths = (nodes: any[]) => {
-                for (const node of nodes) {
-                    if (node.type === 'file' && node.file === oldPath) {
-                        node.file = newPath;
-                    }
-                    if (node.children && Array.isArray(node.children)) {
-                        updateNodePaths(node.children);
-                    }
-                }
-            };
-
-            if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
-                updateNodePaths(canvasData.nodes);
-                await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
-            }
-        } catch (error) {
-            console.error('Error updating canvas file links:', error);
-        }
-    }
 
     // private async updateMarkdownLinks(noteFile: TFile, oldPath: string, newPath: string): Promise<void> {
     //     const oldLinkText = this.escapeRegexCharacters(oldPath);

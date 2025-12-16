@@ -58,8 +58,10 @@ import {
     BatchDownloadPreviewDialog,
     BatchDownloadProgressDialog,
     DownloadTaskInfo,
-    FileMatchInfo  // 添加 FileMatchInfo 导入
+    FileMatchInfo,  // 添加 FileMatchInfo 导入
+    ImageMatch // Add ImageMatch import
 } from "./ui/modals/UploadModals";
+import { VaultReferenceManager } from "./utils/VaultReferenceManager";
 import { CloudImageDeleter } from "./cloud/CloudImageDeleter";
 import { NetworkImageDownloader } from "./cloud/NetworkImageDownloader";
 import { UnusedFileCleanerModal } from "./utils/UnusedFileCleanerModal";
@@ -108,6 +110,8 @@ export default class ImageConverterPlugin extends Plugin {
     networkDownloader: NetworkImageDownloader;
     // unused file cleaner
     unusedFileCleaner: UnusedFileCleanerModal | null = null;
+    // Vault Reference Manager
+    vaultReferenceManager: VaultReferenceManager;
     // Concurrent queue for rate limiting
     private concurrentQueue: ConcurrentQueue = new ConcurrentQueue(3);
 
@@ -257,6 +261,7 @@ export default class ImageConverterPlugin extends Plugin {
         this.variableProcessor = new VariableProcessor(this.app, this.settings);
         this.linkFormatter = new LinkFormatter(this.app);
         this.imageProcessor = new ImageProcessor(this.supportedImageFormats);
+        this.vaultReferenceManager = new VaultReferenceManager(this.app);
 
         if (this.settings.isImageResizeEnbaled) {
             this.imageResizer = new ImageResizer(this);
@@ -1889,8 +1894,36 @@ export default class ImageConverterPlugin extends Plugin {
                 const cloudUrl = uploadedUrls[i];
 
                 // 只为本地图片检查引用
+                // 只为本地图片检查引用
                 if (!task.isNetworkImage && task.file) {
-                    const vaultMatches = await this.findVaultImageMatches(task.file);
+                    // Use VaultReferenceManager
+                    const references = await this.vaultReferenceManager.getFilesReferencingImage(task.file.path);
+
+                    // Convert to ImageMatchResult structure
+                    const fileGroups = new Map<string, ImageMatch[]>();
+                    for (const ref of references) {
+                        if (!fileGroups.has(ref.file.path)) {
+                            fileGroups.set(ref.file.path, []);
+                        }
+                        fileGroups.get(ref.file.path)?.push({
+                            lineNumber: 0,
+                            line: ref.original,
+                            original: ref.original
+                        });
+                    }
+
+                    const vaultMatches: ImageMatchResult = {
+                        totalCount: references.length,
+                        files: []
+                    };
+
+                    for (const [path, matchItems] of fileGroups.entries()) {
+                        vaultMatches.files.push({
+                            path: path,
+                            matches: matchItems
+                        });
+                    }
+
                     const totalReferences = vaultMatches.totalCount;
                     const currentNoteReferences = vaultMatches.files.find(
                         f => f.path === activeFile.path
@@ -1976,9 +2009,8 @@ export default class ImageConverterPlugin extends Plugin {
                     const matchInfo = taskWithVaultMatches.find(m => m.task === task);
                     if (matchInfo) {
                         // 本地图片:替换所有 Vault 引用
-                        // 注意: replaceAllReferences 内部会处理具体的每个引用，这里不需要在这里生成单一的 cloudLink
-                        // 我们需要修改 replaceAllReferences 来支持保留每个引用的原始信息
-                        await this.replaceAllReferences(matchInfo.vaultMatches, cloudUrl); // Passing raw URL now
+                        // Use VaultReferenceManager to update all references for this image
+                        await this.updateLinksWithManager(matchInfo.task.file!.path, cloudUrl);
                     } else {
                         // 网络图片:仅替换当前笔记
                         let content = helper.getValue();
@@ -2314,19 +2346,112 @@ export default class ImageConverterPlugin extends Plugin {
             return; // User cancelled or upload failed
         }
         const { cloudUrl } = uploadResult;
+        new Notice(`上传成功: ${cloudUrl}`);
 
-        // Stage 2: Scan references
-        new Notice("正在扫描引用...");
-        const matches = await this.findVaultImageMatches(file);
+        // 2. Check for existing references in the vault to this image
+        // Use VaultReferenceManager for O(1) lookup
+        const references = await this.vaultReferenceManager.getFilesReferencingImage(file.path);
+
+        // Convert to ImageMatchResult for compatibility with existing modals
+        // TODO: Ideally refactor modals to use ReferenceLocation[] directly,
+        // but for now we map it to preserve existing UI structures.
+        const matches: ImageMatchResult = {
+            totalCount: references.length,
+            files: []
+        };
+
+        // Group by file path
+        const fileGroups = new Map<string, ImageMatch[]>(); // Changed type to ImageMatch[]
+        for (const ref of references) {
+            if (!fileGroups.has(ref.file.path)) {
+                fileGroups.set(ref.file.path, []);
+            }
+            fileGroups.get(ref.file.path)?.push({
+                lineNumber: 0, // Cache doesn't give line number directly easily without re-reading, but we have offsets.
+                // UI mostly uses this for display, can be approximated or ignored for now.
+                line: ref.original, // Use original link text context
+                original: ref.original
+            });
+        }
+
+        for (const [path, matchItems] of fileGroups.entries()) {
+            matches.files.push({
+                path: path,
+                matches: matchItems
+            });
+        }
         const totalCount = matches.totalCount;
 
         // Stage 3: Decide based on reference count
-        if (totalCount === 0) {
-            await this.handleNoReference(file, cloudUrl);
-        } else if (totalCount === 1) {
-            await this.handleSingleReference(file, cloudUrl, matches);
-        } else {
-            await this.handleMultipleReferences(file, cloudUrl, matches, undefined);
+        // If matches found, ask user what to do
+        if (matches.totalCount > 0) {
+            // Determine if we are replacing in current note only or all
+            // Logic from original code:
+            // "If we are in the context of a current note (e.g. paste), maybe prompt differently?"
+            // Current logic simplifies to:
+            // 1. Single reference -> SingleReferenceUploadDialog
+            // 2. Multiple references -> MultiReferenceUploadDialog
+            // 3. No references -> NoReferenceUploadDialog (handled below)
+
+            // Reuse existing modals, but map their callbacks to our standardized actions
+            const currentNote = this.app.workspace.getActiveFile();
+            const currentNotePath = currentNote ? currentNote.path : undefined;
+
+            if (matches.totalCount === 1) {
+                const match = matches.files[0];
+                new SingleReferenceUploadDialog(
+                    this.app,
+                    file.name,
+                    cloudUrl,
+                    { file: match.path, line: match.matches[0].lineNumber },
+                    (choice) => {
+                        if (choice === 'replace') {
+                            this.updateLinksWithManager(file.path, cloudUrl);
+                        } else if (choice === 'replace-delete') {
+                            this.updateLinksWithManager(file.path, cloudUrl).then(() => {
+                                this.app.vault.trash(file, true);
+                            });
+                        } else if (choice === 'undo') {
+                            this.deleteCloudImage(cloudUrl);
+                        }
+                    }
+                ).open();
+            } else { // Multiple references
+                new MultiReferenceUploadDialog(
+                    this.app,
+                    file.name,
+                    cloudUrl,
+                    matches,
+                    currentNotePath,
+                    (choice) => {
+                        if (choice === 'replace-current') {
+                            this.updateLinksWithManager(file.path, cloudUrl, currentNotePath ? [currentNotePath] : undefined);
+                        } else if (choice === 'replace-all') {
+                            this.updateLinksWithManager(file.path, cloudUrl);
+                        } else if (choice === 'replace-all-delete') {
+                            this.updateLinksWithManager(file.path, cloudUrl).then(() => {
+                                this.app.vault.trash(file, true);
+                            });
+                        }
+                    }
+                ).open();
+            }
+
+        } else { // No references
+            new NoReferenceUploadDialog(
+                this.app,
+                file.name,
+                cloudUrl,
+                file,
+                (choice) => {
+                    if (choice === 'delete-all') {
+                        this.deleteCloudImage(cloudUrl);
+                        this.app.vault.trash(file, true);
+                    } else if (choice === 'keep-cloud') {
+                        this.app.vault.trash(file, true);
+                    }
+                }
+            ).open();
         }
     }
 
@@ -2400,7 +2525,6 @@ export default class ImageConverterPlugin extends Plugin {
                 const uploadResult = await uploaderManager.upload([uploadPath]);
                 const cloudUrl = uploadResult.result[0];
 
-                new Notice(`✓ 上传成功!`);
                 return { cloudUrl };
             } catch (error) {
                 retryCount++;
@@ -2432,82 +2556,8 @@ export default class ImageConverterPlugin extends Plugin {
         return null;
     }
 
-    /**
-     * Find all references to an image in the vault (all .md and .canvas files)
-     */
-    private async findVaultImageMatches(file: TFile): Promise<ImageMatchResult> {
-        const result: ImageMatchResult = {
-            totalCount: 0,
-            files: []
-        };
-
-        const allFiles = this.app.vault.getMarkdownFiles();
-        const imagePath = file.path;
-
-        for (const mdFile of allFiles) {
-            const content = await this.app.vault.read(mdFile);
-            const matches = this.findImageMatchesInContent(content, imagePath, mdFile.path);
-
-            if (matches.length > 0) {
-                result.files.push({
-                    path: mdFile.path,
-                    matches: matches
-                });
-                result.totalCount += matches.length;
-            }
-        }
-
-        return result;
-    }
-
-    /**
-     * Find image matches in file content
-     */
-    private findImageMatchesInContent(
-        content: string,
-        imagePath: string,
-        sourceFilePath: string
-    ): Array<{ lineNumber: number; line: string; original: string }> {
-        const matches: Array<{ lineNumber: number; line: string; original: string }> = [];
-        const lines = content.split('\n');
-        const normalizedImagePath = normalizePath(imagePath);
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-
-            // Match Wiki links: ![[path]]
-            const wikiMatches = [...line.matchAll(/!\[\[([^\]]+?)(?:\|[^\]]+?)?\]\]/g)];
-            for (const match of wikiMatches) {
-                const linkPath = match[1];
-                const resolvedPath = this.resolveImagePath(linkPath, sourceFilePath);
-
-                if (this.pathsMatch(normalizedImagePath, resolvedPath)) {
-                    matches.push({
-                        lineNumber: i + 1,
-                        line: line,
-                        original: match[0]
-                    });
-                }
-            }
-
-            // Match Markdown links: ![alt](path)
-            const mdMatches = [...line.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)];
-            for (const match of mdMatches) {
-                const linkPath = match[2];
-                const resolvedPath = this.resolveImagePath(linkPath, sourceFilePath);
-
-                if (this.pathsMatch(normalizedImagePath, resolvedPath)) {
-                    matches.push({
-                        lineNumber: i + 1,
-                        line: line,
-                        original: match[0]
-                    });
-                }
-            }
-        }
-
-        return matches;
-    }
+    // findVaultImageMatches removed
+    // findImageMatchesInContent removed
 
     /**
      * Resolve image path relative to source file
@@ -2602,12 +2652,12 @@ export default class ImageConverterPlugin extends Plugin {
 
         switch (choice) {
             case 'replace':
-                await this.replaceAllReferences(matches, cloudUrl);
+                await this.updateLinksWithManager(file.path, cloudUrl);
                 new Notice(`✓ 已替换引用`);
                 break;
 
             case 'replace-delete':
-                await this.replaceAllReferences(matches, cloudUrl);
+                await this.updateLinksWithManager(file.path, cloudUrl);
                 if (this.settings.cloudUploadSettings.deleteSource) {
                     await this.app.vault.trash(file, true);
                     new Notice(`✓ 已替换引用并删除本地文件`);
@@ -2658,18 +2708,13 @@ export default class ImageConverterPlugin extends Plugin {
                         (sum, f) => sum + f.matches.length, 0
                     );
 
-                    await this.replaceAllReferences(currentMatches, cloudUrl);
+                    await this.updateLinksWithManager(file.path, cloudUrl, [currentNotePath]);
                     new Notice(`✓ 已替换当前笔记中的 ${currentMatches.totalCount} 处引用`);
                 }
                 break;
 
             case 'replace-all':
-                await this.replaceAllReferences(matches, cloudUrl);
-                new Notice(`✓ 已替换 ${matches.totalCount} 处引用,涉及 ${matches.files.length} 个文件`);
-                break;
-
-            case 'replace-all-delete':
-                await this.replaceAllReferences(matches, cloudUrl);
+                await this.updateLinksWithManager(file.path, cloudUrl);
                 if (this.settings.cloudUploadSettings.deleteSource) {
                     await this.app.vault.trash(file, true);
                     new Notice(`✓ 已替换所有引用并删除本地文件`);
@@ -2684,42 +2729,26 @@ export default class ImageConverterPlugin extends Plugin {
         }
     }
 
+    // handleUploadResponse removed as logic moved inline above or replaced by direct calls to updateLinksWithManager
+    // replaceAllReferences removed
+
     /**
-     * Replace all references to the image with cloud link
+     * WRAPPER: Update links using VaultReferenceManager
      */
-    private async replaceAllReferences(
-        matches: ImageMatchResult,
-        cloudUrl: string
-    ): Promise<void> {
-        let replacedCount = 0;
-        const totalCount = matches.totalCount;
-
-        new Notice(`正在替换引用... (0/${totalCount})`);
-
-        for (const fileMatch of matches.files) {
-            const file = this.app.vault.getAbstractFileByPath(fileMatch.path);
-            if (!file || !(file instanceof TFile)) continue;
-
-            let content = await this.app.vault.read(file);
-
-            // Replace all matches in this file
-            for (const match of fileMatch.matches) {
-                const cloudLink = CloudLinkFormatter.formatCloudLink(
-                    cloudUrl,
-                    this.settings.cloudUploadSettings,
-                    match.original // Pass original link for preservation
-                );
-                content = content.replace(match.original, cloudLink);
-                replacedCount++;
-
-                // Update progress
-                new Notice(`正在替换引用... (${replacedCount}/${totalCount})`);
+    private async updateLinksWithManager(imagePath: string, cloudUrl: string, scopeFiles?: string[]): Promise<void> {
+        await this.vaultReferenceManager.updateReferences(imagePath, (loc) => {
+            // Check if we should only update specific files (for 'replace-current' logic)
+            if (scopeFiles && !scopeFiles.includes(loc.file.path)) {
+                return loc.original; // No change
             }
 
-            await this.app.vault.modify(file, content);
-        }
+            return CloudLinkFormatter.formatCloudLink(
+                cloudUrl,
+                this.settings.cloudUploadSettings,
+                loc.original
+            );
+        });
 
-        // Refresh captions if enabled
         if (this.settings.enableImageCaptions) {
             this.captionManager.refresh();
         }
