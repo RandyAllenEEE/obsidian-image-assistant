@@ -839,7 +839,7 @@ export default class ImageConverterPlugin extends Plugin {
         // Step 3: Map Files to Processing Promises
         // - Create an array of promises, each responsible for processing one file.
         // - This allows for sequential processing, avoiding concurrency issues.
-        const filePromises = supportedFiles.map(async (file) => {
+        const filePromises = supportedFiles.map((file) => async () => {
             try {
                 // Check modal behavior setting
                 const { modalBehavior } = this.settings;
@@ -1121,9 +1121,13 @@ export default class ImageConverterPlugin extends Plugin {
             }
         });
 
-        // Step 4: Wait for All Promises to Complete
-        // - Use `Promise.all` to wait for all the file processing promises to settle (either fulfilled or rejected).
-        await Promise.all(filePromises);
+        // Step 4: Execute Tasks with Concurrent Queue
+        // - Use `ConcurrentQueue` to process images with limited concurrency (e.g., 3 at a time)
+        // - This prevents UI freezing when dropping many images
+        if (!this.concurrentQueue) {
+            this.concurrentQueue = new ConcurrentQueue(3);
+        }
+        await this.concurrentQueue.run(filePromises);
 
         if (this.settings.enableImageCaptions) {
             this.captionManager.refresh();
@@ -1151,7 +1155,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Step 3: Map Files to Processing Promises
         // - Create an array of promises, each responsible for processing one pasted file.
-        const filePromises = supportedFiles.map(async (file) => {
+        const filePromises = supportedFiles.map((file) => async () => {
             // Check modal behavior setting
             const { modalBehavior } = this.settings;
             let showModal = modalBehavior === "always";
@@ -1435,9 +1439,12 @@ export default class ImageConverterPlugin extends Plugin {
             }
         });
 
-        // Step 4: Wait for All Promises to Complete
-        // - Wait for all file processing promises to settle.
-        await Promise.all(filePromises);
+        // Step 4: Execute Tasks with Concurrent Queue
+        // - Use `ConcurrentQueue` to process images with limited concurrency
+        if (!this.concurrentQueue) {
+            this.concurrentQueue = new ConcurrentQueue(3);
+        }
+        await this.concurrentQueue.run(filePromises);
 
         if (this.settings.enableImageCaptions) {
             this.captionManager.refresh();

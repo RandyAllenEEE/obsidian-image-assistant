@@ -1,5 +1,6 @@
 import { App, TFile, TFolder, normalizePath, Notice } from "obsidian";
 import ImageConverterPlugin from '../main';
+import { ReferenceLocation as VaultRefLocation } from './VaultReferenceManager';
 
 /**
  * 文件引用信息接口
@@ -36,7 +37,7 @@ export class UnusedFileCleaner {
     constructor(
         private app: App,
         private plugin: ImageConverterPlugin
-    ) {}
+    ) { }
 
     /**
      * 扫描指定文件夹中的附件并检测引用
@@ -51,7 +52,7 @@ export class UnusedFileCleaner {
         progressCallback?: (current: number, total: number, currentFile: string) => void
     ): Promise<CleanupResult> {
         const normalizedFolder = normalizePath(targetFolder);
-        
+
         // 获取目标文件夹
         const folder = this.app.vault.getAbstractFileByPath(normalizedFolder);
         if (!folder || !(folder instanceof TFolder)) {
@@ -69,7 +70,7 @@ export class UnusedFileCleaner {
         // 逐个检查文件引用
         for (let i = 0; i < filesToCheck.length; i++) {
             const file = filesToCheck[i];
-            
+
             // 调用进度回调
             if (progressCallback) {
                 progressCallback(i + 1, total, file.path);
@@ -120,77 +121,40 @@ export class UnusedFileCleaner {
      * @returns 文件引用信息
      */
     private async checkFileReferences(file: TFile): Promise<FileReferenceInfo> {
-        const references: ReferenceLocation[] = [];
-        const seenReferences = new Set<string>(); // 用于去重
+        const references: ReferenceLocation[] = []; // Using local interface
 
-        // 获取库中所有 Markdown 文件
-        const markdownFiles = this.app.vault.getMarkdownFiles();
+        // Use VaultReferenceManager for O(1) lookup
+        const vaultRefs = await this.plugin.vaultReferenceManager.getFilesReferencingImage(file.path);
 
-        // 准备多种可能的引用格式
-        const fileName = file.name;
-        const fileBaseName = file.basename;
-        const filePath = file.path;
-        const escapedFileName = this.escapeRegex(fileName);
-        const escapedBaseName = this.escapeRegex(fileBaseName);
-        const escapedFilePath = this.escapeRegex(filePath);
-
-        // 构建更全面的正则表达式模式
-        // 参考 UploadHelper.ts 的实现，并增强以支持更多格式
-        const patterns = [
-            // Wiki 链接格式: ![[filename]] 或 ![[filename|alt]] 或 ![[path/to/filename]]
-            new RegExp(`!\\[\\[([^\\]]*[\\\\/])?${escapedBaseName}(\\s*?\\|.*?)?\\]\\]`, 'g'),
-            new RegExp(`!\\[\\[([^\\]]*[\\\\/])?${escapedFileName}(\\s*?\\|.*?)?\\]\\]`, 'g'),
-            new RegExp(`!\\[\\[${escapedFilePath}(\\s*?\\|.*?)?\\]\\]`, 'g'),
-            
-            // Markdown 格式带尖括号: ![alt](<path>)
-            new RegExp(`!\\[.*?\\]\\(<([^)]*[\\\\/])?${escapedFileName}>\\)`, 'g'),
-            new RegExp(`!\\[.*?\\]\\(<${escapedFilePath}>\\)`, 'g'),
-            
-            // Markdown 格式不带尖括号: ![alt](path) 或 ![alt](path "title")
-            new RegExp(`!\\[.*?\\]\\(([^)"<>]*[\\\\/])?${escapedFileName}(\\s+"[^"]*")?\\)`, 'g'),
-            new RegExp(`!\\[.*?\\]\\(${escapedFilePath}(\\s+"[^"]*")?\\)`, 'g'),
-            
-            // Markdown 链接格式: [text](path)
-            new RegExp(`\\[([^\\]]+)\\]\\(<([^)]*[\\\\/])?${escapedFileName}>\\)`, 'g'),
-            new RegExp(`\\[([^\\]]+)\\]\\(([^)"<>]*[\\\\/])?${escapedFileName}(\\s+"[^"]*")?\\)`, 'g'),
-            new RegExp(`\\[([^\\]]+)\\]\\(${escapedFilePath}(\\s+"[^"]*")?\\)`, 'g'),
-        ];
-
-        // 遍历所有 Markdown 文件
-        for (const mdFile of markdownFiles) {
-            try {
-                const content = await this.app.vault.read(mdFile);
-                const lines = content.split('\n');
-
-                // 逐行检查
-                for (let lineNum = 0; lineNum < lines.length; lineNum++) {
-                    const line = lines[lineNum];
-                    let hasMatch = false;
-
-                    // 检查所有模式
-                    for (const pattern of patterns) {
-                        pattern.lastIndex = 0; // 重置正则表达式状态
-                        if (pattern.test(line)) {
-                            hasMatch = true;
-                            break;
-                        }
-                    }
-
-                    if (hasMatch) {
-                        // 使用去重键：文件路径 + 行号
-                        const refKey = `${mdFile.path}:${lineNum}`;
-                        if (!seenReferences.has(refKey)) {
-                            seenReferences.add(refKey);
-                            references.push({
-                                notePath: mdFile.path,
-                                lineNumber: lineNum + 1, // 行号从 1 开始
-                                lineContent: line.trim()
-                            });
-                        }
-                    }
+        if (vaultRefs.length > 0) {
+            // Group by file to read efficienty
+            const fileMap = new Map<TFile, VaultRefLocation[]>();
+            for (const ref of vaultRefs) {
+                let list = fileMap.get(ref.file);
+                if (!list) {
+                    list = [];
+                    fileMap.set(ref.file, list);
                 }
-            } catch (error) {
-                console.error(`Error reading file ${mdFile.path}:`, error);
+                list.push(ref);
+            }
+
+            // Read each referenced file once to get line content
+            for (const [refFile, locs] of fileMap.entries()) {
+                try {
+                    const content = await this.app.vault.read(refFile);
+                    const lines = content.split('\n');
+
+                    for (const loc of locs) {
+                        const lineContent = lines[loc.line] || "";
+                        references.push({
+                            notePath: refFile.path,
+                            lineNumber: loc.line + 1, // 1-indexed for UI
+                            lineContent: lineContent.trim()
+                        });
+                    }
+                } catch (error) {
+                    console.error(`Error reading file ${refFile.path}:`, error);
+                }
             }
         }
 
@@ -199,13 +163,6 @@ export class UnusedFileCleaner {
             isReferenced: references.length > 0,
             references
         };
-    }
-
-    /**
-     * 转义正则表达式特殊字符
-     */
-    private escapeRegex(str: string): string {
-        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     /**
@@ -251,7 +208,7 @@ export class UnusedFileCleaner {
      */
     private async moveToCustomTrash(file: TFile, customTrashPath: string): Promise<void> {
         const normalizedTrashPath = normalizePath(customTrashPath);
-        
+
         // 确保垃圾箱文件夹存在
         const trashFolder = this.app.vault.getAbstractFileByPath(normalizedTrashPath);
         if (!trashFolder) {
@@ -260,7 +217,7 @@ export class UnusedFileCleaner {
 
         // 生成目标路径
         const targetPath = normalizePath(`${normalizedTrashPath}/${file.name}`);
-        
+
         // 检查目标路径是否已存在文件
         let finalPath = targetPath;
         let counter = 1;

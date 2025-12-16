@@ -7,6 +7,7 @@ export interface ReferenceLocation {
     end: number;   // offset
     original: string; // The full original link text (e.g., "![[image.png]]")
     link: string;     // The link path inside (e.g. "image.png")
+    line: number;     // The line number (0-indexed)
 }
 
 export class VaultReferenceManager {
@@ -50,21 +51,38 @@ export class VaultReferenceManager {
 
         const locations: ReferenceLocation[] = [];
         const targetNormal = normalizePath(targetImagePath);
+        const isUrl = targetImagePath.startsWith('http://') || targetImagePath.startsWith('https://');
 
         // Helper to check if a link points to our target
         const checkLink = (link: LinkCache | EmbedCache) => {
             // Resolve the link relative to the source file to see if it matches target
             const linkpath = link.link.split('#')[0].split('|')[0];
-            const dest = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
 
-            if (dest && dest.path === targetNormal) {
-                locations.push({
-                    file: file,
-                    start: link.position.start.offset,
-                    end: link.position.end.offset,
-                    original: link.original,
-                    link: link.link
-                });
+            if (isUrl) {
+                // For URLs, exact string match
+                if (linkpath === targetImagePath) {
+                    locations.push({
+                        file: file,
+                        start: link.position.start.offset,
+                        end: link.position.end.offset,
+                        original: link.original,
+                        link: link.link,
+                        line: link.position.start.line
+                    });
+                }
+            } else {
+                // For internal files, resolve usage
+                const dest = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
+                if (dest && dest.path === targetNormal) {
+                    locations.push({
+                        file: file,
+                        start: link.position.start.offset,
+                        end: link.position.end.offset,
+                        original: link.original,
+                        link: link.link,
+                        line: link.position.start.line
+                    });
+                }
             }
         };
 
@@ -88,12 +106,39 @@ export class VaultReferenceManager {
      *                     but this manager primarily handles "Replace with Cloud Link" or "Rename".
      * @param replacementGenerator A function that takes the original link and returns the NEW full link string.
      */
+    /**
+     * Update references in the vault to a new value.
+     * @param imagePath The old image path (to find references)
+     * @param replacementGenerator A function that takes the original link and returns the NEW full link string.
+     */
     async updateReferences(
         imagePath: string,
         replacementGenerator: (location: ReferenceLocation) => string
     ): Promise<number> {
         const locations = await this.getFilesReferencingImage(imagePath);
+        return this.processUpdates(locations, replacementGenerator);
+    }
 
+    /**
+     * Update references only within a specific file.
+     * This avoids scanning the entire vault when we know the scope is limited.
+     */
+    async updateReferencesInFile(
+        file: TFile,
+        imagePath: string,
+        replacementGenerator: (location: ReferenceLocation) => string
+    ): Promise<number> {
+        const locations = this.getReferencesInFile(file, imagePath);
+        return this.processUpdates(locations, replacementGenerator);
+    }
+
+    /**
+     * Core logic to apply updates to a list of locations.
+     */
+    private async processUpdates(
+        locations: ReferenceLocation[],
+        replacementGenerator: (location: ReferenceLocation) => string
+    ): Promise<number> {
         // Group by file to minimize IO (read/write each file once)
         const filesMap = new Map<TFile, ReferenceLocation[]>();
         for (const loc of locations) {

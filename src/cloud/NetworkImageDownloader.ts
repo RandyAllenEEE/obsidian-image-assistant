@@ -44,9 +44,9 @@ export class NetworkImageDownloader {
 
         // 1. 提取所有图片链接
         const allImages = this.uploadHelper.getAllImageLinks();
-        
+
         // 2. 过滤网络图片
-        const networkImages = allImages.filter(img => 
+        const networkImages = allImages.filter(img =>
             img.path.startsWith('http://') || img.path.startsWith('https://')
         );
 
@@ -105,7 +105,7 @@ export class NetworkImageDownloader {
             "",
             activeFile.path
         );
-        
+
         // 确保文件夹存在
         await this.folderManager.ensureFolderExists(folderPath);
 
@@ -130,7 +130,7 @@ export class NetworkImageDownloader {
                         );
                         await this.replaceImageLinkInCurrentNote(
                             activeFile,
-                            task.originalSource,
+                            task.url,
                             relativePath
                         );
                         successCount++;
@@ -149,12 +149,12 @@ export class NetworkImageDownloader {
 
                     if (result.success && result.localPath) {
                         successCount++;
-                        
+
                         // 如果是"下载并替换"模式，替换链接
                         if (mode === "download-and-replace") {
                             await this.replaceImageLinkInCurrentNote(
                                 activeFile,
-                                task.originalSource,
+                                task.url,
                                 result.localPath
                             );
                         }
@@ -205,7 +205,7 @@ export class NetworkImageDownloader {
             // 尝试匹配不同扩展名
             const baseName = suggestedName.replace(/\.[^/.]+$/, "");
             const extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif'];
-            
+
             for (const ext of extensions) {
                 const testPath = normalizePath(join(folderPath, `${baseName}.${ext}`));
                 if (await this.app.vault.adapter.exists(testPath)) {
@@ -242,7 +242,7 @@ export class NetworkImageDownloader {
         try {
             // 1. 下载图片
             const response = await requestUrl({ url });
-            
+
             if (response.status !== 200) {
                 return {
                     success: false,
@@ -268,7 +268,7 @@ export class NetworkImageDownloader {
 
             // 4. 处理文件名冲突
             const conflictMode = this.plugin.settings.filenamePresets[0]?.conflictResolution || "increment";
-            
+
             const uniqueName = await this.folderManager.handleNameConflicts(
                 folderPath,
                 finalName,
@@ -306,21 +306,21 @@ export class NetworkImageDownloader {
         try {
             // 1. 移除查询参数和锚点
             const cleanUrl = url.split('?')[0].split('#')[0];
-            
+
             // 2. 提取路径最后一段
             const asset = cleanUrl.substring(1 + cleanUrl.lastIndexOf("/"));
-            
+
             // 3. 解码 URL 编码
             let fileName = decodeURIComponent(asset);
-            
+
             // 4. 移除路径分隔符和非法字符
             fileName = fileName.replace(/[\\/:*?"<>|]/g, "-");
-            
+
             // 5. 如果为空，使用默认名称
             if (!fileName || fileName === "-") {
                 fileName = "image-" + Date.now();
             }
-            
+
             return fileName;
         } catch (error) {
             console.error("[Download] Error extracting filename:", error);
@@ -331,42 +331,43 @@ export class NetworkImageDownloader {
     /**
      * 在当前笔记中替换图片链接
      */
+    /**
+     * 在当前笔记中替换图片链接
+     */
     private async replaceImageLinkInCurrentNote(
         file: TFile,
-        originalSource: string,
+        url: string,
         localPath: string
     ): Promise<void> {
         try {
-            let content = await this.app.vault.read(file);
-            
-            // 转义特殊字符用于正则匹配
-            const escapedSource = originalSource.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            
-            // 提取原始的 alt 文本和尺寸参数
-            let altText = "";
-            let sizeParams = "";
-            const markdownMatch = originalSource.match(/!\[([^\]]*)\]/);
-            if (markdownMatch) {
-                const fullAlt = markdownMatch[1];
-                // 检查是否包含尺寸参数 (格式: alt|widthxheight 或 alt|width)
-                const sizeMatch = fullAlt.match(/^(.*?)\|(\d+x\d*|\d*x\d+|\d+)$/);
-                if (sizeMatch) {
-                    altText = sizeMatch[1]; // 纯 alt 文本
-                    sizeParams = `|${sizeMatch[2]}`; // 尺寸参数
-                } else {
-                    altText = fullAlt; // 没有尺寸参数
-                }
-            }
+            const result = await this.plugin.vaultReferenceManager.updateReferencesInFile(
+                file,
+                url, // Find by URL
+                (location) => {
+                    // Extract original alt text and size params
+                    let altText = "";
+                    let sizeParams = "";
+                    const markdownMatch = location.original.match(/!\[([^\]]*)\]/);
+                    if (markdownMatch) {
+                        const fullAlt = markdownMatch[1];
+                        const sizeMatch = fullAlt.match(/^(.*?)\|(\d+x\d*|\d*x\d+|\d+)$/);
+                        if (sizeMatch) {
+                            altText = sizeMatch[1];
+                            sizeParams = `|${sizeMatch[2]}`;
+                        } else {
+                            altText = fullAlt;
+                        }
+                    }
 
-            // 生成新的链接（保留alt文本和尺寸参数）
-            const newLink = `![${altText}${sizeParams}](${encodeURI(localPath)})`;
-            
-            // 替换链接
-            const newContent = content.replace(new RegExp(escapedSource, 'g'), newLink);
-            
-            if (content !== newContent) {
-                await this.app.vault.modify(file, newContent);
-                console.log(`[Download] Replaced link in ${file.path}: ${originalSource} → ${newLink}`);
+                    // Generate new link
+                    return `![${altText}${sizeParams}](${encodeURI(localPath)})`;
+                }
+            );
+
+            if (result > 0) {
+                console.log(`[Download] Replaced ${result} links in ${file.path} for ${url}`);
+            } else {
+                console.warn(`[Download] No links found for ${url} in ${file.path} (Cache might be stale)`);
             }
         } catch (error) {
             console.error(`[Download] Failed to replace link in ${file.path}:`, error);
@@ -379,15 +380,15 @@ export class NetworkImageDownloader {
      */
     private getRelativePath(fromFolder: string, toPath: string): string {
         if (!fromFolder) return toPath;
-        
+
         // 处理根目录情况
         if (fromFolder === "/") {
             return toPath.startsWith('/') ? toPath.substring(1) : toPath;
         }
-        
+
         const fromParts = normalizePath(fromFolder).split('/').filter(Boolean);
         const toParts = normalizePath(toPath).split('/').filter(Boolean);
-        
+
         // 找到公共路径长度
         let commonLength = 0;
         while (
@@ -397,13 +398,13 @@ export class NetworkImageDownloader {
         ) {
             commonLength++;
         }
-        
+
         // 计算需要向上的层数
         const upLevels = fromParts.length - commonLength;
-        
+
         // 计算剩余路径
         const downPath = toParts.slice(commonLength);
-        
+
         // 组合相对路径
         if (upLevels === 0) {
             // 同级目录
@@ -422,17 +423,17 @@ export class NetworkImageDownloader {
         if (blackDomains.trim() === "") {
             return false;
         }
-        
+
         try {
             const blackDomainList = blackDomains
                 .split("\n")
                 .map(line => line.trim())
                 .filter(line => line.length > 0);
-                
+
             const urlObj = new URL(url);
             const domain = urlObj.hostname;
-            
-            return blackDomainList.some(blackDomain => 
+
+            return blackDomainList.some(blackDomain =>
                 domain.includes(blackDomain.trim())
             );
         } catch (error) {
