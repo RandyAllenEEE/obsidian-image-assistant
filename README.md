@@ -37,7 +37,7 @@
 
 ### 🖼️ 本地图片处理 (Local Image Processing)
 
-**支持格式**: WEBP, JPG, PNG, HEIC, TIF, AVIF
+**支持格式**: WEBP, JPG, PNG, HEIC, TIF, AVIF (AVIF需要系统安装FFmpeg)
 
 - **转换 (Convert)**: 自动转换图片为 WEBP、JPG 或 PNG 格式
 - **压缩 (Compress)**: 通过 Quality 值 (1-100) 减小文件大小
@@ -131,7 +131,7 @@
 ### 🌍 纯离线实现 (Offline Processing)
 
 - 本地图片处理完全使用纯 JavaScript 实现
-- 无需外部 API 或二进制依赖 (ImageMagick, FFmpeg 等)
+- 无需外部 API 或二进制依赖 (ImageMagick, FFmpeg 等，**AVIF除外**)
 - 轻量、便携、安全
 
 ---
@@ -358,7 +358,7 @@ LaTeX OCR 的替代方案。
 
 ## 🔧 技术栈 (Tech Stack)
 
-- **纯 JavaScript/TypeScript** - 无外部二进制依赖
+- **纯 JavaScript/TypeScript** - 无外部二进制依赖 (AVIF需FFmpeg)
 - **FabricJS** - 标注功能
 - **PicGo 协议** - 图床上传
 - **image-type** - 图片类型检测

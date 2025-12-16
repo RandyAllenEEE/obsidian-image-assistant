@@ -6,6 +6,7 @@ import {
     EnlargeReduce,
     ImageProcessor,
 } from './ImageProcessor';
+import { ConcurrentQueue } from '../utils/AsyncLock';
 import { FolderAndFilenameManagement } from "./FolderAndFilenameManagement";
 
 
@@ -16,7 +17,7 @@ export class BatchImageProcessor {
         private imageProcessor: ImageProcessor,
         private folderAndFilenameManagement: FolderAndFilenameManagement
     ) { }
-    
+
     async processImagesInNote(noteFile: TFile): Promise<void> {
 
         try {
@@ -114,8 +115,9 @@ export class BatchImageProcessor {
 
             const totalImages = filesToProcess.length;
 
-            for (const linkedFile of filesToProcess) {
-                imageCount++;
+            const queue = new ConcurrentQueue(5); // Process 5 images concurrently
+            const tasks = filesToProcess.map(linkedFile => async () => {
+                imageCount++; // Increment count when task starts or finishes (here effectively when task starts execution in our queue logic)
 
                 const imageData = await this.app.vault.readBinary(linkedFile);
                 const imageBlob = new Blob([imageData], { type: `image/${linkedFile.extension}` });
@@ -150,7 +152,7 @@ export class BatchImageProcessor {
 
                 if (!renamedFile) {
                     console.error('Failed to find renamed file:', newFilePath);
-                    continue; // Skip to the next file if the rename failed
+                    return; // Skip if the rename failed
                 }
 
                 // Modify the file content with processed image data
@@ -162,10 +164,13 @@ export class BatchImageProcessor {
                 }
 
                 const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
+                // Update status bar safely (though text update is synchronous)
                 statusBarItemEl.setText(
                     `Processing image ${imageCount} of ${totalImages}, elapsed time: ${elapsedTime} seconds`
                 );
-            }
+            });
+
+            await queue.run(tasks);
 
             const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
             statusBarItemEl.setText(`Finished processing ${imageCount} images, total time: ${totalTime} seconds`);
@@ -259,11 +264,12 @@ export class BatchImageProcessor {
             const startTime = Date.now();
             const totalImages = images.length;
 
-            for (const image of images) {
+            const queue = new ConcurrentQueue(5);
+            const tasks = images.map(image => async () => {
                 // Skip image if its format is in the skipFormats list
                 if (skipFormats.includes(image.extension.toLowerCase())) {
                     console.log(`Skipping image ${image.name} (format in skip list)`);
-                    continue; // Skip to the next image
+                    return;
                 }
 
                 imageCount++;
@@ -301,20 +307,19 @@ export class BatchImageProcessor {
 
                 if (!renamedFile) {
                     console.error('Failed to find renamed file:', newFilePath);
-                    continue; // Skip to the next file if the rename failed
+                    return;
                 }
 
                 // Modify the file content with processed image data
                 await this.app.vault.modifyBinary(renamedFile, processedImageData);
 
-                // No need to update links in notes when processing a whole folder, right?
-                // If you do, you would need to iterate over all notes and call updateLinksInNote()
-
                 const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
                 statusBarItemEl.setText(
                     `Processing image ${imageCount} of ${totalImages}, elapsed time: ${elapsedTime} seconds`
                 );
-            }
+            });
+
+            await queue.run(tasks);
 
             const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
             statusBarItemEl.setText(`Finished processing ${imageCount} images, total time: ${totalTime} seconds`);
@@ -433,7 +438,8 @@ export class BatchImageProcessor {
             const startTime = Date.now();
             const totalImages = filesToProcess.length;
 
-            for (const image of filesToProcess) {
+            const queue = new ConcurrentQueue(5);
+            const tasks = filesToProcess.map(image => async () => {
                 imageCount++;
 
                 const imageData = await this.app.vault.readBinary(image);
@@ -458,7 +464,9 @@ export class BatchImageProcessor {
                 const newFileName = `${image.basename}.${outputFormat.toLowerCase()}`;
                 let newFilePath = image.path.replace(image.name, newFileName);
 
-                // Check for conflicts and generate unique name if necessary using FolderAndFilenameManagement
+                // Check for conflicts and generate unique name if necessary
+                // NOTE: Potential race condition on conflicts if multiple images map to same target?
+                // Assuming one-to-one mapping mostly.
                 if (
                     image.path !== newFilePath &&
                     this.app.vault.getAbstractFileByPath(newFilePath)
@@ -482,7 +490,7 @@ export class BatchImageProcessor {
 
                 if (!renamedFile) {
                     console.error("Failed to find renamed file:", newFilePath);
-                    continue; // Skip to the next file if the rename failed
+                    return;
                 }
 
                 // Modify the file content with processed image data
@@ -497,7 +505,9 @@ export class BatchImageProcessor {
                 statusBarItemEl.setText(
                     `Processing image ${imageCount} of ${totalImages}, elapsed time: ${elapsedTime} seconds`
                 );
-            }
+            });
+
+            await queue.run(tasks);
 
             const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
             statusBarItemEl.setText(
@@ -603,8 +613,11 @@ export class BatchImageProcessor {
     ): Promise<void> {
         const oldLinkText = this.escapeRegexCharacters(oldPath);
         const content = await this.app.vault.read(noteFile);
-        // Use direct replacement string to avoid escaping characters in the new path
-        const newContent = content.replace(new RegExp(oldLinkText, "g"), newPath);
+
+        // Improve regex to avoid partial matches (e.g. matching "img.png" inside "img.png.bak")
+        // We ensure the match is not followed by a word character or a dot.
+        const regex = new RegExp(oldLinkText + '(?![\\w\\.])', 'g');
+        const newContent = content.replace(regex, newPath);
 
         if (content !== newContent) {
             await this.app.vault.modify(noteFile, newContent);
@@ -621,29 +634,29 @@ export class BatchImageProcessor {
         oldPath: string,
         newPath: string
     ) {
-            try {
-                const content = await this.app.vault.read(canvasFile);
-                const canvasData = JSON.parse(content);
-    
-                const updateNodePaths = (nodes: any[]) => {
-                    for (const node of nodes) {
-                        if (node.type === 'file' && node.file === oldPath) {
-                            node.file = newPath;
-                        }
-                        if (node.children && Array.isArray(node.children)) {
-                            updateNodePaths(node.children);
-                        }
+        try {
+            const content = await this.app.vault.read(canvasFile);
+            const canvasData = JSON.parse(content);
+
+            const updateNodePaths = (nodes: any[]) => {
+                for (const node of nodes) {
+                    if (node.type === 'file' && node.file === oldPath) {
+                        node.file = newPath;
                     }
-                };
-    
-                if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
-                    updateNodePaths(canvasData.nodes);
-                    await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
+                    if (node.children && Array.isArray(node.children)) {
+                        updateNodePaths(node.children);
+                    }
                 }
-            } catch (error) {
-                console.error('Error updating canvas file links:', error);
+            };
+
+            if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
+                updateNodePaths(canvasData.nodes);
+                await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
             }
+        } catch (error) {
+            console.error('Error updating canvas file links:', error);
         }
+    }
 
     // private async updateMarkdownLinks(noteFile: TFile, oldPath: string, newPath: string): Promise<void> {
     //     const oldLinkText = this.escapeRegexCharacters(oldPath);

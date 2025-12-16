@@ -41,4 +41,13 @@ export default class EditorInteract {
 	}
 
 
+	/**
+	 * 移除 loading text (用于发生错误时清理)
+	 */
+	removeLoadingText(): void {
+		this.editor.replaceRange("", this.cursor, {
+			line: this.cursor.line,
+			ch: this.cursor.ch + this.loadingTextLength,
+		});
+	}
 }

@@ -110,7 +110,7 @@ export default class ImageConverterPlugin extends Plugin {
     unusedFileCleaner: UnusedFileCleanerModal | null = null;
     // Concurrent queue for rate limiting
     private concurrentQueue: ConcurrentQueue = new ConcurrentQueue(3);
-    
+
     private processedImage: ArrayBuffer | null = null;
     private temporaryBuffers: (ArrayBuffer | Blob | null)[] = [];
     private tempFolderPath = ".obsidian/plugins/image-assistant/temp";
@@ -121,12 +121,12 @@ export default class ImageConverterPlugin extends Plugin {
         if (this.processedImage) {
             this.processedImage = null;
         }
-        
+
         // Clear temporary buffers
         if (this.temporaryBuffers.length > 0) {
             this.temporaryBuffers = [];
         }
-        
+
         // Force garbage collection hint
         if (typeof global !== 'undefined' && global.gc) {
             global.gc();
@@ -167,7 +167,7 @@ export default class ImageConverterPlugin extends Plugin {
             );
             // 同步等待初始化完成,确保缓存加载和事件注册完成
             await this.ImageAlignmentManager.initialize();
-            
+
             // ✅ 提前在 onload 中注册 file-open 事件
             // 参考 image-converter 的成功模式,确保事件优先级
             this.registerEvent(
@@ -231,11 +231,11 @@ export default class ImageConverterPlugin extends Plugin {
                         if (this.settings.enableImageCaptions) {
                             this.captionManager.refresh();
                         }
-                        
+
                     })
                 );
             }
-            
+
             // // Prevent link from showing up
             // const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
             // if (!activeView) return;
@@ -319,7 +319,7 @@ export default class ImageConverterPlugin extends Plugin {
                                 new ProcessSingleImageModal(this.app, this, file).open();
                             });
                     });
-                    
+
                     // Add "Upload to cloud" option for images in cloud mode
                     if (this.settings.pasteHandlingMode === 'cloud') {
                         menu.addItem((item) => {
@@ -359,10 +359,10 @@ export default class ImageConverterPlugin extends Plugin {
     registerAllCommands() {
         // 注：这些命令在 onload 时注册，但依赖的组件在 onLayoutReady 中初始化
         // 因此 callback 中需要检查组件是否已初始化
-        
+
         // 注意：所有命令名称统一使用 "Image Assistant:" 前缀（与 manifest.json 的 name 一致）
         // 这样 Obsidian 快捷键设置的搜索功能才能正确工作
-        
+
         this.addCommand({
             id: 'process-all-vault-images',
             name: 'Process all images in vault',
@@ -574,7 +574,7 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     // Frontmatter 模式控制相关方法
-    
+
     /**
      * 获取当前笔记的有效粘贴模式
      * 优先级: 笔记级别 Frontmatter > 全局设置
@@ -584,20 +584,20 @@ export default class ImageConverterPlugin extends Plugin {
         if (!activeFile) {
             return this.settings.pasteHandlingMode;
         }
-        
+
         const cache = this.app.metadataCache.getFileCache(activeFile);
         const frontmatter = cache?.frontmatter;
-        
+
         if (frontmatter && 'image_paste_mode' in frontmatter) {
             const override = frontmatter['image_paste_mode'];
             if (override === 'local' || override === 'cloud') {
                 return override;
             }
         }
-        
+
         return this.settings.pasteHandlingMode;
     }
-    
+
     /**
      * 显示粘贴模式配置模态框
      */
@@ -607,7 +607,7 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     // OCR 功能相关方法
-    
+
     /**
      * 获取剪贴板中的图片数据
      */
@@ -616,17 +616,17 @@ export default class ImageConverterPlugin extends Plugin {
             // 动态导入 electron,避免在非桌面端报错
             // @ts-ignore
             const { clipboard } = require('electron');
-            
+
             const availableFormats = clipboard.availableFormats();
-            const hasImage = availableFormats.some((format: string) => 
+            const hasImage = availableFormats.some((format: string) =>
                 format.includes('image/png') || format.includes('image/jpeg')
             );
-            
+
             if (!hasImage) {
                 new Notice('No image found in clipboard');
                 return null;
             }
-            
+
             const nativeImage = clipboard.readImage();
             return new Uint8Array(nativeImage.toPNG());
         } catch (error) {
@@ -635,11 +635,12 @@ export default class ImageConverterPlugin extends Plugin {
             return null;
         }
     }
-    
+
     /**
      * 处理 OCR 转 LaTeX
      */
     private async handleOCRLatex(isMultiline: boolean) {
+        let editorInteract: EditorInteract | null = null;
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
@@ -650,25 +651,28 @@ export default class ImageConverterPlugin extends Plugin {
             const image = this.getClipboardImage();
             if (!image) return;
 
-            const editorInteract = new EditorInteract(view);
+            editorInteract = new EditorInteract(view);
             editorInteract.insertLoadingText();
-            
+
             const provider = getLatexProvider(isMultiline, this.settings.ocrSettings);
             const parsedLatex = await provider.sendRequest(image);
             editorInteract.insertResponseToEditor(parsedLatex);
         } catch (error) {
             console.error('[OCR] LaTeX conversion error:', error);
             new Notice(`OCR 转换失败: ${error.message}`);
+            // Remove loading text on error
+            if (editorInteract) editorInteract.removeLoadingText();
         } finally {
             // Clear memory after OCR processing
             this.clearMemory();
         }
     }
-    
+
     /**
      * 处理 OCR 转 Markdown
      */
     private async handleOCRMarkdown() {
+        let editorInteract: EditorInteract | null = null;
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
@@ -679,15 +683,17 @@ export default class ImageConverterPlugin extends Plugin {
             const image = this.getClipboardImage();
             if (!image) return;
 
-            const editorInteract = new EditorInteract(view);
+            editorInteract = new EditorInteract(view);
             editorInteract.insertLoadingText();
-            
+
             const provider = getMarkdownProvider(this.settings.ocrSettings);
             const result = await provider.sendRequest(image);
             editorInteract.insertResponseToEditor(result);
         } catch (error) {
             console.error('[OCR] Markdown conversion error:', error);
             new Notice(`OCR 转换失败: ${error.message}`);
+            // Remove loading text on error
+            if (editorInteract) editorInteract.removeLoadingText();
         } finally {
             // Clear memory after OCR processing
             this.clearMemory();
@@ -728,7 +734,7 @@ export default class ImageConverterPlugin extends Plugin {
                 if (hasSupportedFiles) {
                     // Get effective paste mode (may be overridden by Frontmatter)
                     const effectiveMode = this.getEffectivePasteMode();
-                    
+
                     // Check paste handling mode
                     if (effectiveMode === 'disabled') {
                         // Disabled mode: do nothing, let Obsidian handle it
@@ -780,7 +786,7 @@ export default class ImageConverterPlugin extends Plugin {
                 if (hasSupportedItems) {
                     // Get effective paste mode (may be overridden by Frontmatter)
                     const effectiveMode = this.getEffectivePasteMode();
-                    
+
                     // Check paste handling mode
                     if (effectiveMode === 'disabled') {
                         // Disabled mode: do nothing, let Obsidian handle it
@@ -1113,7 +1119,7 @@ export default class ImageConverterPlugin extends Plugin {
         // Step 4: Wait for All Promises to Complete
         // - Use `Promise.all` to wait for all the file processing promises to settle (either fulfilled or rejected).
         await Promise.all(filePromises);
-        
+
         if (this.settings.enableImageCaptions) {
             this.captionManager.refresh();
         }
@@ -1476,7 +1482,7 @@ export default class ImageConverterPlugin extends Plugin {
                 ch: cursor.ch + formattedLink.length,
             });
         }
-        
+
     }
 
     private formatFileSize(bytes: number): string {
@@ -1523,7 +1529,7 @@ export default class ImageConverterPlugin extends Plugin {
             console.log('[Cloud Upload] Checking temp folder:', this.tempFolderPath);
             const exists = await this.app.vault.adapter.exists(this.tempFolderPath);
             console.log('[Cloud Upload] Temp folder exists:', exists);
-            
+
             if (!exists) {
                 console.log('[Cloud Upload] Creating temp folder:', this.tempFolderPath);
                 await this.app.vault.createFolder(this.tempFolderPath);
@@ -1574,7 +1580,7 @@ export default class ImageConverterPlugin extends Plugin {
         cursor: EditorPosition
     ) {
         console.log('[Cloud Upload] handleDropCloud called with', fileData.length, 'files');
-        
+
         // Filter supported files
         const supportedFiles = fileData
             .filter(data => this.supportedImageFormats.isSupported(data.type, data.name))
@@ -1621,10 +1627,11 @@ export default class ImageConverterPlugin extends Plugin {
                 // Generate cloud link with size parameters
                 const cloudUrl = uploadResult.result[0];
                 console.log('[Cloud Upload] Cloud URL:', cloudUrl);
-                
+
                 const cloudLink = CloudLinkFormatter.formatCloudLink(
                     cloudUrl,
                     this.settings.cloudUploadSettings
+                    // Clipboard upload - no original link to preserve
                 );
                 console.log('[Cloud Upload] Formatted cloud link:', cloudLink);
 
@@ -1677,7 +1684,7 @@ export default class ImageConverterPlugin extends Plugin {
         // 过滤图片链接（本地图片 + 符合条件的网络图片）
         const filteredImageLinks = allImageLinks.filter(img => {
             const isNetworkImage = img.path.startsWith('http://') || img.path.startsWith('https://');
-            
+
             // 🔴 跳过已上传图片
             if (this.settings.cloudUploadSettings.uploadedImages && this.settings.cloudUploadSettings.uploadedImages.length > 0) {
                 const uploadedUrls = new Set(
@@ -1688,7 +1695,7 @@ export default class ImageConverterPlugin extends Plugin {
                     return false;
                 }
             }
-            
+
             if (isNetworkImage) {
                 // 检查是否启用网络图片上传
                 if (!this.settings.cloudUploadSettings.workOnNetWork) {
@@ -1702,10 +1709,10 @@ export default class ImageConverterPlugin extends Plugin {
                 }
                 return true; // 允许上传网络图片
             }
-            
+
             return true; // 本地图片总是包含
         });
-        
+
         if (filteredImageLinks.length === 0) {
             new Notice('No images to upload. All images are filtered or already uploaded.');
             return;
@@ -1717,7 +1724,7 @@ export default class ImageConverterPlugin extends Plugin {
         // 构建文件路径映射（用于快速查找本地文件）
         const filePathMap: Record<string, TFile> = {};
         const fileNameMap: Record<string, TFile> = {};
-        
+
         this.app.vault.getFiles().forEach(file => {
             filePathMap[file.path] = file;
             fileNameMap[file.name] = file;
@@ -1736,10 +1743,10 @@ export default class ImageConverterPlugin extends Plugin {
         for (const imageLink of filteredImageLinks) {
             const uri = decodeURI(imageLink.path);
             const isNetworkImage = uri.startsWith('http://') || uri.startsWith('https://');
-            
+
             let uniquePath: string;
             let file: TFile | null = null;
-            
+
             if (isNetworkImage) {
                 // 网络图片使用 URL 作为唯一标识
                 uniquePath = uri;
@@ -1769,10 +1776,10 @@ export default class ImageConverterPlugin extends Plugin {
                     console.warn('[Batch Upload] Could not find file for image:', imageLink.path);
                     continue;
                 }
-                
+
                 uniquePath = normalizePath(file.path);
             }
-            
+
             // 按路径去重：相同路径的图片链接添加到同一个任务
             if (pathToTaskMap.has(uniquePath)) {
                 pathToTaskMap.get(uniquePath)!.imageLinks.push(imageLink);
@@ -1787,7 +1794,7 @@ export default class ImageConverterPlugin extends Plugin {
         }
 
         const uploadTasks = Array.from(pathToTaskMap.values());
-        
+
         if (uploadTasks.length === 0) {
             new Notice('No valid images found to upload.');
             return;
@@ -1807,12 +1814,12 @@ export default class ImageConverterPlugin extends Plugin {
                 }
             }
         }
-        
+
         if (validationErrors.length > 0) {
             new Notice(`⚠️ 发现 ${validationErrors.length} 个文件不存在，已跳过: ${validationErrors.join(', ')}`);
             console.warn('[Batch Upload] Files not found:', validationErrors);
             // 过滤掉不存在的文件
-            const filteredTasks = uploadTasks.filter(task => 
+            const filteredTasks = uploadTasks.filter(task =>
                 task.isNetworkImage || !validationErrors.includes(task.file!.name)
             );
             if (filteredTasks.length === 0) {
@@ -1854,7 +1861,7 @@ export default class ImageConverterPlugin extends Plugin {
                     return result.result[0];
                 })
             );
-            
+
             const uploadedUrls = uploadResult;
             console.log('[Batch Upload] Upload result:', uploadedUrls);
 
@@ -1868,7 +1875,7 @@ export default class ImageConverterPlugin extends Plugin {
             // Stage 2: 多引用验证
             // ====================
             new Notice('正在扫描引用...');
-            
+
             // 为每个本地图片检查 Vault 级别的引用
             const multiReferenceImages: BatchUploadTaskInfo[] = [];
             const taskWithVaultMatches: Array<{
@@ -1934,19 +1941,20 @@ export default class ImageConverterPlugin extends Plugin {
             if (userChoice === 'replace-current') {
                 // 仅替换当前笔记
                 let content = helper.getValue();
-                
+
                 for (let i = 0; i < Math.min(uploadTasks.length, uploadedUrls.length); i++) {
                     const task = uploadTasks[i];
                     const cloudUrl = uploadedUrls[i];
 
-                    // 生成云图链接
-                    const cloudLink = CloudLinkFormatter.formatCloudLink(
-                        cloudUrl,
-                        this.settings.cloudUploadSettings
-                    );
-
                     // 替换该路径对应的所有图片链接
                     for (const imageLink of task.imageLinks) {
+                        // 生成云图链接 (传入原始链接以保留题注和尺寸)
+                        const cloudLink = CloudLinkFormatter.formatCloudLink(
+                            cloudUrl,
+                            this.settings.cloudUploadSettings,
+                            imageLink.source
+                        );
+
                         content = content.replaceAll(imageLink.source, cloudLink);
                         replacedLinkCount++;
                         console.log('[Batch Upload] Replaced in current note:', imageLink.source, '->', cloudLink);
@@ -1964,22 +1972,24 @@ export default class ImageConverterPlugin extends Plugin {
                     const cloudUrl = uploadedUrls[i];
 
                     // 生成云图链接
-                    const cloudLink = CloudLinkFormatter.formatCloudLink(
-                        cloudUrl,
-                        this.settings.cloudUploadSettings
-                    );
-
                     // 检查是否有 Vault 匹配信息
                     const matchInfo = taskWithVaultMatches.find(m => m.task === task);
                     if (matchInfo) {
                         // 本地图片:替换所有 Vault 引用
-                        await this.replaceAllReferences(matchInfo.vaultMatches, cloudLink);
-                        replacedLinkCount += matchInfo.vaultMatches.totalCount;
-                        console.log('[Batch Upload] Replaced all vault references for:', task.path);
+                        // 注意: replaceAllReferences 内部会处理具体的每个引用，这里不需要在这里生成单一的 cloudLink
+                        // 我们需要修改 replaceAllReferences 来支持保留每个引用的原始信息
+                        await this.replaceAllReferences(matchInfo.vaultMatches, cloudUrl); // Passing raw URL now
                     } else {
                         // 网络图片:仅替换当前笔记
                         let content = helper.getValue();
                         for (const imageLink of task.imageLinks) {
+                            // 生成云图链接 (传入原始链接以保留题注和尺寸)
+                            const cloudLink = CloudLinkFormatter.formatCloudLink(
+                                cloudUrl,
+                                this.settings.cloudUploadSettings,
+                                imageLink.source
+                            );
+
                             content = content.replaceAll(imageLink.source, cloudLink);
                             replacedLinkCount++;
                             console.log('[Batch Upload] Replaced network image in current note:', imageLink.source, '->', cloudLink);
@@ -2087,16 +2097,16 @@ export default class ImageConverterPlugin extends Plugin {
         clipboardText?: string
     ) {
         console.log('[Cloud Upload] handlePasteCloud called with', itemData.length, 'items');
-        
+
         // Check applyImage setting: if clipboard has both text and image
         const hasText = clipboardText && clipboardText.trim().length > 0;
         const hasImageFile = itemData.some(data => data.kind === "file" && data.file);
-        
+
         if (hasText && hasImageFile && !this.settings.cloudUploadSettings.applyImage) {
             console.log('[Cloud Upload] Skipping upload: clipboard has both text and image, but applyImage is disabled');
             return; // Don't upload, let Obsidian handle the paste
         }
-        
+
         // Filter supported files
         const supportedFiles = itemData
             .filter(data => data.kind === "file" && data.file &&
@@ -2145,10 +2155,11 @@ export default class ImageConverterPlugin extends Plugin {
                 // Generate cloud link with size parameters
                 const cloudUrl = uploadResult.result[0];
                 console.log('[Cloud Upload] Cloud URL:', cloudUrl);
-                
+
                 const cloudLink = CloudLinkFormatter.formatCloudLink(
                     cloudUrl,
                     this.settings.cloudUploadSettings
+                    // Clipboard upload - no original link
                 );
                 console.log('[Cloud Upload] Formatted cloud link:', cloudLink);
 
@@ -2248,7 +2259,8 @@ export default class ImageConverterPlugin extends Plugin {
                     // Generate cloud link with size parameters
                     const cloudLink = CloudLinkFormatter.formatCloudLink(
                         cloudUrl,
-                        this.settings.cloudUploadSettings
+                        this.settings.cloudUploadSettings,
+                        originalLink // Determine from match original
                     );
 
                     // Replace the original link with the new cloud link
@@ -2331,7 +2343,7 @@ export default class ImageConverterPlugin extends Plugin {
                 console.log('[Upload] Remote mode - using vault path:', file.path);
                 return file.path;
             }
-            
+
             // 本地模式使用绝对路径
             const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
             const fullPath = normalizePath(join(basePath, file.path));
@@ -2694,7 +2706,8 @@ export default class ImageConverterPlugin extends Plugin {
             for (const match of fileMatch.matches) {
                 const cloudLink = CloudLinkFormatter.formatCloudLink(
                     cloudUrl,
-                    this.settings.cloudUploadSettings
+                    this.settings.cloudUploadSettings,
+                    match.original // Pass original link for preservation
                 );
                 content = content.replace(match.original, cloudLink);
                 replacedCount++;
