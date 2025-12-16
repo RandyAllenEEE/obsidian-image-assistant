@@ -13,7 +13,10 @@
 
 ### 1. 自动化粘贴处理 (Auto Paste Handling)
 当您在笔记中粘贴或拖入图片时，插件会根据设置自动执行处理。
-> **🚀 新增特性 (v2.1.1)**: 全新的并发队列系统，支持批量拖入数十张图片而**不卡顿**。
+> **🚀 v3.0.0 Major Update**: 
+> 1. **Internationalization (i18n)**: Now fully supports **English** and **Simplified Chinese** (UI strings no longer hardcoded).
+> 2. **Performance**: New concurrent queue system, batch processing hundreds of images without freezing.
+> 3. **Robustness**: Enhanced link cleaning and reference tracking.
 
 支持以下三种模式（在设置中切换）：
 

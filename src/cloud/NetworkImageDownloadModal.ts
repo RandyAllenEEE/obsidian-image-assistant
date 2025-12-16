@@ -1,4 +1,5 @@
 import { App, Modal, Setting, Notice } from "obsidian";
+import { t } from "../lang/helpers";
 
 export type DownloadMode = "download-only" | "download-and-replace" | "replace-only";
 
@@ -38,26 +39,26 @@ export class NetworkImageDownloadModal extends Modal {
         contentEl.addClass("network-image-download-modal");
 
         // 标题
-        contentEl.createEl("h2", { text: "📥 下载网络图片" });
+        contentEl.createEl("h2", { text: t("NET_DL_MODAL_TITLE") });
 
         // 统计信息
         const statsDiv = contentEl.createDiv("download-stats");
-        statsDiv.createEl("p", { 
-            text: `发现 ${this.tasks.length} 张网络图片`,
+        statsDiv.createEl("p", {
+            text: t("NET_DL_STATS").replace("{0}", this.tasks.length.toString()),
             cls: "download-stats-text"
         });
 
         // 模式选择
         const modeSection = contentEl.createDiv("download-mode-section");
-        modeSection.createEl("h3", { text: "选择模式" });
+        modeSection.createEl("h3", { text: t("NET_DL_MODE_TITLE") });
 
         new Setting(modeSection)
-            .setName("下载模式")
-            .setDesc("选择如何处理网络图片")
+            .setName(t("NET_DL_SETTING_MODE"))
+            .setDesc(t("NET_DL_SETTING_MODE_DESC"))
             .addDropdown(dropdown => dropdown
-                .addOption("download-and-replace", "⬇️ 下载并替换 - 下载图片并替换链接")
-                .addOption("download-only", "📥 仅下载 - 只下载不替换链接")
-                .addOption("replace-only", "🔄 仅替换 - 假设已下载，只替换链接")
+                .addOption("download-and-replace", t("NET_DL_OPTION_DL_REPLACE"))
+                .addOption("download-only", t("NET_DL_OPTION_DL_ONLY"))
+                .addOption("replace-only", t("NET_DL_OPTION_REPLACE_ONLY"))
                 .setValue(this.selectedMode)
                 .onChange((value: DownloadMode) => {
                     this.selectedMode = value;
@@ -72,7 +73,7 @@ export class NetworkImageDownloadModal extends Modal {
 
         // 图片列表
         const listSection = contentEl.createDiv("download-list-section");
-        listSection.createEl("h3", { text: "图片列表" });
+        listSection.createEl("h3", { text: t("NET_DL_LIST_TITLE") });
 
         // 全选/取消全选
         const selectAllDiv = listSection.createDiv("download-select-all");
@@ -85,7 +86,7 @@ export class NetworkImageDownloadModal extends Modal {
             this.tasks.forEach(task => task.selected = isChecked);
             this.updateTaskCheckboxes();
         });
-        selectAllDiv.createEl("label", { text: " 全选/取消全选" });
+        selectAllDiv.createEl("label", { text: t("NET_DL_SELECT_ALL") });
 
         // 任务列表
         const taskList = listSection.createDiv("download-task-list");
@@ -95,14 +96,14 @@ export class NetworkImageDownloadModal extends Modal {
         const buttonGroup = contentEl.createDiv("download-button-group");
 
         // 取消按钮
-        const cancelBtn = buttonGroup.createEl("button", { text: "取消" });
+        const cancelBtn = buttonGroup.createEl("button", { text: t("NET_DL_BTN_CANCEL") });
         cancelBtn.addClass("mod-cancel");
         cancelBtn.addEventListener("click", () => {
             this.close();
         });
 
         // 确认按钮
-        const confirmBtn = buttonGroup.createEl("button", { text: "开始" });
+        const confirmBtn = buttonGroup.createEl("button", { text: t("NET_DL_BTN_START") });
         confirmBtn.addClass("mod-cta");
         confirmBtn.addEventListener("click", () => {
             this.handleSubmit();
@@ -121,7 +122,7 @@ export class NetworkImageDownloadModal extends Modal {
             // 复选框
             const checkbox = taskItem.createEl("input", {
                 type: "checkbox",
-                attr: { 
+                attr: {
                     checked: task.selected,
                     "data-index": index.toString()
                 }
@@ -134,16 +135,16 @@ export class NetworkImageDownloadModal extends Modal {
 
             // 任务信息
             const taskInfo = taskItem.createDiv("task-info");
-            
+
             // 文件名
             const fileName = taskInfo.createDiv("task-filename");
-            fileName.createEl("span", { 
+            fileName.createEl("span", {
                 text: task.suggestedName,
                 cls: "task-name"
             });
 
             // URL（截断显示）
-            const url = task.url.length > 60 
+            const url = task.url.length > 60
                 ? task.url.substring(0, 57) + "..."
                 : task.url;
             const urlDiv = taskInfo.createDiv("task-url");
@@ -153,13 +154,13 @@ export class NetworkImageDownloadModal extends Modal {
             if (this.selectedMode === "replace-only" && task.localFileExists !== undefined) {
                 const statusDiv = taskItem.createDiv("task-status");
                 if (task.localFileExists) {
-                    statusDiv.createEl("span", { 
-                        text: "✅ 已存在",
+                    statusDiv.createEl("span", {
+                        text: t("NET_DL_STATUS_EXISTS"),
                         cls: "task-status-exists"
                     });
                 } else {
-                    statusDiv.createEl("span", { 
-                        text: "❌ 不存在",
+                    statusDiv.createEl("span", {
+                        text: t("NET_DL_STATUS_MISSING"),
                         cls: "task-status-missing"
                     });
                 }
@@ -176,10 +177,10 @@ export class NetworkImageDownloadModal extends Modal {
 
     private updateSelectAllCheckbox() {
         if (!this.selectAllCheckbox) return;
-        
+
         const allSelected = this.tasks.every(task => task.selected);
         const noneSelected = this.tasks.every(task => !task.selected);
-        
+
         this.selectAllCheckbox.checked = allSelected;
         this.selectAllCheckbox.indeterminate = !allSelected && !noneSelected;
     }
@@ -198,26 +199,26 @@ export class NetworkImageDownloadModal extends Modal {
         switch (this.selectedMode) {
             case "download-and-replace":
                 icon = "⬇️";
-                title = "下载并替换";
-                description = "下载所有选中的网络图片到本地，并自动将笔记中的链接替换为本地路径。这是推荐的默认模式。";
+                title = t("NET_DL_DESC_DL_REPLACE_TITLE");
+                description = t("NET_DL_DESC_DL_REPLACE_TEXT");
                 break;
             case "download-only":
                 icon = "📥";
-                title = "仅下载";
-                description = "只下载图片到本地附件文件夹，但不修改笔记中的链接。适合想先下载图片，稍后手动处理链接的场景。";
+                title = t("NET_DL_DESC_DL_ONLY_TITLE");
+                description = t("NET_DL_DESC_DL_ONLY_TEXT");
                 break;
             case "replace-only":
                 icon = "🔄";
-                title = "仅替换";
-                description = "假设图片已经存在于本地，直接将网络链接替换为本地路径。如果本地找不到对应文件，将跳过该图片。";
+                title = t("NET_DL_DESC_REPLACE_ONLY_TITLE");
+                description = t("NET_DL_DESC_REPLACE_ONLY_TEXT");
                 break;
         }
 
-        modeDesc.createEl("div", { 
+        modeDesc.createEl("div", {
             text: `${icon} ${title}`,
             cls: "mode-desc-title"
         });
-        modeDesc.createEl("p", { 
+        modeDesc.createEl("p", {
             text: description,
             cls: "mode-desc-text"
         });
@@ -227,7 +228,7 @@ export class NetworkImageDownloadModal extends Modal {
         const selectedTasks = this.tasks.filter(task => task.selected);
 
         if (selectedTasks.length === 0) {
-            new Notice("⚠️ 请至少选择一张图片");
+            new Notice(t("NET_DL_MSG_SELECT_ONE"));
             return;
         }
 

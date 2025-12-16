@@ -1,5 +1,6 @@
 import { App, Modal, Notice } from "obsidian";
 import type ImageAssistantPlugin from "../../main";
+import { t } from "../../lang/helpers";
 
 export class PasteModeConfigModal extends Modal {
     plugin: ImageAssistantPlugin;
@@ -11,13 +12,13 @@ export class PasteModeConfigModal extends Modal {
 
     onOpen() {
         const { contentEl } = this;
-        
+
         contentEl.empty();
         contentEl.addClass("image-assistant-paste-mode-modal");
-        
-        contentEl.createEl("h2", { text: "Configure Paste Mode" });
-        contentEl.createEl("p", { 
-            text: "Set image paste mode for current note (overrides global settings)",
+
+        contentEl.createEl("h2", { text: t("MODAL_PASTE_MODE_TITLE") });
+        contentEl.createEl("p", {
+            text: t("MODAL_PASTE_MODE_DESC"),
             cls: "setting-item-description"
         });
 
@@ -28,21 +29,21 @@ export class PasteModeConfigModal extends Modal {
 
         // 选项1：本地模式
         const localBtn = buttonContainer.createEl("button", {
-            text: "📁 Set to Local Mode",
+            text: t("MODAL_PASTE_MODE_LOCAL"),
             cls: "mod-cta"
         });
         localBtn.onclick = () => this.setPasteMode("local");
 
         // 选项2：图床模式
         const cloudBtn = buttonContainer.createEl("button", {
-            text: "☁️ Set to Cloud Mode",
+            text: t("MODAL_PASTE_MODE_CLOUD"),
             cls: "mod-cta"
         });
         cloudBtn.onclick = () => this.setPasteMode("cloud");
 
         // 选项3：恢复全局设置
         const resetBtn = buttonContainer.createEl("button", {
-            text: "🔄 Use Global Settings"
+            text: t("MODAL_PASTE_MODE_GLOBAL")
         });
         resetBtn.onclick = () => this.removePasteMode();
     }
@@ -50,31 +51,31 @@ export class PasteModeConfigModal extends Modal {
     async setPasteMode(mode: "local" | "cloud") {
         const file = this.app.workspace.getActiveFile();
         if (!file) {
-            new Notice("No active file");
+            new Notice(t("NOTICE_NO_ACTIVE_FILE"));
             return;
         }
-        
+
         await this.app.fileManager.processFrontMatter(file, (fm) => {
             fm["image_paste_mode"] = mode;
         });
-        
+
         const modeText = mode === "local" ? "Local" : "Cloud";
-        new Notice(`Paste mode set to ${modeText} for current note`);
+        new Notice(t("NOTICE_PASTE_MODE_SET").replace("{0}", modeText));
         this.close();
     }
 
     async removePasteMode() {
         const file = this.app.workspace.getActiveFile();
         if (!file) {
-            new Notice("No active file");
+            new Notice(t("NOTICE_NO_ACTIVE_FILE"));
             return;
         }
-        
+
         await this.app.fileManager.processFrontMatter(file, (fm) => {
             delete fm["image_paste_mode"];
         });
-        
-        new Notice("Using global paste mode settings");
+
+        new Notice(t("NOTICE_PASTE_MODE_GLOBAL"));
         this.close();
     }
 

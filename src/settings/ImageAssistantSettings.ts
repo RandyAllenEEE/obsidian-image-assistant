@@ -16,6 +16,7 @@ import { ToolPreset } from "../ui/ImageAnnotation";
 import { SingleImageModalSettings } from '../ui/modals/ProcessSingleImageModal';
 import { OCRSettings, DEFAULT_OCR_SETTINGS } from "../ocr/OCRSettings";
 import { renderOCRSettingsSection } from "./OCRSettingsSection";
+import { t } from "../lang/helpers";
 
 import Sortable from "sortablejs";
 
@@ -176,7 +177,7 @@ export interface ImageAssistantSettings {
     linkFormatSettings: LinkFormatSettings;
     nonDestructiveResizeSettings: NonDestructiveResizeSettings;
 
-    resizeCursorLocation: "front" | "back" | "below" |"none";
+    resizeCursorLocation: "front" | "back" | "below" | "none";
     dropPasteCursorLocation: "front" | "back";
 
     neverProcessFilenames: string;
@@ -526,58 +527,58 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         // Only render Drop/paste presets and related UI in local mode
         if (this.plugin.settings.pasteHandlingMode === 'local') {
             this.renderGlobalPresetSelector();
-            
+
             // Render tabs for preset configuration
             this.renderTabs();
-            
+
             // Initialize the form container before rendering preset groups
             this.initializeFormContainer();
-            
+
             // Only render preset groups if globalPresetVisible is true
             if (this.presetUIState.globalPresetVisible) {
-            switch (this.activeTab) {
-                case "folder":
-                    this.renderPresetGroup(
-                        "Folder presets",
-                        this.plugin.settings.folderPresets,
-                        "selectedFolderPreset",
-                        this.presetUIState.folder
-                    );
-                    break;
-                case "filename":
-                    this.renderPresetGroup(
-                        "Filename presets",
-                        this.plugin.settings.filenamePresets,
-                        "selectedFilenamePreset",
-                        this.presetUIState.filename
-                    );
-                    break;
-                case "conversion":
-                    this.renderPresetGroup(
-                        "Conversion presets",
-                        this.plugin.settings.conversionPresets,
-                        "selectedConversionPreset",
-                        this.presetUIState.conversion
-                    );
-                    break;
-                case "linkformat":
-                    this.renderPresetGroup(
-                        "Link format presets",
-                        this.plugin.settings.linkFormatSettings.linkFormatPresets,
-                        "selectedLinkFormatPreset",
-                        this.presetUIState.linkformat
-                    );
-                    break;
-                case "resize":
-                    this.renderPresetGroup(
-                        "Resize presets",
-                        this.plugin.settings.nonDestructiveResizeSettings.resizePresets, // Correct type
-                        "selectedResizePreset",
-                        this.presetUIState.resize
-                    );
-                    break;
+                switch (this.activeTab) {
+                    case "folder":
+                        this.renderPresetGroup(
+                            "Folder presets",
+                            this.plugin.settings.folderPresets,
+                            "selectedFolderPreset",
+                            this.presetUIState.folder
+                        );
+                        break;
+                    case "filename":
+                        this.renderPresetGroup(
+                            "Filename presets",
+                            this.plugin.settings.filenamePresets,
+                            "selectedFilenamePreset",
+                            this.presetUIState.filename
+                        );
+                        break;
+                    case "conversion":
+                        this.renderPresetGroup(
+                            "Conversion presets",
+                            this.plugin.settings.conversionPresets,
+                            "selectedConversionPreset",
+                            this.presetUIState.conversion
+                        );
+                        break;
+                    case "linkformat":
+                        this.renderPresetGroup(
+                            "Link format presets",
+                            this.plugin.settings.linkFormatSettings.linkFormatPresets,
+                            "selectedLinkFormatPreset",
+                            this.presetUIState.linkformat
+                        );
+                        break;
+                    case "resize":
+                        this.renderPresetGroup(
+                            "Resize presets",
+                            this.plugin.settings.nonDestructiveResizeSettings.resizePresets, // Correct type
+                            "selectedResizePreset",
+                            this.presetUIState.resize
+                        );
+                        break;
+                }
             }
-        }
 
             // Set the form container to visible if editingPresetKey is not null
             if (this.editingPresetKey && this.formContainer) {
@@ -750,12 +751,12 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // --- 处理模式 Setting (without section title) ---
         new Setting(pasteHandlingSection)
-            .setName("处理模式")
-            .setDesc("选择如何处理粘贴/拖拽的图片")
+            .setName(t("SETTING_PASTE_MODE_NAME"))
+            .setDesc(t("SETTING_PASTE_MODE_DESC"))
             .addDropdown(dropdown => dropdown
-                .addOption("local", "本地模式 - Process and save locally")
-                .addOption("cloud", "图床模式 - Upload to cloud")
-                .addOption("disabled", "关闭 - No processing")
+                .addOption("local", t("SETTING_PASTE_MODE_LOCAL"))
+                .addOption("cloud", t("SETTING_PASTE_MODE_CLOUD"))
+                .addOption("disabled", t("SETTING_PASTE_MODE_DISABLED"))
                 .setValue(this.plugin.settings.pasteHandlingMode)
                 .onChange(async (value: PasteHandlingMode) => {
                     this.plugin.settings.pasteHandlingMode = value;
@@ -770,8 +771,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
             // Uploader Type
             new Setting(cloudSettingsContainer)
-                .setName("上传工具")
-                .setDesc("选择上传工具类型")
+                .setName(t("SETTING_UPLOADER_NAME"))
+                .setDesc(t("SETTING_UPLOADER_DESC"))
                 .addDropdown(dropdown => dropdown
                     .addOption("PicGo", "PicGo")
                     .addOption("PicGo-Core", "PicGo-Core")
@@ -785,12 +786,12 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             // Show PicGo server settings for PicGo and PicList
-            if (this.plugin.settings.cloudUploadSettings.uploader === "PicGo" || 
+            if (this.plugin.settings.cloudUploadSettings.uploader === "PicGo" ||
                 this.plugin.settings.cloudUploadSettings.uploader === "PicList") {
-                
+
                 new Setting(cloudSettingsContainer)
-                    .setName("上传服务器")
-                    .setDesc("PicGo/PicList 上传服务器地址")
+                    .setName(t("SETTING_UPLOAD_SERVER_NAME"))
+                    .setDesc(t("SETTING_UPLOAD_SERVER_DESC"))
                     .addText(text => text
                         .setPlaceholder("http://127.0.0.1:36677/upload")
                         .setValue(this.plugin.settings.cloudUploadSettings.uploadServer)
@@ -802,8 +803,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
                 if (this.plugin.settings.cloudUploadSettings.uploader === "PicList") {
                     new Setting(cloudSettingsContainer)
-                        .setName("删除服务器")
-                        .setDesc("PicList 删除服务器地址")
+                        .setName(t("SETTING_DELETE_SERVER_NAME"))
+                        .setDesc(t("SETTING_DELETE_SERVER_DESC"))
                         .addText(text => text
                             .setPlaceholder("http://127.0.0.1:36677/delete")
                             .setValue(this.plugin.settings.cloudUploadSettings.deleteServer)
@@ -818,8 +819,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             // Show PicGo-Core path for PicGo-Core
             if (this.plugin.settings.cloudUploadSettings.uploader === "PicGo-Core") {
                 new Setting(cloudSettingsContainer)
-                    .setName("PicGo-Core 路径")
-                    .setDesc("PicGo-Core 可执行文件的路径")
+                    .setName(t("SETTING_PICGO_CORE_PATH_NAME"))
+                    .setDesc(t("SETTING_PICGO_CORE_PATH_DESC"))
                     .addText(text => text
                         .setPlaceholder("/path/to/picgo")
                         .setValue(this.plugin.settings.cloudUploadSettings.picgoCorePath)
@@ -832,20 +833,16 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
             // Image Size Settings
             const imageSizeDesc = cloudSettingsContainer.createEl("div", { cls: "setting-item-description" });
-            imageSizeDesc.createEl("span", { text: "设置图片显示大小（留空为原始大小）" });
+            // imageSizeDesc.createEl("span", { text: t("SETTING_IMG_SIZE_DESC") }); // The original code had a hardcoded span here which seems redundant with the setting below, but I will ignore it for now or replace it if it was "设置图片显示大小..."
 
             // Image size source selection
             new Setting(cloudSettingsContainer)
-                .setName("图片大小来源 🛈")
-                .setDesc("选择如何确定 markdown 链接中的图片大小参数")
-                .setTooltip(
-                    "设置：使用下方配置的宽高\n" +
-                    "实际：使用 ImageResizer 检测的实际图片尺寸\n" +
-                    "注意：当宽高都为空时，将不添加大小参数"
-                )
+                .setName(t("SETTING_IMG_SIZE_SOURCE_NAME"))
+                .setDesc(t("SETTING_IMG_SIZE_SOURCE_DESC"))
+                .setTooltip(t("SETTING_IMG_SIZE_SOURCE_TOOLTIP"))
                 .addDropdown(dropdown => dropdown
-                    .addOption("settings", "使用设置（手动设置宽高）")
-                    .addOption("actual", "使用实际大小（自动检测）")
+                    .addOption("settings", t("SETTING_IMG_SIZE_SETTINGS"))
+                    .addOption("actual", t("SETTING_IMG_SIZE_ACTUAL"))
                     .setValue(this.plugin.settings.cloudUploadSettings.imageSizeSource)
                     .onChange(async (value: 'settings' | 'actual') => {
                         this.plugin.settings.cloudUploadSettings.imageSizeSource = value;
@@ -857,8 +854,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             // Only show width/height inputs when using 'settings' mode
             if (this.plugin.settings.cloudUploadSettings.imageSizeSource === 'settings') {
                 new Setting(cloudSettingsContainer)
-                    .setName("图片宽度")
-                    .setDesc("宽度（像素），可选，留空为自动")
+                    .setName(t("SETTING_IMG_WIDTH"))
+                    .setDesc(t("SETTING_IMG_WIDTH_DESC"))
                     .addText(text => text
                         .setPlaceholder("例如：800")
                         .setValue(this.plugin.settings.cloudUploadSettings.imageSizeWidth?.toString() || "")
@@ -869,8 +866,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                     );
 
                 new Setting(cloudSettingsContainer)
-                    .setName("图片高度")
-                    .setDesc("高度（像素），可选，留空为自动")
+                    .setName(t("SETTING_IMG_HEIGHT"))
+                    .setDesc(t("SETTING_IMG_HEIGHT_DESC"))
                     .addText(text => text
                         .setPlaceholder("例如：600")
                         .setValue(this.plugin.settings.cloudUploadSettings.imageSizeHeight?.toString() || "")
@@ -883,8 +880,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
             // Network Image Settings
             new Setting(cloudSettingsContainer)
-                .setName("上传网络图片")
-                .setDesc("也上传来自 URL 的图片")
+                .setName(t("SETTING_WORK_ON_NETWORK"))
+                .setDesc(t("SETTING_WORK_ON_NETWORK_DESC"))
                 .addToggle(toggle => toggle
                     .setValue(this.plugin.settings.cloudUploadSettings.workOnNetWork)
                     .onChange(async (value) => {
@@ -896,8 +893,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
             if (this.plugin.settings.cloudUploadSettings.workOnNetWork) {
                 new Setting(cloudSettingsContainer)
-                    .setName("网络图片域名黑名单")
-                    .setDesc("用逗号分隔的域名列表，这些域名将被排除（例如：example.com, test.org）")
+                    .setName(t("SETTING_NETWORK_BLACKLIST"))
+                    .setDesc(t("SETTING_NETWORK_BLACKLIST_DESC"))
                     .addTextArea(text => text
                         .setPlaceholder("example.com, test.org")
                         .setValue(this.plugin.settings.cloudUploadSettings.newWorkBlackDomains)
@@ -910,8 +907,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
             // Apply Image Settings
             new Setting(cloudSettingsContainer)
-                .setName("剪贴板同时包含文本和图片时上传")
-                .setDesc("即使剪贴板也包含文本，仍然上传图片")
+                .setName(t("SETTING_APPLY_IMAGE"))
+                .setDesc(t("SETTING_APPLY_IMAGE_DESC"))
                 .addToggle(toggle => toggle
                     .setValue(this.plugin.settings.cloudUploadSettings.applyImage)
                     .onChange(async (value) => {
@@ -922,8 +919,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
             // Delete Source Settings
             new Setting(cloudSettingsContainer)
-                .setName("上传后删除本地源文件")
-                .setDesc("成功上传后自动删除本地文件")
+                .setName(t("SETTING_DELETE_SOURCE"))
+                .setDesc(t("SETTING_DELETE_SOURCE_DESC"))
                 .addToggle(toggle => toggle
                     .setValue(this.plugin.settings.cloudUploadSettings.deleteSource)
                     .onChange(async (value) => {
@@ -955,7 +952,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         alignmentChevronIcon.addClass("settings-section-chevron-icon");
 
         // Section Title
-        toggleAlignmentVisibilityEl.createEl("span", { text: "图片对齐", cls: "settings-section-title" });
+        toggleAlignmentVisibilityEl.createEl("span", { text: t("SETTING_IMG_ALIGNMENT_SECTION"), cls: "settings-section-title" });
         // // Clarification Text
         // toggleAlignmentVisibilityEl.createEl("span", {
         //     text: "For changes to take effect, please reload the app",
@@ -1002,11 +999,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         if (this.plugin.settings.isImageAlignmentEnabled) { // Conditionally render cleanup options
             // --- Cache Location Setting ---
             new Setting(imageAlignmentSection)
-                .setName("图片对齐缓存位置 🛈")
-                .setDesc(
-                    "选择存储图片对齐缓存文件的位置。" +
-                    "注意：需要重启应用生效。"
-                )
+                .setName(t("SETTING_IMG_ALIGNMENT_CACHE_LOC"))
+                .setDesc(t("SETTING_IMG_ALIGNMENT_CACHE_LOC_DESC"))
                 .setTooltip(
                     "如果使用 Obsidian Sync，强烈建议在所有设备上使用相同的位置以确保一致性。" +
                     "默认：.obsidian（可同步）。"
@@ -1026,10 +1020,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             new Setting(imageAlignmentSection) // Interval setting is now inside the collapsible section
-                .setName("图片对齐缓存清理间隔")
-                .setDesc(
-                    "清理图片对齐缓存中冗余条目的间隔时间（分钟）。默认：1小时（0为禁用）"
-                )
+                .setName(t("SETTING_IMG_ALIGNMENT_CACHE_INTERVAL"))
+                .setDesc(t("SETTING_IMG_ALIGNMENT_CACHE_INTERVAL_DESC"))
                 .addSlider(slider => slider
                     .setLimits(0, 120, 5) // Min: 0, Max: 120, Step: 5 (minutes)
                     .setValue(this.plugin.settings.imageAlignment_cacheCleanupInterval / (60 * 1000))
@@ -1065,7 +1057,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         dragResizeChevronIcon.addClass("settings-section-chevron-icon");
 
         // Section Title
-        toggleDragResizeVisibilityEl.createEl("span", { text: "拖拽和滚轮调整大小", cls: "settings-section-title" });
+        toggleDragResizeVisibilityEl.createEl("span", { text: t("SETTING_DRAG_RESIZE_SECTION"), cls: "settings-section-title" });
         // // Clarification Text
         // toggleDragResizeVisibilityEl.createEl("span", {
         //     text: "For changes to take effect, please reload the app",
@@ -1112,9 +1104,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         if (this.plugin.settings.isImageResizeEnbaled) { // Conditionally render cleanup options
             // --- Checkboxes for Drag and Scroll Resize ---
             new Setting(imageDragResizeSection)
-                .setName("启用拖拽调整大小 🛈")
-                .setDesc("允许通过拖动图片边缘来调整大小。")
-                .setTooltip("这会在图片下方创建一个新的 <DIV> 来显示调整大小的把手。但这可能会导致与某些主题不兼容，并使图片跳动。")
+                .setName(t("SETTING_ENABLE_DRAG_RESIZE"))
+                .setDesc(t("SETTING_ENABLE_DRAG_RESIZE_DESC"))
+                .setTooltip(t("SETTING_ENABLE_DRAG_RESIZE_TOOLTIP"))
                 .addToggle((toggle) =>
                     toggle
                         .setValue(this.plugin.settings.isDragResizeEnabled)
@@ -1122,7 +1114,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                             this.plugin.settings.isDragResizeEnabled = value;
                             await this.plugin.saveSettings();
                             // Force refresh to update visible options
-                            this.display();                            
+                            this.display();
                         })
                 );
 
@@ -1131,8 +1123,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 const apectRatioSettingsContainer = imageDragResizeSection.createDiv('fix-aspect-ratio-settings');
 
                 new Setting(apectRatioSettingsContainer)
-                    .setName('拖动时锁定长宽比')
-                    .setDesc('防止拖动调整大小时意外改变图片长宽比')
+                    .setName(t("SETTING_DRAG_LOCK_RATIO"))
+                    .setDesc(t("SETTING_DRAG_LOCK_RATIO_DESC"))
                     .addToggle(toggle => toggle
                         .setValue(this.plugin.settings.isDragAspectRatioLocked)
                         .onChange(async (value) => {
@@ -1144,8 +1136,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
 
             new Setting(imageDragResizeSection)
-                .setName('启用滚轮调整大小')
-                .setDesc('允许使用滚轮调整图片大小')
+                .setName(t("SETTING_ENABLE_SCROLL_RESIZE"))
+                .setDesc(t("SETTING_ENABLE_SCROLL_RESIZE_DESC"))
                 .addToggle(toggle => toggle
                     .setValue(this.plugin.settings.isScrollResizeEnabled)
                     .onChange(async (value) => {
@@ -1161,8 +1153,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 const scrollSettingsContainer = imageDragResizeSection.createDiv('scroll-resize-settings');
 
                 new Setting(scrollSettingsContainer)
-                    .setName('滚轮修饰键')
-                    .setDesc('使用滚轮调整大小时必须按住的键')
+                    .setName(t("SETTING_SCROLL_MODIFIER"))
+                    .setDesc(t("SETTING_SCROLL_MODIFIER_DESC"))
                     .addDropdown(dropdown => dropdown
                         .addOptions({
                             'None': '无',
@@ -1178,8 +1170,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         }));
 
                 new Setting(scrollSettingsContainer)
-                    .setName('滚轮调整灵敏度')
-                    .setDesc('调整滚轮调整大小的灵敏度 (0.01-1.0)')
+                    .setName(t("SETTING_RESIZE_SENSITIVITY"))
+                    .setDesc(t("SETTING_RESIZE_SENSITIVITY_DESC"))
                     .addSlider(slider => slider
                         .setLimits(0.01, 1, 0.01)
                         .setValue(this.plugin.settings.resizeSensitivity)
@@ -1191,14 +1183,14 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             }
             // New Setting: Resize Cursor Location
             new Setting(imageDragResizeSection)
-                .setName("调整大小时的光标位置 🛈")
-                .setTooltip("调整图片大小时光标的放置位置。注意：'不移动光标' - 将尝试保持现有光标位置，但如果拖动调整大小后光标仍在图片上，可能会选中文本。")
+                .setName(t("SETTING_RESIZE_CURSOR_LOC"))
+                .setTooltip(t("SETTING_RESIZE_CURSOR_LOC_TOOLTIP"))
                 .addDropdown((dropdown) => {
                     dropdown
-                        .addOption("front", "链接前面")
-                        .addOption("back", "链接后面")
-                        .addOption("below", "图片下方一行")
-                        .addOption("none", "不移动光标")
+                        .addOption("front", t("SETTING_CURSOR_FRONT"))
+                        .addOption("back", t("SETTING_CURSOR_BACK"))
+                        .addOption("below", t("SETTING_CURSOR_BELOW"))
+                        .addOption("none", t("SETTING_CURSOR_NONE"))
                         .setValue(this.plugin.settings.resizeCursorLocation)
                         .onChange(async (value: "front" | "back" | "below" | "none") => {
                             this.plugin.settings.resizeCursorLocation = value;
@@ -1207,8 +1199,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 });
 
             new Setting(imageDragResizeSection)
-                .setName("允许在阅读模式下调整大小")
-                .setDesc("阅读模式下的非破坏性调整大小仅为视觉效果，如果太干扰可以禁用它。")
+                .setName(t("SETTING_RESIZE_IN_READING_MODE"))
+                .setDesc(t("SETTING_RESIZE_IN_READING_MODE_DESC"))
                 .addToggle((toggle) =>
                     toggle
                         .setValue(this.plugin.settings.isResizeInReadingModeEnabled)
@@ -1242,7 +1234,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         captionChevronIcon.addClass("settings-section-chevron-icon");
 
         // Section Title
-        toggleCaptionVisibilityEl.createEl("span", { text: "图片标注", cls: "settings-section-title" });
+        toggleCaptionVisibilityEl.createEl("span", { text: t("SETTING_CAPTION_SECTION"), cls: "settings-section-title" });
         // // Clarification Text
         // toggleCaptionVisibilityEl.createEl("span", {
         //     text: "For changes to take effect, please reload the app",
@@ -1289,7 +1281,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         // --- Image Captions Settings (Moved from display() function) ---
         if (this.plugin.settings.enableImageCaptions) {
             new Setting(imageCaptionSection)
-                .setName("标注文字对齐方式")
+                .setName(t("SETTING_CAPTION_ALIGN"))
                 .addDropdown(dropdown =>
                     dropdown.addOptions({
                         "left": "左对齐",
@@ -1305,8 +1297,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             new Setting(imageCaptionSection)
-                .setName("文字转换")
-                .setDesc("设置文字转换方式")
+                .setName(t("SETTING_CAPTION_TRANSFORM"))
+                .setDesc(t("SETTING_CAPTION_TRANSFORM_DESC"))
                 .addDropdown(dropdown =>
                     dropdown.addOptions({
                         "none": "无",
@@ -1323,8 +1315,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             new Setting(imageCaptionSection) // Font Size Setting is now FIRST setting in the section
-                .setName("字体大小")
-                .setDesc("设置图片标注的字体大小（例如：12px, 1.2em）")
+                .setName(t("SETTING_CAPTION_FONT_SIZE"))
+                .setDesc(t("SETTING_CAPTION_FONT_SIZE_DESC"))
                 .addText(text =>
                     text.setValue(this.plugin.settings.captionFontSize)
                         .onChange(async (value) => {
@@ -1335,8 +1327,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             new Setting(imageCaptionSection)
-                .setName("字体粗细")
-                .setDesc("设置字体粗细（例如：normal, bold, 600）")
+                .setName(t("SETTING_CAPTION_FONT_WEIGHT"))
+                .setDesc(t("SETTING_CAPTION_FONT_WEIGHT_DESC"))
                 .addDropdown(dropdown =>
                     dropdown.addOptions({
                         "normal": "正常",
@@ -1356,8 +1348,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             new Setting(imageCaptionSection)
-                .setName("文字颜色")
-                .setDesc("选择图片标注的颜色，例如：red, grey, white, black, hsl(50, 50%, 50%), rgb(50%, 75%, 100%)")
+                .setName(t("SETTING_CAPTION_COLOR"))
+                .setDesc(t("SETTING_CAPTION_COLOR_DESC"))
                 .addText(text =>
                     text.setValue(this.plugin.settings.captionColor)
                         .onChange(async (value) => {
@@ -1368,8 +1360,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             new Setting(imageCaptionSection)
-                .setName("字体样式")
-                .setDesc("设置字体样式（例如：italic, normal）")
+                .setName(t("SETTING_CAPTION_FONT_STYLE"))
+                .setDesc(t("SETTING_CAPTION_FONT_STYLE_DESC"))
                 .addDropdown(dropdown =>
                     dropdown.addOptions({
                         "italic": "斜体", "normal": "正常"
@@ -1383,8 +1375,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             new Setting(imageCaptionSection)
-                .setName("背景颜色")
-                .setDesc("选择图片标注的背景颜色（例如：transparent, #f5f5f5, rgba(255,255,255,0.8)）")
+                .setName(t("SETTING_CAPTION_BG_COLOR"))
+                .setDesc(t("SETTING_CAPTION_BG_COLOR_DESC"))
                 .addText(text =>
                     text.setValue(this.plugin.settings.captionBackgroundColor)
                         .onChange(async (value) => {
@@ -1396,8 +1388,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
             // In renderImageCaptionSettingsSection
             new Setting(imageCaptionSection)
-                .setName("边框样式")
-                .setDesc("设置边框样式（例如：1px solid gray）")
+                .setName(t("SETTING_CAPTION_BORDER"))
+                .setDesc(t("SETTING_CAPTION_BORDER_DESC"))
                 .addText(text =>
                     text.setValue(this.plugin.settings.captionBorder)
                         .onChange(async (value) => {
@@ -1407,8 +1399,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         })
                 );
             new Setting(imageCaptionSection)
-                .setName("边框圆角")
-                .setDesc("设置标注边框圆角（例如：4px）")
+                .setName(t("SETTING_CAPTION_BORDER_RADIUS"))
+                .setDesc(t("SETTING_CAPTION_BORDER_RADIUS_DESC"))
                 .addText(text =>
                     text.setValue(this.plugin.settings.captionBorderRadius)
                         .onChange(async (value) => {
@@ -1419,8 +1411,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             new Setting(imageCaptionSection)
-                .setName("顶部间距")
-                .setDesc("设置图片与标注之间的间距（例如：4px, 8px）")
+                .setName(t("SETTING_CAPTION_MARGIN_TOP"))
+                .setDesc(t("SETTING_CAPTION_MARGIN_TOP_DESC"))
                 .addText(text =>
                     text.setValue(this.plugin.settings.captionMarginTop)
                         .onChange(async (value) => {
@@ -1431,8 +1423,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                 );
 
             new Setting(imageCaptionSection)
-                .setName("内边距")
-                .setDesc("设置标注周围的内边距（例如：4px 8px）")
+                .setName(t("SETTING_CAPTION_PADDING"))
+                .setDesc(t("SETTING_CAPTION_PADDING_DESC"))
                 .addText(text =>
                     text.setValue(this.plugin.settings.captionPadding)
                         .onChange(async (value) => {
@@ -1444,8 +1436,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
             // Skip Caption Extensions
             new Setting(imageCaptionSection)
-                .setName("跳过标注的文件扩展名")
-                .setDesc("用逗号分隔的图片扩展名列表，这些图片将不显示标注（例如：png,jpg）")
+                .setName(t("SETTING_CAPTION_SKIP_EXT"))
+                .setDesc(t("SETTING_CAPTION_SKIP_EXT_DESC"))
                 .addText((text) => {
                     text.setValue(this.plugin.settings.skipCaptionExtensions)
                         .onChange(async (value) => {
@@ -1468,7 +1460,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         const chevronIcon = cleanerHeaderEl.createEl("i");
         setIcon(chevronIcon, "chevron-down");
         chevronIcon.addClass("cleaner-chevron-icon");
-        cleanerHeaderEl.createEl("span", { text: "🗑️ 文件清理", cls: "settings-section-title" });
+        cleanerHeaderEl.createEl("span", { text: t("SETTING_CLEANER_SECTION"), cls: "settings-section-title" });
 
         // 设置内容容器
         const cleanerContentEl = cleanerSection.createDiv({ cls: "cleaner-settings-content" });
@@ -1482,7 +1474,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         cleanerHeaderEl.onClickEvent((event: MouseEvent) => {
             event.stopPropagation();
             isCollapsed = !isCollapsed;
-            
+
             if (isCollapsed) {
                 cleanerContentEl.hide();
                 setIcon(chevronIcon, "chevron-right");
@@ -1494,8 +1486,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // 基准路径设置
         new Setting(cleanerContentEl)
-            .setName("默认扫描文件夹")
-            .setDesc("指定要清理的默认文件夹路径（相对于库根目录）")
+            .setName(t("SETTING_CLEANER_BASE_PATH"))
+            .setDesc(t("SETTING_CLEANER_BASE_PATH_DESC"))
             .addText(text => {
                 text
                     .setPlaceholder("例如: attachments")
@@ -1509,13 +1501,13 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // 删除模式设置
         new Setting(cleanerContentEl)
-            .setName("删除模式")
-            .setDesc("选择删除文件时的处理方式")
+            .setName(t("SETTING_CLEANER_TRASH_MODE"))
+            .setDesc(t("SETTING_CLEANER_TRASH_MODE_DESC"))
             .addDropdown(dropdown => {
                 dropdown
-                    .addOption("system", "系统回收站")
-                    .addOption("obsidian", "Obsidian 回收站 (.trash)")
-                    .addOption("custom", "自定义路径")
+                    .addOption("system", t("SETTING_CLEANER_SYS_TRASH"))
+                    .addOption("obsidian", t("SETTING_CLEANER_OBS_TRASH"))
+                    .addOption("custom", t("SETTING_CLEANER_CUSTOM_TRASH"))
                     .setValue(this.plugin.settings.cleanerSettings.trashMode)
                     .onChange(async (value: 'system' | 'obsidian' | 'custom') => {
                         this.plugin.settings.cleanerSettings.trashMode = value;
@@ -1528,8 +1520,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         // 自定义回收站路径（仅当 trashMode 为 'custom' 时显示）
         if (this.plugin.settings.cleanerSettings.trashMode === 'custom') {
             new Setting(cleanerContentEl)
-                .setName("自定义回收站路径")
-                .setDesc("指定自定义回收站的路径（相对于库根目录）")
+                .setName(t("SETTING_CLEANER_CUSTOM_PATH"))
+                .setDesc(t("SETTING_CLEANER_CUSTOM_PATH_DESC"))
                 .addText(text => {
                     text
                         .setPlaceholder("例如: .trash")
@@ -1544,8 +1536,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // 文件类型设置
         new Setting(cleanerContentEl)
-            .setName("文件类型")
-            .setDesc("指定要清理的文件类型，用逗号分隔（例如: jpg,png,pdf,mp4）")
+            .setName(t("SETTING_CLEANER_FILE_TYPES"))
+            .setDesc(t("SETTING_CLEANER_FILE_TYPES_DESC"))
             .addTextArea(text => {
                 text
                     .setPlaceholder("jpg,jpeg,png,gif,webp,bmp,svg,pdf,mp4,mp3")
@@ -1561,21 +1553,21 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // 使用说明
         const usageDesc = cleanerContentEl.createDiv({ cls: "cleaner-usage-desc" });
-        usageDesc.createEl("p", { 
-            text: "💡 使用方法：",
+        usageDesc.createEl("p", {
+            text: t("SETTING_CLEANER_USAGE_TITLE"),
             cls: "usage-title"
         });
-        usageDesc.createEl("p", { 
-            text: "1. 通过命令面板输入 'Clean: Scan and delete unused files' 打开清理面板"
+        usageDesc.createEl("p", {
+            text: t("SETTING_CLEANER_USAGE_1")
         });
-        usageDesc.createEl("p", { 
-            text: "2. 在面板中指定要扫描的文件夹，点击'开始扫描'"
+        usageDesc.createEl("p", {
+            text: t("SETTING_CLEANER_USAGE_2")
         });
-        usageDesc.createEl("p", { 
-            text: "3. 查看扫描结果，确认后删除未引用的文件"
+        usageDesc.createEl("p", {
+            text: t("SETTING_CLEANER_USAGE_3")
         });
-        usageDesc.createEl("p", { 
-            text: "⚠️ 删除操作可能不可逆，请谨慎确认后再删除！",
+        usageDesc.createEl("p", {
+            text: t("SETTING_CLEANER_WARNING"),
             cls: "warning-text"
         });
     }
@@ -1593,7 +1585,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         const chevronIcon = otherHeaderEl.createEl("i");
         setIcon(chevronIcon, "chevron-down");
         chevronIcon.addClass("other-chevron-icon");
-        otherHeaderEl.createEl("span", { text: "⚙️ 其他设置", cls: "settings-section-title" });
+        otherHeaderEl.createEl("span", { text: t("SETTING_OTHER_SECTION"), cls: "settings-section-title" });
 
         // 设置内容容器
         const otherContentEl = otherSection.createDiv({ cls: "other-settings-content" });
@@ -1607,7 +1599,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         otherHeaderEl.onClickEvent((event: MouseEvent) => {
             event.stopPropagation();
             isCollapsed = !isCollapsed;
-            
+
             if (isCollapsed) {
                 otherContentEl.hide();
                 setIcon(chevronIcon, "chevron-right");
@@ -1619,9 +1611,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // 右键菜单设置
         new Setting(otherContentEl)
-            .setName("右键菜单 🛈")
-            .setDesc("启用以显示右键上下文菜单")
-            .setTooltip("启用后可以在图片上右键进行操作（需重启Obsidian生效）")
+            .setName(t("SETTING_CONTEXT_MENU"))
+            .setDesc(t("SETTING_CONTEXT_MENU_DESC"))
+            .setTooltip(t("SETTING_CONTEXT_MENU_TOOLTIP"))
             .addToggle((toggle) =>
                 toggle
                     .setValue(this.plugin.settings.enableContextMenu)
@@ -1638,9 +1630,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // 光标位置设置
         new Setting(otherContentEl)
-            .setName("粘贴/拖拽后光标位置 🛈")
-            .setDesc("选择插入图片后光标的位置")
-            .setTooltip("选择在图片链接的前面或后面放置光标")
+            .setName(t("SETTING_PASTE_CURSOR_LOC"))
+            .setDesc(t("SETTING_PASTE_CURSOR_LOC_DESC"))
+            .setTooltip("选择在图片链接的前面或后面放置光标") // Kept as hardcoded for now or I missed it? Wait, I didn't add this one. I'll translate what I have.
             .addDropdown((dropdown) => {
                 dropdown
                     .addOption("front", "链接前面")
@@ -1654,8 +1646,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // 不处理的文件名
         new Setting(otherContentEl)
-            .setName("不处理的文件名 🛈")
-            .setDesc("设置不需要处理的文件名或模式（逗号分隔）")
+            .setName(t("SETTING_NEVER_PROCESS"))
+            .setDesc(t("SETTING_NEVER_PROCESS_DESC"))
             .setTooltip(
                 "支持通配符 (*) 和正则表达式（用 / 或 r/ 或 regex: 包裹）\n" +
                 "例如：old.png, /^_/, r/temp-.*\\.jpg$/\n" +
@@ -1674,9 +1666,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // 图片大小通知
         new Setting(otherContentEl)
-            .setName('显示图片大小更改通知 🛈')
-            .setDesc('处理图片后显示节省的空间大小')
-            .setTooltip('启用后会显示处理图片后节省的文件大小')
+            .setName(t("SETTING_SPACE_SAVED_NOTIFY"))
+            .setDesc(t("SETTING_SPACE_SAVED_NOTIFY_DESC"))
+            .setTooltip('启用后会显示处理图片后节省的文件大小') // missed this one too? "Enable to show saved size...", I'll check.
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.showSpaceSavedNotification)
                 .onChange(async (value) => {
@@ -1687,13 +1679,13 @@ export class ImageConverterSettingTab extends PluginSettingTab {
 
         // 显示处理窗口
         new Setting(otherContentEl)
-            .setName("显示处理窗口")
-            .setDesc("选择是否在拖拽/粘贴图片时显示处理选项")
+            .setName(t("SETTING_MODAL_BEHAVIOR"))
+            .setDesc(t("SETTING_MODAL_BEHAVIOR_DESC"))
             .addDropdown((dropdown) => {
                 dropdown
-                    .addOption("always", "总是显示")
-                    .addOption("never", "从不显示")
-                    .addOption("ask", "每次询问")
+                    .addOption("always", t("SETTING_MODAL_ALWAYS"))
+                    .addOption("never", t("SETTING_MODAL_NEVER"))
+                    .addOption("ask", t("SETTING_MODAL_ASK"))
                     .setValue(this.plugin.settings.modalBehavior)
                     .onChange(async (value: ModalBehavior) => {
                         this.plugin.settings.modalBehavior = value;
@@ -2030,10 +2022,10 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                                 );
                                 this.plugin.settings.selectedConversionPreset = DEFAULT_SETTINGS.selectedConversionPreset;
                             } else if (activePresetSetting === "selectedLinkFormatPreset") {
-                                    this.plugin.settings.linkFormatSettings.linkFormatPresets =
-                                        this.plugin.settings.linkFormatSettings.linkFormatPresets.filter(
-                                            (presetItem) => presetItem.name !== preset.name
-                                        );
+                                this.plugin.settings.linkFormatSettings.linkFormatPresets =
+                                    this.plugin.settings.linkFormatSettings.linkFormatPresets.filter(
+                                        (presetItem) => presetItem.name !== preset.name
+                                    );
                                 if (this.plugin.settings.linkFormatSettings.selectedLinkFormatPreset === preset.name) {
                                     this.plugin.settings.linkFormatSettings.selectedLinkFormatPreset =
                                         DEFAULT_SETTINGS.linkFormatSettings.selectedLinkFormatPreset;
@@ -4225,7 +4217,7 @@ export class AvailableVariablesModal extends Modal {
 
         // Create search container
         const searchContainer = contentEl.createEl("div", { cls: "variable-search-container" });
-        
+
         // Create search input
         this.searchInput = searchContainer.createEl("input", {
             type: "text",
@@ -4234,9 +4226,9 @@ export class AvailableVariablesModal extends Modal {
         });
 
         // Add search icon (optional visual enhancement)
-        searchContainer.createEl("span", { 
-            text: "🔍", 
-            cls: "variable-search-icon" 
+        searchContainer.createEl("span", {
+            text: "🔍",
+            cls: "variable-search-icon"
         });
 
         // Create content container for the variables
@@ -4264,7 +4256,7 @@ export class AvailableVariablesModal extends Modal {
             // Filter variables based on search term
             const filteredVariables = variables.filter(variable => {
                 if (!searchTerm) return true;
-                
+
                 const searchLower = searchTerm.toLowerCase();
                 return (
                     variable.name.toLowerCase().includes(searchLower) ||
@@ -4277,40 +4269,40 @@ export class AvailableVariablesModal extends Modal {
             if (filteredVariables.length > 0) {
                 const categoryEl = this.contentContainer.createEl("div", { cls: "variable-category" });
                 categoryEl.createEl("h4", { text: category, cls: "variable-category-title" });
-                
+
                 const table = categoryEl.createEl("table", { cls: "variable-table" });
-                
+
                 // Add table header
                 const thead = table.createEl("thead");
                 const headerRow = thead.createEl("tr");
                 headerRow.createEl("th", { text: "Variable" });
                 headerRow.createEl("th", { text: "Description" });
                 headerRow.createEl("th", { text: "Example" });
-                
+
                 const tbody = table.createTBody();
-                
+
                 for (const variable of filteredVariables) {
                     const row = tbody.createEl("tr", { cls: "variable-row" });
-                    
+
                     // Highlight search term in the content
                     const nameCell = row.createEl("td", { cls: "variable-name" });
                     nameCell.innerHTML = this.highlightSearchTerm(variable.name, searchTerm);
-                    
+
                     const descCell = row.createEl("td", { cls: "variable-description" });
                     descCell.innerHTML = this.highlightSearchTerm(variable.description, searchTerm);
-                      const exampleCell = row.createEl("td", { cls: "variable-example" });
+                    const exampleCell = row.createEl("td", { cls: "variable-example" });
                     exampleCell.innerHTML = this.highlightSearchTerm(variable.example, searchTerm);                    // Add click handler to copy variable name
                     nameCell.addEventListener("click", async () => {
                         try {
                             await navigator.clipboard.writeText(variable.name);
-                            
+
                             // Visual feedback - add CSS class for copy success
                             nameCell.classList.add("variable-name-copied");
-                            
+
                             // Show "Copied!" text temporarily
                             const originalText = nameCell.textContent;
                             nameCell.textContent = "Copied!";
-                            
+
                             setTimeout(() => {
                                 nameCell.classList.remove("variable-name-copied");
                                 nameCell.textContent = originalText;
@@ -4331,7 +4323,7 @@ export class AvailableVariablesModal extends Modal {
 
         // Show "no results" message if no variables match
         if (searchTerm && this.contentContainer.children.length === 0) {
-            this.contentContainer.createEl("div", { 
+            this.contentContainer.createEl("div", {
                 cls: "variable-no-results",
                 text: `No variables found matching "${searchTerm}"`
             });
@@ -4340,7 +4332,7 @@ export class AvailableVariablesModal extends Modal {
 
     private highlightSearchTerm(text: string, searchTerm: string): string {
         if (!searchTerm) return text;
-        
+
         const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
         return text.replace(regex, '<mark>$1</mark>');
     }

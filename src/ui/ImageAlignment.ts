@@ -1,6 +1,7 @@
 import { App, Component, Menu, TFile } from 'obsidian';
 import ImageConverterPlugin from '../main';
 import { ImageAlignmentManager, ImagePositionData } from './ImageAlignmentManager';
+import { t } from '../lang/helpers';
 
 export interface ImageAlignmentOptions {
     align: 'left' | 'center' | 'right' | 'none';
@@ -24,13 +25,13 @@ export class ImageAlignment extends Component {
     addAlignmentOptionsToContextMenu(menu: Menu, img: HTMLImageElement, activeFile: TFile) {
         menu.addItem((item) => {
             item
-                .setTitle('Align image')
+                .setTitle(t("MENU_ALIGN_IMAGE"))
                 .setIcon('align-justify')
                 .setSubmenu()
                 .addItem((subItem) => {
                     const currentAlignment = this.getCurrentImageAlignment(img);
                     subItem
-                        .setTitle('Left')
+                        .setTitle(t("ALIGN_LEFT"))
                         .setIcon('align-left')
                         .setChecked(currentAlignment.align === 'left')
                         .onClick(async () => {
@@ -40,7 +41,7 @@ export class ImageAlignment extends Component {
                 .addItem((subItem) => {
                     const currentAlignment = this.getCurrentImageAlignment(img);
                     subItem
-                        .setTitle('Center')
+                        .setTitle(t("ALIGN_CENTER"))
                         .setIcon('align-center')
                         .setChecked(currentAlignment.align === 'center')
                         .onClick(async () => {
@@ -50,7 +51,7 @@ export class ImageAlignment extends Component {
                 .addItem((subItem) => {
                     const currentAlignment = this.getCurrentImageAlignment(img);
                     subItem
-                        .setTitle('Right')
+                        .setTitle(t("ALIGN_RIGHT"))
                         .setIcon('align-right')
                         .setChecked(currentAlignment.align === 'right')
                         .onClick(async () => {
@@ -61,7 +62,7 @@ export class ImageAlignment extends Component {
                 .addItem((subItem) => {
                     const currentAlignment = this.getCurrentImageAlignment(img);
                     subItem
-                        .setTitle('Wrap Text')
+                        .setTitle(t("ALIGN_WRAP"))
                         .setChecked(currentAlignment.wrap)
                         .onClick(async () => {
                             // Default to left alignment if no alignment is set
@@ -71,7 +72,7 @@ export class ImageAlignment extends Component {
                 });
         });
     }
-    
+
     /**
      * Applies alignment styles to an image based on cached data. THIS is called from ImageAlignmentManager!
      * @param img - The target image element.

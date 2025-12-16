@@ -23,6 +23,7 @@ import { ConcurrentQueue } from "./utils/AsyncLock";
 import { ImageAlignmentManager } from './ui/ImageAlignmentManager';
 import { normalizePath } from "obsidian";
 import { ImageResizer } from "./ui/ImageResizer";
+import { t } from './lang/helpers';
 import { BatchImageProcessor } from "./local/BatchImageProcessor";
 import { ProcessSingleImageModal } from "./ui/modals/ProcessSingleImageModal";
 import { ProcessFolderModal } from "./ui/modals/ProcessFolderModal";
@@ -318,7 +319,7 @@ export default class ImageConverterPlugin extends Plugin {
             this.app.workspace.on("file-menu", (menu, file) => {
                 if (file instanceof TFile && this.supportedImageFormats.isSupported(undefined, file.name)) {
                     menu.addItem((item) => {
-                        item.setTitle("Process image")
+                        item.setTitle(t("MENU_PROCESS_IMAGE"))
                             .setIcon("cog")
                             .onClick(() => {
                                 new ProcessSingleImageModal(this.app, this, file).open();
@@ -328,7 +329,7 @@ export default class ImageConverterPlugin extends Plugin {
                     // Add "Upload to cloud" option for images in cloud mode
                     if (this.settings.pasteHandlingMode === 'cloud') {
                         menu.addItem((item) => {
-                            item.setTitle("Upload to cloud")
+                            item.setTitle(t("MENU_UPLOAD_CLOUD"))
                                 .setIcon("cloud-upload")
                                 .onClick(async () => {
                                     await this.uploadSingleFile(file);
@@ -337,7 +338,7 @@ export default class ImageConverterPlugin extends Plugin {
                     }
                 } else if (file instanceof TFolder) {
                     menu.addItem((item) => {
-                        item.setTitle("Process all images in Folder")
+                        item.setTitle(t("MENU_PROCESS_FOLDER_IMAGES"))
                             .setIcon("cog")
                             .onClick(() => {
                                 new ProcessFolderModal(this.app, this, file.path, this.batchImageProcessor).open();
@@ -345,7 +346,7 @@ export default class ImageConverterPlugin extends Plugin {
                     });
                 } else if (file instanceof TFile && (file.extension === 'md' || file.extension === 'canvas')) {
                     menu.addItem((item) => {
-                        item.setTitle(`Process all images in ${file.extension === 'md' ? 'Note' : 'Canvas'}`)
+                        item.setTitle(file.extension === 'md' ? t("MENU_PROCESS_NOTE_IMAGES") : t("MENU_PROCESS_CANVAS_IMAGES"))
                             .setIcon("cog")
                             .onClick(() => {
                                 new ProcessCurrentNote(this.app, this, file, this.batchImageProcessor).open();
@@ -370,10 +371,10 @@ export default class ImageConverterPlugin extends Plugin {
 
         this.addCommand({
             id: 'process-all-vault-images',
-            name: 'Process all images in vault',
+            name: t("CMD_PROCESS_ALL_VAULT"),
             callback: () => {
                 if (!this.batchImageProcessor) {
-                    new Notice('请稍候，插件正在初始化...');
+                    new Notice(t("MSG_PLUGIN_INITIALIZING"));
                     return;
                 }
                 new ProcessAllVaultModal(this.app, this, this.batchImageProcessor).open();
@@ -382,35 +383,35 @@ export default class ImageConverterPlugin extends Plugin {
 
         this.addCommand({
             id: 'process-all-images-current-note',
-            name: 'Process all images in current note',
+            name: t("CMD_PROCESS_CURRENT_NOTE"),
             callback: () => {
                 if (!this.batchImageProcessor) {
-                    new Notice('请稍候，插件正在初始化...');
+                    new Notice(t("MSG_PLUGIN_INITIALIZING"));
                     return;
                 }
                 const activeFile = this.app.workspace.getActiveFile();
                 if (activeFile) {
                     new ProcessCurrentNote(this.app, this, activeFile, this.batchImageProcessor).open();
                 } else {
-                    new Notice('Error: No active file found.');
+                    new Notice(t("MSG_NO_ACTIVE_FILE"));
                 }
             }
         });
 
         this.addCommand({
             id: 'open-image-converter-settings',
-            name: 'Open settings',
+            name: t("CMD_OPEN_SETTINGS"),
             callback: () => this.commandOpenSettingsTab()
         });
 
         // 批量上传当前笔记的所有本地图片到图床
         this.addCommand({
             id: 'upload-all-images',
-            name: 'Upload all images in current note',
+            name: t("CMD_UPLOAD_ALL"),
             callback: async () => {
                 // 只在图床模式下可用
                 if (this.settings.pasteHandlingMode !== 'cloud') {
-                    new Notice('This command is only available in cloud mode. Please switch to cloud mode in settings.');
+                    new Notice(t("MSG_ONLY_CLOUD_MODE"));
                     return;
                 }
                 await this.uploadAllImages();
@@ -420,7 +421,7 @@ export default class ImageConverterPlugin extends Plugin {
         // 批量下载当前笔记的所有网络图片到本地
         this.addCommand({
             id: 'download-all-images',
-            name: 'Download all network images in current note',
+            name: t("CMD_DOWNLOAD_ALL"),
             callback: async () => {
                 await this.downloadAllImages();
             }
@@ -429,7 +430,7 @@ export default class ImageConverterPlugin extends Plugin {
         // 清理无用文件
         this.addCommand({
             id: 'clean-unused-files',
-            name: 'Scan and delete unused files',
+            name: t("CMD_CLEAN_UNUSED"),
             callback: () => {
                 new UnusedFileCleanerModal(this.app, this).open();
             }
@@ -438,7 +439,7 @@ export default class ImageConverterPlugin extends Plugin {
         // Frontmatter 模式控制命令
         this.addCommand({
             id: 'configure-paste-mode-current-note',
-            name: 'Configure paste mode for current note',
+            name: t("CMD_CONFIG_PASTE_MODE"),
             callback: async () => {
                 await this.showPasteModeConfigModal();
             }
@@ -447,7 +448,7 @@ export default class ImageConverterPlugin extends Plugin {
         // OCR 命令（不依赖其他组件，可以立即执行）
         this.addCommand({
             id: 'ocr-latex-multiline',
-            name: 'Generate multiline LaTeX from clipboard image',
+            name: t("CMD_OCR_LATEX_MULTI"),
             callback: async () => {
                 await this.handleOCRLatex(true);
             }
@@ -455,7 +456,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         this.addCommand({
             id: 'ocr-latex-inline',
-            name: 'Generate inline LaTeX from clipboard image',
+            name: t("CMD_OCR_LATEX_INLINE"),
             callback: async () => {
                 await this.handleOCRLatex(false);
             }
@@ -463,7 +464,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         this.addCommand({
             id: 'ocr-markdown',
-            name: 'Generate markdown from clipboard image',
+            name: t("CMD_OCR_MARKDOWN"),
             callback: async () => {
                 await this.handleOCRMarkdown();
             }
@@ -532,16 +533,16 @@ export default class ImageConverterPlugin extends Plugin {
             await setting.open();
             setting.openTabById(this.manifest.id);
         } else {
-            new Notice('Unable to open settings. Please check if the settings plugin is enabled.');
+            new Notice(t("MSG_UNABLE_OPEN_SETTINGS"));
         }
     }
 
     addReloadCommand() {
         this.addCommand({
             id: 'reload-plugin',
-            name: 'Reload plugin',
+            name: t("CMD_RELOAD_PLUGIN"),
             callback: async () => {
-                new Notice('Reloading Image Converter plugin...');
+                new Notice(t("MSG_RELOADING_PLUGIN"));
 
                 try {
                     // Use the workaround to access the internal plugins API
@@ -552,7 +553,7 @@ export default class ImageConverterPlugin extends Plugin {
                         await plugins.disablePlugin(this.manifest.id);
                     } else {
                         console.error("Plugins API is not accessible.");
-                        new Notice('Failed to reload plugin: Plugins API unavailable.');
+                        new Notice(t("MSG_RELOAD_FAILED_API"));
                         return;
                     }
 
@@ -564,15 +565,15 @@ export default class ImageConverterPlugin extends Plugin {
                         await plugins.enablePlugin(this.manifest.id);
                     } else {
                         console.error("Plugins API is not accessible.");
-                        new Notice('Failed to reload plugin: Plugins API unavailable.');
+                        new Notice(t("MSG_RELOAD_FAILED_API"));
                         return;
                     }
 
 
-                    new Notice('Image Converter plugin reloaded!');
+                    new Notice(t("MSG_PLUGIN_RELOADED"));
                 } catch (error) {
                     console.error("Error reloading plugin:", error);
-                    new Notice('Failed to reload plugin. See console for details.');
+                    new Notice(t("MSG_RELOAD_FAILED"));
                 }
             },
         });
@@ -628,7 +629,7 @@ export default class ImageConverterPlugin extends Plugin {
             );
 
             if (!hasImage) {
-                new Notice('No image found in clipboard');
+                new Notice(t("MSG_NO_CLIPBOARD_IMAGE"));
                 return null;
             }
 
@@ -636,7 +637,7 @@ export default class ImageConverterPlugin extends Plugin {
             return new Uint8Array(nativeImage.toPNG());
         } catch (error) {
             console.error('Failed to read clipboard image:', error);
-            new Notice('Failed to read clipboard image. Make sure you are running on desktop.');
+            new Notice(t("MSG_CLIPBOARD_READ_FAIL"));
             return null;
         }
     }
@@ -649,7 +650,7 @@ export default class ImageConverterPlugin extends Plugin {
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
-                new Notice('请先打开一个 Markdown 文档');
+                new Notice(t("MSG_OPEN_MD_DOC"));
                 return;
             }
 
@@ -664,7 +665,7 @@ export default class ImageConverterPlugin extends Plugin {
             editorInteract.insertResponseToEditor(parsedLatex);
         } catch (error) {
             console.error('[OCR] LaTeX conversion error:', error);
-            new Notice(`OCR 转换失败: ${error.message}`);
+            new Notice(t("MSG_OCR_FAILED").replace("{0}", error.message));
             // Remove loading text on error
             if (editorInteract) editorInteract.removeLoadingText();
         } finally {
@@ -681,7 +682,7 @@ export default class ImageConverterPlugin extends Plugin {
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
-                new Notice('请先打开一个 Markdown 文档');
+                new Notice(t("MSG_OPEN_MD_DOC"));
                 return;
             }
 
@@ -696,7 +697,7 @@ export default class ImageConverterPlugin extends Plugin {
             editorInteract.insertResponseToEditor(result);
         } catch (error) {
             console.error('[OCR] Markdown conversion error:', error);
-            new Notice(`OCR 转换失败: ${error.message}`);
+            new Notice(t("MSG_OCR_FAILED").replace("{0}", error.message));
             // Remove loading text on error
             if (editorInteract) editorInteract.removeLoadingText();
         } finally {

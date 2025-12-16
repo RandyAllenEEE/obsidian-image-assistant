@@ -1,7 +1,7 @@
 {
   "id": "image-assistant",
   "name": "Image Assistant",
-  "version": "2.1.1",
+  "version": "3.0.0",
   "minAppVersion": "0.15.0",
   "description": "This help you convert, compress images or upload images automatically when pasted from clipboard.",
   "author": "RandyAllen",

@@ -14,6 +14,7 @@ import {
 	Modal,
 } from 'obsidian';
 import * as path from 'path';
+import { t } from '../lang/helpers';
 import ImageConverterPlugin from "../main";
 import { FolderAndFilenameManagement } from '../local/FolderAndFilenameManagement';
 import { ConfirmDialog } from '../settings/ImageAssistantSettings';
@@ -75,41 +76,41 @@ export class ContextMenu extends Component {
 		this.contextMenuRegistered = true;
 	}
 
-    /**
-     * Handles the context menu event.
-     * This function is called when the context menu is triggered on an image.
-     * @param event - The MouseEvent object.
-     */
-    handleContextMenuEvent = (event: MouseEvent) => {
-        const target = event.target as HTMLElement;
-        const activeView = this.app.workspace.getActiveViewOfType(View);
-        const isCanvasView = activeView?.getViewType() === 'canvas';
+	/**
+	 * Handles the context menu event.
+	 * This function is called when the context menu is triggered on an image.
+	 * @param event - The MouseEvent object.
+	 */
+	handleContextMenuEvent = (event: MouseEvent) => {
+		const target = event.target as HTMLElement;
+		const activeView = this.app.workspace.getActiveViewOfType(View);
+		const isCanvasView = activeView?.getViewType() === 'canvas';
 
-        if (isCanvasView) {
-            return;
-        }
+		if (isCanvasView) {
+			return;
+		}
 
-        const img = target instanceof HTMLImageElement ? target : target.closest('img');
-        if (!img) {
-            return;
-        }
+		const img = target instanceof HTMLImageElement ? target : target.closest('img');
+		if (!img) {
+			return;
+		}
 
-        // Skip Excalidraw images
-        if (this.plugin.supportedImageFormats.isExcalidrawImage(img)) {
-            return;
-        }
+		// Skip Excalidraw images
+		if (this.plugin.supportedImageFormats.isExcalidrawImage(img)) {
+			return;
+		}
 
-        const isImageInSupportedContainer = !!(
-            img.closest('.markdown-preview-view') ||
-            img.closest('.markdown-source-view')
-            // img.closest('.view-content > div') // uncomment this to enable it inside its individual window
-        );
-        if (!isImageInSupportedContainer) {
-            if (target.closest('.map-view-main')) {
-                return;
-            }
-            return;
-        }
+		const isImageInSupportedContainer = !!(
+			img.closest('.markdown-preview-view') ||
+			img.closest('.markdown-source-view')
+			// img.closest('.view-content > div') // uncomment this to enable it inside its individual window
+		);
+		if (!isImageInSupportedContainer) {
+			if (target.closest('.map-view-main')) {
+				return;
+			}
+			return;
+		}
 
 		event.preventDefault(); // prevents the default context menu from appearing (if any)
 		event.stopPropagation(); // prevents the event from bubbling up to parent elements (like the callout)
@@ -254,25 +255,25 @@ export class ContextMenu extends Component {
 				? (this.folderAndFilenameManagement as any).getImagePath(img)
 				: null;
 			if (!imagePath) return { width: '', height: '' };
-	
+
 			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 			if (!activeView) return { width: '', height: '' };
-	
+
 			const { editor } = activeView;
 			const isExternal = !imagePath;
 			const matches = await this.findImageMatches(editor, imagePath, isExternal);
-			
+
 			if (matches && matches.length > 0) {
 				const [firstMatch] = matches;
-				
+
 				// Handle wiki-style links
 				const wikiMatch = firstMatch.fullMatch.match(/!\[\[([^\]]+?)(?:\|([^|\]]+?))?\s*(?:\|([^|\]]+?))?\]\]/);
 				if (wikiMatch) {
 					const secondPart = wikiMatch[2] || "";
 					const thirdPart = wikiMatch[3] || "";
-					
+
 					const isDimensions = (part: string) => /^\s*\d+(?:x\d+)?\s*$/.test(part);
-					
+
 					// Check third part first, then second part for dimensions
 					let dimensionPart = '';
 					if (isDimensions(thirdPart)) {
@@ -280,7 +281,7 @@ export class ContextMenu extends Component {
 					} else if (isDimensions(secondPart)) {
 						dimensionPart = secondPart.trim();
 					}
-	
+
 					if (dimensionPart) {
 						const parts = dimensionPart.split('x');
 						return {
@@ -289,7 +290,7 @@ export class ContextMenu extends Component {
 						};
 					}
 				}
-	
+
 				// Handle markdown-style links
 				const markdownMatch = firstMatch.fullMatch.match(/!\[([^|\]]*?)(?:\|(\d+(?:x\d+)?))?\]\(([^)]+)\)/);
 				if (markdownMatch && markdownMatch[2]) {
@@ -308,17 +309,17 @@ export class ContextMenu extends Component {
 	}
 
 	private async updateImageLinkWithDimensions(
-		editor: Editor, 
-		match: { lineNumber: number, line: string }, 
+		editor: Editor,
+		match: { lineNumber: number, line: string },
 		newCaption: string,
 		width: string,
 		height: string
 	): Promise<string> {
 		// Format dimensions based on what's provided
 		const dimensionsPart = width ? (height ? `${width}x${height}` : width) : '';
-		
+
 		const { line } = match;
-		
+
 		// Handle Wiki-style links
 		if (line.includes("![[")) {
 			return line.replace(
@@ -337,7 +338,7 @@ export class ContextMenu extends Component {
 				}
 			);
 		}
-		
+
 		// Handle Markdown-style links
 		return line.replace(
 			/!\[([^|\]]*?)(?:\|(\d+(?:x\d+)?))?\]\(([^)]+)\)/g,
@@ -366,32 +367,32 @@ export class ContextMenu extends Component {
 		isImageResolvable: boolean
 	) {
 		if (!isImageResolvable) return;
-	
+
 		const newCaption = captionInput.value.trim();
 		const width = widthInput.value.trim();
 		const height = heightInput.value.trim();
-		
+
 		// Validate dimensions
 		if ((width && !(/^\d+$/.test(width))) || (height && !(/^\d+$/.test(height)))) {
-			new Notice('Dimensions must be positive numbers');
+			new Notice(t("MSG_DIMENSIONS_POSITIVE"));
 			return;
 		}
-	
+
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!activeView) return;
-	
+
 		const { editor } = activeView;
 		const imagePath = (this.folderAndFilenameManagement && typeof (this.folderAndFilenameManagement as any).getImagePath === 'function')
 			? (this.folderAndFilenameManagement as any).getImagePath(img)
 			: null;
 		const isExternal = !imagePath;
 		const matches = await this.findImageMatches(editor, imagePath, isExternal);
-	
+
 		if (matches.length === 0) {
 			new Notice('Failed to find image link in the current note.');
 			return;
 		}
-	
+
 		const handleConfirmation = async () => {
 			for (const match of matches) {
 				const updatedLine = await this.updateImageLinkWithDimensions(
@@ -403,22 +404,22 @@ export class ContextMenu extends Component {
 				);
 				editor.setLine(match.lineNumber, updatedLine);
 			}
-			new Notice('Image caption and dimensions updated successfully.');
+			new Notice(t("MSG_CAPTION_UPDATED"));
 			this.plugin.captionManager?.refresh();
 		};
-	
+
 		if (matches.length > 1) {
 			new ConfirmDialog(
 				this.app,
-				"Confirm Updates",
-				`Found ${matches.length} matching image links. Update all?`,
-				"Update",
+				t("DIALOG_CONFIRM_TITLE"),
+				t("DIALOG_CONFIRM_MSG").replace("{0}", matches.length.toString()),
+				t("BUTTON_UPDATE"),
 				handleConfirmation
 			).open();
 		} else {
 			await handleConfirmation();
 		}
-	
+
 		menu.hide();
 	}
 
@@ -485,14 +486,14 @@ export class ContextMenu extends Component {
 				nameGroup.appendChild(nameIcon);
 
 				const nameLabel = document.createElement('label');
-				nameLabel.textContent = 'Name:';
+				nameLabel.textContent = t("LABEL_NAME");
 				nameLabel.setAttribute('for', 'image-converter-name-input');
 				nameGroup.appendChild(nameLabel);
 
 				const nameInput = document.createElement('input');
 				nameInput.type = 'text';
 				nameInput.value = fileNameWithoutExt;
-				nameInput.placeholder = 'Enter a new image name';
+				nameInput.placeholder = t("PLACEHOLDER_NAME");
 				nameInput.className = 'image-converter-contextmenu-name-input';
 				nameInput.id = 'image-converter-name-input';
 				if (!isImageResolvable) {
@@ -510,14 +511,14 @@ export class ContextMenu extends Component {
 				pathGroup.appendChild(pathIcon);
 
 				const pathLabel = document.createElement('label');
-				pathLabel.textContent = 'Folder:';
+				pathLabel.textContent = t("LABEL_FOLDER_CONTEXT");
 				pathLabel.setAttribute('for', 'image-converter-path-input');
 				pathGroup.appendChild(pathLabel);
 
 				const pathInput = document.createElement('input');
 				pathInput.type = 'text';
 				pathInput.value = directoryPath;
-				pathInput.placeholder = 'Enter a new path for the image';
+				pathInput.placeholder = t("PLACEHOLDER_PATH");
 				pathInput.className = 'image-converter-contextmenu-path-input';
 				pathInput.id = 'image-converter-path-input';
 				if (!isImageResolvable) {
@@ -535,13 +536,13 @@ export class ContextMenu extends Component {
 				captionGroup.appendChild(captionIcon);
 
 				const captionLabel = document.createElement('label');
-				captionLabel.textContent = 'Caption:';
+				captionLabel.textContent = t("LABEL_CAPTION");
 				captionLabel.setAttribute('for', 'image-converter-caption-input');
 				captionGroup.appendChild(captionLabel);
 
 				const captionInput = document.createElement('input');
 				captionInput.type = 'text';
-				captionInput.placeholder = 'Loading caption...';
+				captionInput.placeholder = t("PLACEHOLDER_CAPTION_LOADING");
 				captionInput.className = 'image-converter-contextmenu-caption-input';
 				captionInput.id = 'image-converter-caption-input';
 				captionGroup.appendChild(captionInput);
@@ -556,7 +557,7 @@ export class ContextMenu extends Component {
 				dimensionsGroup.appendChild(dimensionsIcon);
 
 				const dimensionsLabel = document.createElement('label');
-				dimensionsLabel.textContent = 'Size:';
+				dimensionsLabel.textContent = t("LABEL_SIZE");
 				dimensionsLabel.setAttribute('for', 'image-converter-width-input');
 				dimensionsGroup.appendChild(dimensionsLabel);
 
@@ -564,7 +565,7 @@ export class ContextMenu extends Component {
 				const widthInput = document.createElement('input');
 				widthInput.type = 'number';
 				widthInput.min = '1';
-				widthInput.placeholder = 'W';
+				widthInput.placeholder = t("PLACEHOLDER_WIDTH");
 				widthInput.className = 'image-converter-contextmenu-dimension-input';
 				widthInput.id = 'image-converter-width-input';
 
@@ -572,7 +573,7 @@ export class ContextMenu extends Component {
 				const heightInput = document.createElement('input');
 				heightInput.type = 'number';
 				heightInput.min = '1';
-				heightInput.placeholder = 'H';
+				heightInput.placeholder = t("PLACEHOLDER_HEIGHT");
 				heightInput.className = 'image-converter-contextmenu-dimension-input';
 				heightInput.id = 'image-converter-height-input';
 
@@ -612,14 +613,14 @@ export class ContextMenu extends Component {
 					this.registerDomEvent(input, 'click', this.stopPropagationHandler);
 					this.registerDomEvent(input, 'keydown', this.stopPropagationHandler);
 				});
-				
+
 
 				this.registerDomEvent(document, 'click', this.documentClickHandler);
 
 				// Load the current caption asynchronously
 				this.loadCurrentCaption(img, activeFile).then(currentCaption => {
 					captionInput.value = currentCaption;
-					captionInput.placeholder = 'Enter a custom caption';
+					captionInput.placeholder = t("PLACEHOLDER_CAPTION");
 				});
 
 				// Single confirm button handler
@@ -708,18 +709,18 @@ export class ContextMenu extends Component {
 		newDirectoryPath = await this.variableProcessor.processTemplate(newDirectoryPath, variableContext);
 
 		if (!newName.trim()) {
-			new Notice('Please enter a new file name.');
+			new Notice(t("MSG_ENTER_NEW_NAME"));
 			return;
 		}
 
 		newName = this.folderAndFilenameManagement.sanitizeFilename(newName);
 
 		if (/^[.]+$/.test(newName.trim())) {
-			new Notice('Please enter a valid file name');
+			new Notice(t("MSG_ENTER_VALID_NAME"));
 			return;
 		}
 		if (!newDirectoryPath.trim()) {
-			new Notice('Please enter a new path.');
+			new Notice(t("MSG_ENTER_NEW_PATH"));
 			return;
 		}
 
@@ -733,7 +734,7 @@ export class ContextMenu extends Component {
 						await this.folderAndFilenameManagement.ensureFolderExists(newDirectoryPath);
 						await this.app.fileManager.renameFile(abstractFile, newPath);
 						img.src = this.app.vault.getResourcePath(abstractFile);
-						new Notice('Image name updated successfully');
+						new Notice(t("MSG_NAME_UPDATED"));
 					}
 				}
 				// Handle Movea
@@ -749,13 +750,13 @@ export class ContextMenu extends Component {
 						if (oldPath.toLowerCase() === newPath.toLowerCase()) {
 							const safeRenameSuccessful = await this.folderAndFilenameManagement.safeRenameFile(abstractFile, newPath);
 							if (safeRenameSuccessful) {
-								new Notice('Image path updated (case-sensitive change).');
+								new Notice(t("MSG_PATH_UPDATED_CASE"));
 							} else {
-								new Notice('Image path update failed (case-sensitive change).');
+								new Notice(t("MSG_PATH_UPDATE_FAILED_CASE"));
 							}
 						} else {
 							await this.app.fileManager.renameFile(abstractFile, newPath);
-							new Notice('Image path updated successfully');
+							new Notice(t("MSG_PATH_UPDATED"));
 						}
 						img.src = this.app.vault.getResourcePath(abstractFile);
 						const leaf = this.app.workspace.getMostRecentLeaf();
@@ -768,7 +769,7 @@ export class ContextMenu extends Component {
 				}
 			} catch (error) {
 				console.error('Failed to update image path:', error);
-				new Notice('Failed to update image path');
+				new Notice(t("MSG_PATH_UPDATE_FAILED"));
 			}
 		}
 		menu.hide();
@@ -786,7 +787,7 @@ export class ContextMenu extends Component {
 	addOpenInNewWindowMenuItem(menu: Menu, img: HTMLImageElement) {
 		menu.addItem((item) => {
 			item
-				.setTitle('Open in new window')
+				.setTitle(t("MENU_OPEN_NEW_WINDOW"))
 				.setIcon('square-arrow-out-up-right')
 				.onClick(async () => {
 					try {
@@ -801,7 +802,7 @@ export class ContextMenu extends Component {
 							}
 						}
 					} catch (error) {
-						new Notice('Failed to open in new window');
+						new Notice(t("MSG_FAIL_OPEN_WINDOW"));
 						console.error(error);
 					}
 				});
@@ -1103,7 +1104,7 @@ export class ContextMenu extends Component {
 	 */
 	addCutImageMenuItem(menu: Menu, event: MouseEvent) {
 		menu.addItem((item) => {
-			item.setTitle('Cut')
+			item.setTitle(t("MENU_CUT"))
 				.setIcon('scissors')
 				.onClick(async () => {
 					await this.cutImageAndLinkFromNote(event);
@@ -1122,19 +1123,19 @@ export class ContextMenu extends Component {
 
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!activeView) {
-			new Notice('No active Markdown view found');
+			new Notice(t("MSG_NO_ACTIVE_VIEW"));
 			return;
 		}
 
 		try {
-				const { editor } = activeView;
+			const { editor } = activeView;
 
 			if (src.startsWith('data:image/')) {
 				const found = await this.processBase64Image(editor, src, async (editor, lineNumber, line, fullMatch) => {
 					await this.removeImageLinkFromEditor(editor, lineNumber, line, fullMatch, true);
 				});
 				if (!found) {
-					new Notice('Failed to find Base64 image link');
+					new Notice(t("MSG_FAIL_BASE64_LINK"));
 				}
 				return;
 			}
@@ -1149,7 +1150,7 @@ export class ContextMenu extends Component {
 			const matches = await this.findImageMatches(editor, imagePath, isExternal);
 
 			if (matches.length === 0) {
-				new Notice('Failed to find image link in the current note.');
+				new Notice(t("MSG_LINK_NOT_FOUND"));
 				return;
 			}
 
@@ -1157,21 +1158,21 @@ export class ContextMenu extends Component {
 				for (const match of matches) {
 					await this.removeImageLinkFromEditor(editor, match.lineNumber, match.line, match.fullMatch, true);
 				}
-				new Notice('Image link(s) cut from note and copied to clipboard');
+				new Notice(t("MSG_CUT_COPIED"));
 			};
 
 			if (matches.length > 1) {
 				// Show confirmation modal
 				new ConfirmDialog(
 					this.app,
-					"Confirm Cut", // Title
-					`Found ${matches.length} matching image links inside current note. Do you want to cut all of them?`, // Message
-					"Cut", // Confirm text
+					t("DIALOG_CUT_TITLE"),
+					t("DIALOG_CUT_MSG").replace("{0}", matches.length.toString()),
+					t("BUTTON_CUT"),
 					async () => { // Callback for confirmation
 						for (const match of matches) {
 							await this.removeImageLinkFromEditor(editor, match.lineNumber, match.line, match.fullMatch, true);
 						}
-						new Notice('Image link(s) cut from note and copied to clipboard');
+						new Notice(t("MSG_CUT_COPIED"));
 					}
 				).open();
 			} else {
@@ -1181,7 +1182,7 @@ export class ContextMenu extends Component {
 
 		} catch (error) {
 			console.error('Error cutting image:', error);
-			new Notice('Failed to cut image. Check console for details.');
+			new Notice(t("MSG_FAIL_CUT"));
 		}
 	}
 
@@ -1197,7 +1198,7 @@ export class ContextMenu extends Component {
 	addCopyImageMenuItem(menu: Menu, event: MouseEvent) {
 		menu.addItem((item: MenuItem) =>
 			item
-				.setTitle('Copy image')
+				.setTitle(t("MENU_COPY_IMAGE"))
 				.setIcon('copy')
 				.onClick(async () => {
 					await this.copyImageToClipboard(event);
@@ -1231,10 +1232,10 @@ export class ContextMenu extends Component {
 				const blob = await response.blob();
 				const item = new ClipboardItem({ [blob.type]: blob });
 				await navigator.clipboard.write([item]);
-				new Notice('Image copied to clipboard');
+				new Notice(t("MSG_COPY_SUCCESS"));
 			} catch (error) {
 				console.error('Failed to copy image:', error);
-				new Notice('Failed to copy image to clipboard');
+				new Notice(t("MSG_COPY_FAIL"));
 			}
 		});
 
@@ -1253,7 +1254,7 @@ export class ContextMenu extends Component {
 	addCopyBase64ImageMenuItem(menu: Menu, event: MouseEvent) {
 		menu.addItem((item: MenuItem) =>
 			item
-				.setTitle('Copy as Base64 encoded image')
+				.setTitle(t("MENU_COPY_BASE64"))
 				.setIcon('copy')
 				.onClick(() => {
 					this.copyImageAsBase64(event);
@@ -1283,10 +1284,10 @@ export class ContextMenu extends Component {
 				ctx.drawImage(img, 0, 0);
 				const dataURL = canvas.toDataURL();
 				await navigator.clipboard.writeText(`<img src="${dataURL}"/>`);
-				new Notice('Image copied to clipboard as Base64');
+				new Notice(t("MSG_COPY_BASE64_SUCCESS"));
 			} catch (error) {
 				console.error('Failed to copy image as Base64:', error);
-				new Notice('Failed to copy image as Base64');
+				new Notice(t("MSG_COPY_BASE64_FAIL"));
 			}
 		});
 
@@ -1306,7 +1307,7 @@ export class ContextMenu extends Component {
 	 */
 	addProcessImageMenuItem(menu: Menu, img: HTMLImageElement, event: MouseEvent) {
 		menu.addItem((item) => {
-			item.setTitle("Convert/compress...")
+			item.setTitle(t("MENU_CONVERT_COMPRESS"))
 				.setIcon("cog")
 				.onClick(async () => {
 
@@ -1314,28 +1315,28 @@ export class ContextMenu extends Component {
 						// Ensure there is an active markdown view
 						const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 						if (!activeView) {
-							new Notice("No active markdown view");
+							new Notice(t("MSG_NO_ACTIVE_VIEW"));
 							return;
 						}
 
 						// Get the current note being viewed
 						const currentFile = activeView.file;
 						if (!currentFile) {
-							new Notice("No current file found");
+							new Notice(t("MSG_NO_CURRENT_FILE"));
 							return;
 						}
 
 						// Extract the filename from the img's src attribute
 						const srcAttribute = img.getAttribute("src");
 						if (!srcAttribute) {
-							new Notice("No source attribute found on the image");
+							new Notice(t("MSG_NO_SOURCE_ATTR"));
 							return;
 						}
 
 						// Decode the filename from the src attribute
 						const filename = decodeURIComponent(srcAttribute.split("?")[0].split("/").pop() || "");
 						if (!filename) {
-							new Notice("Unable to extract filename from the image source");
+							new Notice(t("MSG_NO_FILENAME"));
 							return;
 						}
 
@@ -1343,7 +1344,7 @@ export class ContextMenu extends Component {
 						const matchingFiles = this.app.vault.getFiles().filter((file) => file.name === filename);
 						if (matchingFiles.length === 0) {
 							console.error("No matching files found for:", filename);
-							new Notice(`Unable to find image: ${filename}`);
+							new Notice(t("MSG_NO_MATCHING_FILES").replace("{0}", filename));
 							return;
 						}
 
@@ -1351,7 +1352,7 @@ export class ContextMenu extends Component {
 						const file =
 							matchingFiles.length === 1
 								? matchingFiles[0]
-							: matchingFiles.find((fileItem) => {
+								: matchingFiles.find((fileItem) => {
 									const parentPath = currentFile.parent?.path;
 									return parentPath ? fileItem.path.startsWith(parentPath) : false;
 								}) || matchingFiles[0];
@@ -1360,12 +1361,12 @@ export class ContextMenu extends Component {
 						if (file instanceof TFile) {
 							new ProcessSingleImageModal(this.app, this.plugin, file).open();
 						} else {
-							new Notice("Error: Not a valid image file.");
+							new Notice(t("MSG_NOT_IMAGE_FILE"));
 						}
 
 					} catch (error) {
 						console.error("Error processing image:", error);
-						new Notice("Error processing image");
+						new Notice(t("MSG_PROCESS_ERROR"));
 					}
 				});
 		});
@@ -1383,7 +1384,7 @@ export class ContextMenu extends Component {
 	addCropRotateFlipMenuItem(menu: Menu, img: HTMLImageElement) {
 		menu.addItem((item) => {
 			item
-				.setTitle('Crop/Rotate/Flip')
+				.setTitle(t("MENU_CROP_FLIP"))
 				.setIcon('scissors')
 				.onClick(async () => {
 					// Get the active markdown view
@@ -1396,7 +1397,7 @@ export class ContextMenu extends Component {
 					// Get the current file (note) being viewed
 					const currentFile = activeView.file;
 					if (!currentFile) {
-						new Notice('No current file found');
+						new Notice(t("MSG_NO_CURRENT_FILE"));
 						return;
 					}
 
@@ -1417,7 +1418,7 @@ export class ContextMenu extends Component {
 
 					if (matchingFiles.length === 0) {
 						console.error('No matching files found for:', filename);
-						new Notice(`Unable to find image: ${filename}`);
+						new Notice(t("MSG_NO_MATCHING_FILES").replace("{0}", filename));
 						return;
 					}
 
@@ -1435,7 +1436,7 @@ export class ContextMenu extends Component {
 					if (file instanceof TFile) {
 						new Crop(this.app, file).open();
 					} else {
-						new Notice('Unable to locate image file');
+						new Notice(t("MSG_VISUAL_LOCATE_ERROR"));
 					}
 				});
 		});
@@ -1449,7 +1450,7 @@ export class ContextMenu extends Component {
 	addAnnotateImageMenuItem(menu: Menu, img: HTMLImageElement) {
 		menu.addItem((item) => {
 			item
-				.setTitle('Annotate image')
+				.setTitle(t("MENU_ANNOTATE"))
 				.setIcon('pencil')
 				.onClick(async () => {
 					try {
@@ -1470,7 +1471,7 @@ export class ContextMenu extends Component {
 						// Get the filename from the src attribute
 						const srcAttribute = img.getAttribute('src');
 						if (!srcAttribute) {
-							new Notice('No source attribute found');
+							new Notice(t("MSG_NO_SOURCE_ATTR"));
 							return;
 						}
 
@@ -1485,7 +1486,7 @@ export class ContextMenu extends Component {
 
 						if (matchingFiles.length === 0) {
 							console.error('No matching files found for:', filename);
-							new Notice(`Unable to find image: ${filename}`);
+							new Notice(t("MSG_NO_MATCHING_FILES").replace("{0}", filename));
 							return;
 						}
 
@@ -1504,7 +1505,7 @@ export class ContextMenu extends Component {
 							// console.log('Found file:', file.path);
 							new ImageAnnotationModal(this.app, this.plugin, file).open();
 						} else {
-							new Notice('Unable to locate image file');
+							new Notice(t("MSG_VISUAL_LOCATE_ERROR"));
 						}
 					} catch (error) {
 						console.error('Image location error:', error);
@@ -1526,7 +1527,7 @@ export class ContextMenu extends Component {
 	addShowInNavigationMenuItem(menu: Menu, img: HTMLImageElement) {
 		menu.addItem((item) => {
 			item
-				.setTitle('Show in navigation')
+				.setTitle(t("MENU_SHOW_NAV"))
 				.setIcon('folder-open')
 				.onClick(async () => {
 					await this.showImageInNavigation(img);
@@ -1575,7 +1576,7 @@ export class ContextMenu extends Component {
 				}
 			}
 		} catch (error) {
-			new Notice('Failed to show in navigation');
+			new Notice(t("MSG_FAIL_SHOW_NAV"));
 			console.error(error);
 		}
 	}
@@ -1592,7 +1593,7 @@ export class ContextMenu extends Component {
 	addShowInSystemExplorerMenuItem(menu: Menu, img: HTMLImageElement) {
 		menu.addItem((item) => {
 			item
-				.setTitle('Show in system explorer')
+				.setTitle(t("MENU_SHOW_EXPLORER"))
 				.setIcon('arrow-up-right')
 				.onClick(async () => {
 					await this.showImageInSystemExplorer(img);
@@ -1612,7 +1613,7 @@ export class ContextMenu extends Component {
 				await this.app.showInFolder(imagePath);
 			}
 		} catch (error) {
-			new Notice('Failed to show in system explorer');
+			new Notice(t("MSG_FAIL_SHOW_EXPLORER"));
 			console.error(error);
 		}
 	}
@@ -1637,7 +1638,7 @@ export class ContextMenu extends Component {
 		}
 
 		menu.addItem((item) => {
-			item.setTitle('Upload to Cloud')
+			item.setTitle(t("MENU_UPLOAD_CLOUD"))
 				.setIcon('cloud-upload')
 				.onClick(async () => {
 					await this.uploadImageToCloud(img);
@@ -1655,7 +1656,7 @@ export class ContextMenu extends Component {
 			// Get image path
 			const imagePath = this.folderAndFilenameManagement.getImagePath(img);
 			if (!imagePath) {
-				new Notice('⚠️ Cannot resolve image path. This may be a network image.');
+				new Notice(t("MSG_RESOLVE_PATH_FAIL"));
 				console.warn('[Upload] Cannot resolve image path for:', img.getAttribute('src'));
 				return;
 			}
@@ -1663,7 +1664,7 @@ export class ContextMenu extends Component {
 			// Get TFile object
 			const file = this.app.vault.getAbstractFileByPath(imagePath);
 			if (!(file instanceof TFile)) {
-				new Notice('⚠️ Image file not found in vault');
+				new Notice(t("MSG_FILE_NOT_FOUND"));
 				console.warn('[Upload] File not found:', imagePath);
 				return;
 			}
@@ -1672,7 +1673,7 @@ export class ContextMenu extends Component {
 			await this.plugin.uploadSingleFile(file);
 		} catch (error) {
 			console.error('[Upload] Error uploading image:', error);
-			new Notice(`Upload failed: ${error.message}`);
+			new Notice(t("MSG_UPLOAD_FAILED").replace("{0}", error.message));
 		}
 	}
 
@@ -1687,7 +1688,7 @@ export class ContextMenu extends Component {
 	 */
 	addDeleteImageAndLinkMenuItem(menu: Menu, event: MouseEvent) {
 		menu.addItem((item) => {
-			item.setTitle('Auto Delete Image and Link')
+			item.setTitle(t("MENU_DELETE_LINK"))
 				.setIcon('trash')
 				.onClick(async () => {
 					await this.deleteImageAndLinkFromNote(event);
@@ -1709,7 +1710,7 @@ export class ContextMenu extends Component {
 
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!activeView) {
-			new Notice('No active Markdown view found');
+			new Notice(t("MSG_NO_ACTIVE_VIEW"));
 			return;
 		}
 
@@ -1729,7 +1730,7 @@ export class ContextMenu extends Component {
 
 			// Check if it's a cloud image
 			const isCloudImage = this.cloudDeleter.isCloudImage(src);
-			
+
 			if (isCloudImage) {
 				// Handle cloud image deletion
 				await this.deleteCloudImageAndLink(editor, src);
@@ -1758,7 +1759,7 @@ export class ContextMenu extends Component {
 
 
 			if (uniqueMatches.length === 0) {
-				new Notice('Failed to find unique image links in the current note.'); // Should not happen ideally as 'matches.length > 0' check is before, but good to have.
+				new Notice(t("MSG_FAIL_FIND_UNIQUE")); // Should not happen ideally as 'matches.length > 0' check is before, but good to have.
 				return;
 			}
 
@@ -1772,14 +1773,14 @@ export class ContextMenu extends Component {
 					await this.removeImageLinkFromEditor(editor, match.lineNumber, match.line, match.fullMatch, false);
 				}
 
-				new Notice('Image link(s) removed from note');
+				new Notice(t("MSG_REMOVED_LINKS"));
 
 				// Delete the actual local image file if it exists in the vault
 				if (imagePath) {
 					const imageFile = this.app.vault.getAbstractFileByPath(imagePath);
 					if (imageFile instanceof TFile) {
 						await this.app.vault.trash(imageFile, true);
-						new Notice('Local image file moved to trash');
+						new Notice(t("MSG_TRASHED_FILE"));
 					}
 				}
 			};
@@ -1795,7 +1796,7 @@ export class ContextMenu extends Component {
 
 				// Add introductory text
 				const introText = document.createElement('p');
-				introText.textContent = `Found ${uniqueMatches.length} unique matching image links inside current note. Do you want to delete all of them?`; // Updated message
+				introText.textContent = t("MSG_FOUND_IMAGE_REFS").replace("{0}", uniqueMatches.length.toString()); // Updated message
 				messageContainer.appendChild(introText);
 
 				// Add details to the message container
@@ -1810,22 +1811,22 @@ export class ContextMenu extends Component {
 
 				new ConfirmDialog(
 					this.app,
-					"Confirm Delete",
+					t("DIALOG_DELETE_TITLE"),
 					detailsFragment, // Pass the fragment
-					"Delete",
+					t("BUTTON_DELETE"),
 					handleConfirmation
 				).open();
 			} else if (uniqueMatches.length === 1) { // if only 1 unique match, proceed directly without confirmation for multiple
 				await handleConfirmation();
 			} else {
 				// This case should not happen because of the initial check `if (uniqueMatches.length === 0)` but for completeness.
-				new Notice('No unique image links found to delete.');
+				new Notice(t("MSG_NO_UNIQUE_LINKS"));
 			}
 
 
 		} catch (error) {
 			console.error('Error deleting image:', error);
-			new Notice('Failed to delete image. Check console for details.');
+			new Notice(t("MSG_FAIL_DELETE"));
 		}
 	}
 
@@ -1860,18 +1861,18 @@ export class ContextMenu extends Component {
 			const uniqueMatches: ImageMatch[] = Array.from(uniqueMatchesMap.values());
 
 			if (uniqueMatches.length === 0) {
-				new Notice('Failed to find unique cloud image links in the current note.');
+				new Notice(t("MSG_FAIL_FIND_UNIQUE"));
 				return;
 			}
 
 			// 删除单个图片链接和云端文件的函数
 			const deleteSingleImage = async (match: ImageMatch) => {
 				await this.removeImageLinkFromEditor(editor, match.lineNumber, match.line, match.fullMatch, false);
-				new Notice('Cloud image link removed from note');
+				new Notice(t("MSG_CLOUD_LINK_REMOVED"));
 
 				// Try to delete from cloud storage (PicList only)
 				const cloudDeleteSuccess = await this.cloudDeleter.deleteImage({ url: cloudUrl });
-				
+
 				if (cloudDeleteSuccess) {
 					new Notice('Cloud image deleted successfully!');
 				} else {
@@ -1894,19 +1895,19 @@ export class ContextMenu extends Component {
 					await this.removeImageLinkFromEditor(editor, match.lineNumber, match.line, match.fullMatch, false);
 				}
 
-				new Notice(`Removed ${uniqueMatches.length} cloud image link(s) from note`);
+				new Notice(t("MSG_REMOVED_CLOUD_LINKS").replace("{0}", uniqueMatches.length.toString()));
 
 				// Try to delete from cloud storage (PicList only)
 				const cloudDeleteSuccess = await this.cloudDeleter.deleteImage({ url: cloudUrl });
-				
+
 				if (cloudDeleteSuccess) {
-					new Notice('Cloud image deleted successfully!');
+					new Notice(t("MSG_CLOUD_DELETED"));
 				} else {
 					const uploader = this.plugin.settings.cloudUploadSettings.uploader;
 					if (uploader === 'PicList') {
-						new Notice('Cloud image link removed, but failed to delete from cloud storage. Image may not be in upload history.');
+						new Notice(t("MSG_CLOUD_DELETE_FAIL"));
 					} else {
-						new Notice(`Cloud image link removed. (${uploader} does not support automatic deletion)`);
+						new Notice(t("MSG_CLOUD_MANUAL_DELETE").replace("{0}", uploader));
 					}
 				}
 			};
@@ -1921,14 +1922,14 @@ export class ContextMenu extends Component {
 				detailsFragment.appendChild(messageContainer);
 
 				const introText = document.createElement('p');
-				introText.textContent = `Found ${uniqueMatches.length} references to this cloud image in the current note. What would you like to delete?`;
+				introText.textContent = t("MSG_FOUND_CLOUD_REFS").replace("{0}", uniqueMatches.length.toString());
 				messageContainer.appendChild(introText);
 
 				// 列出所有引用位置
 				const listTitle = document.createElement('p');
 				listTitle.style.fontWeight = 'bold';
 				listTitle.style.marginTop = '10px';
-				listTitle.textContent = 'References:';
+				listTitle.textContent = t("LABEL_REFERENCES");
 				messageContainer.appendChild(listTitle);
 
 				uniqueMatches.forEach((match, index) => {
@@ -1943,7 +1944,7 @@ export class ContextMenu extends Component {
 
 				// 创建自定义确认对话框，带有两个按钮
 				const modal = new Modal(this.app);
-				modal.titleEl.setText('Delete Cloud Image');
+				modal.titleEl.setText(t("DIALOG_DELETE_CLOUD_TITLE"));
 				modal.contentEl.empty();
 				modal.contentEl.appendChild(detailsFragment);
 
@@ -1955,21 +1956,21 @@ export class ContextMenu extends Component {
 				buttonContainer.style.marginTop = '20px';
 
 				// "Delete Only This One" 按钮
-				const deleteOneBtn = buttonContainer.createEl('button', { text: 'Delete Only This One' });
+				const deleteOneBtn = buttonContainer.createEl('button', { text: t("BUTTON_DELETE_ONE") });
 				deleteOneBtn.addEventListener('click', async () => {
 					modal.close();
 					await deleteSingleImage(uniqueMatches[0]); // 删除第一个匹配（用户点击的）
 				});
 
 				// "Delete All" 按钮
-				const deleteAllBtn = buttonContainer.createEl('button', { text: `Delete All ${uniqueMatches.length}`, cls: 'mod-warning' });
+				const deleteAllBtn = buttonContainer.createEl('button', { text: t("BUTTON_DELETE_ALL").replace("{0}", uniqueMatches.length.toString()), cls: 'mod-warning' });
 				deleteAllBtn.addEventListener('click', async () => {
 					modal.close();
 					await deleteAllImages();
 				});
 
 				// "Cancel" 按钮
-				const cancelBtn = buttonContainer.createEl('button', { text: 'Cancel' });
+				const cancelBtn = buttonContainer.createEl('button', { text: t("BUTTON_CANCEL") });
 				cancelBtn.addEventListener('click', () => {
 					modal.close();
 				});
@@ -1979,7 +1980,7 @@ export class ContextMenu extends Component {
 
 		} catch (error) {
 			console.error('[Cloud Delete] Error deleting cloud image:', error);
-			new Notice('Failed to delete cloud image. Check console for details.');
+			new Notice(t("MSG_FAIL_DELETE_CLOUD"));
 		}
 	}
 

@@ -11,6 +11,7 @@ import { LinkFormatPreset } from "../../settings/LinkFormatSettings";
 import { NonDestructiveResizePreset } from "../../settings/NonDestructiveResizeSettings";
 import { VariableProcessor } from "../../local/VariableProcessor";
 import ImageConverterPlugin from "../../main";
+import { t } from "../../lang/helpers";
 
 export class PresetSelectionModal extends Modal {
     private variableProcessor: VariableProcessor;
@@ -110,7 +111,7 @@ export class PresetSelectionModal extends Modal {
     private initializeSessionState(): void {
         // Load from saved session state if available, otherwise use current preset templates
         const sessionState = this.settings.modalSessionState;
-        
+
         // Initialize folder override
         if (sessionState?.customFolderOverride !== undefined) {
             this.temporaryCustomFolderOverride = sessionState.customFolderOverride;
@@ -154,19 +155,19 @@ export class PresetSelectionModal extends Modal {
 
         // Compact single-column layout
         const mainContainer = contentEl.createDiv("image-converter-compact-container");
-        
+
         // Compact header with title and mini global preset
         this.createCompactHeader(mainContainer);
-        
+
         // Input section with inline presets
         this.createCompactInputSection(mainContainer);
-        
+
         // Processing options in compact grid
         this.createCompactProcessingSection(mainContainer);
-        
+
         // Compact preview
         this.createCompactPreview(mainContainer);
-        
+
         // Action buttons
         this.createActionButtons(mainContainer);
 
@@ -184,24 +185,24 @@ export class PresetSelectionModal extends Modal {
 
     private createCompactHeader(container: HTMLElement) {
         const header = container.createDiv("image-converter-compact-header");
-        
+
         // Title on the left
-        header.createEl("h2", { 
-            text: "Image Converter",
+        header.createEl("h2", {
+            text: t("MODAL_PRESET_TITLE"),
             cls: "image-converter-compact-title"
         });
-        
+
         // Variables button in the middle
         const variablesButton = header.createDiv("image-converter-variables-header");
         new Setting(variablesButton)
             .addButton((button) => {
                 button
-                    .setButtonText("{Variables}")
-                    .setTooltip("Show available variables")
+                    .setButtonText(t("BUTTON_VARIABLES"))
+                    .setTooltip(t("TOOLTIP_SHOW_VARIABLES"))
                     .onClick(() => this.showAvailableVariables());
                 button.buttonEl.addClass("image-converter-variables-header-btn");
             });
-        
+
         // Global preset dropdown on the right
         const globalMini = header.createDiv("image-converter-global-mini");
         this.createGlobalPresetDropdown(globalMini);
@@ -209,19 +210,19 @@ export class PresetSelectionModal extends Modal {
 
     private createCompactInputSection(container: HTMLElement) {
         const inputSection = container.createDiv("image-converter-compact-inputs");
-        
+
         // Folder input with inline preset
         this.createCompactInputWithPreset(
             inputSection,
-            "📂 Folder",
-            "Temporarily overwrite path defined in selected preset e.g.: assets/{YYYY}/{MM}",
-            "Where to save the image",
+            "📂 " + t("LABEL_FOLDER"),
+            t("DESC_FOLDER_OVERWRITE"),
+            t("PLACEHOLDER_FOLDER"),
             this.selectedFolderPreset,
             this.settings.folderPresets,
             (text) => { this.customFolderText = text; },
             (value) => {
                 this.selectedFolderPreset = this.settings.folderPresets.find(preset => preset.name === value) || this.settings.folderPresets[0];
-                
+
                 // Update session override and UI when preset changes
                 this.temporaryCustomFolderOverride = this.selectedFolderPreset.customTemplate || "";
                 if (this.customFolderText) {
@@ -235,15 +236,15 @@ export class PresetSelectionModal extends Modal {
         // Filename input with inline preset
         this.createCompactInputWithPreset(
             inputSection,
-            "📄 Filename", 
-            "e.g., {imagename}-{timestamp}",
-            "What to name the file",
+            "📄 " + t("LABEL_FILENAME"),
+            t("DESC_FILENAME_TEMPLATE"),
+            t("PLACEHOLDER_FILENAME"),
             this.selectedFilenamePreset,
             this.settings.filenamePresets,
             (text) => { this.customFilenameText = text; },
             (value) => {
                 this.selectedFilenamePreset = this.settings.filenamePresets.find(preset => preset.name === value) || this.settings.filenamePresets[0];
-                
+
                 // Update session override and UI when preset changes
                 this.temporaryCustomFilenameOverride = this.selectedFilenamePreset.customTemplate || "";
                 if (this.customFilenameText) {
@@ -268,44 +269,44 @@ export class PresetSelectionModal extends Modal {
         onSettingCreated: (setting: Setting) => void
     ) {
         const group = container.createDiv("image-converter-compact-input-group");
-        
+
         // Row 1: Label and Dropdown
         const labelRow = group.createDiv("image-converter-label-dropdown-row");
-        
+
         // Label on the left
         labelRow.createEl("div", {
             text: label,
             cls: "image-converter-group-label"
         });
-          // Preset dropdown on the right
+        // Preset dropdown on the right
         const presetContainer = labelRow.createDiv("image-converter-preset-dropdown-container");
         const setting = new Setting(presetContainer)
             .setClass("image-converter-preset-dropdown-setting")
             .addDropdown((dropdown) => {
                 presets.forEach((preset) => {
                     dropdown.addOption(preset.name, preset.name);
-                });                dropdown.setValue(selectedPreset.name);
+                }); dropdown.setValue(selectedPreset.name);
                 dropdown.onChange(onPresetChange);
-                
+
                 // Apply compact styling to the dropdown using CSS classes
                 dropdown.selectEl.addClass("image-converter-compact-dropdown");
-                
+
                 // Extract the preset type from the label for data attribute
                 const presetType = label.replace("📂 ", "").replace("📄 ", "");
                 dropdown.selectEl.setAttribute('data-preset-type', presetType.toLowerCase());
             });
-        
+
         // Remove default setting styling
         setting.settingEl.addClass("image-converter-preset-dropdown-setting-item");
         setting.settingEl.addClass("image-converter-hide-name-desc");
-        
+
         // Row 2: Full-width input field
         const inputRow = group.createDiv("image-converter-input-row");
         const textSetting = new Setting(inputRow)
             .setClass("image-converter-text-setting")
             .addText((text) => {
                 onTextCreated(text);
-                
+
                 // Use session override value instead of directly modifying preset
                 let initialValue = "";
                 if (label.includes("📂")) {
@@ -318,7 +319,7 @@ export class PresetSelectionModal extends Modal {
                     // Fallback to preset template
                     initialValue = selectedPreset.customTemplate || "";
                 }
-                
+
                 text.setPlaceholder(placeholder)
                     .setValue(initialValue)
                     .onChange((value) => {
@@ -334,46 +335,46 @@ export class PresetSelectionModal extends Modal {
                 text.inputEl.addClass("image-converter-full-width-input");
                 return text;
             });
-        
+
         // Remove default setting styling
         textSetting.settingEl.addClass("image-converter-text-setting-item");
         textSetting.settingEl.addClass("image-converter-hide-name-desc");
-        
+
         onSettingCreated(setting);
     }
 
     private createCompactProcessingSection(container: HTMLElement) {
         // Bordered card container
         const card = container.createDiv("image-converter-processing-card");
-        
+
         // Persistent clickable header (always visible)
         const cardHeader = card.createDiv("image-converter-processing-card-header");
         cardHeader.addClass("image-converter-processing-card-header-clickable");
-        
+
         // Header content container
         const headerContent = cardHeader.createDiv("image-converter-processing-card-header-content");
-        
+
         // Preview text (will be updated by updateProcessingPreview)
         this.processingCardPreview = headerContent.createDiv("image-converter-processing-preview-text");
-        
+
         // Chevron icon (moved to the right)
         this.processingCardChevron = headerContent.createEl("span", {
             text: "▶",
             cls: "image-converter-processing-card-chevron"
         });
-        
+
         // Initialize preview content
         this.updateProcessingPreview();
 
         // Full content (shown when expanded)
         this.processingCardContent = card.createDiv("image-converter-processing-card-content");
         this.processingCardContent.addClass("image-converter-collapsed"); // Start collapsed
-        
+
         // Column Header Row 1: Format and Link
         const headerRow1 = this.processingCardContent.createDiv("image-converter-grid-header-row");
-        headerRow1.createEl("div", { text: "Format", cls: "image-converter-grid-header" });
-        headerRow1.createEl("div", { text: "Link", cls: "image-converter-grid-header" });
-        
+        headerRow1.createEl("div", { text: t("LABEL_FORMAT"), cls: "image-converter-grid-header" });
+        headerRow1.createEl("div", { text: t("LABEL_LINK"), cls: "image-converter-grid-header" });
+
         // Component Row 1: Format dropdown and Link dropdown
         const componentRow1 = this.processingCardContent.createDiv("image-converter-grid-component-row");
 
@@ -416,15 +417,15 @@ export class PresetSelectionModal extends Modal {
 
         // Column Header Row 2: Resize and Quality
         const headerRow2 = this.processingCardContent.createDiv("image-converter-grid-header-row");
-        headerRow2.createEl("div", { text: "Resize", cls: "image-converter-grid-header" });
-        const qualityHeader = headerRow2.createEl("div", { 
-            text: `Quality ${this.selectedConversionPreset.quality}%`, 
-            cls: "image-converter-grid-header image-converter-quality-header" 
+        headerRow2.createEl("div", { text: t("LABEL_RESIZE"), cls: "image-converter-grid-header" });
+        const qualityHeader = headerRow2.createEl("div", {
+            text: `${t("LABEL_QUALITY")} ${this.selectedConversionPreset.quality}%`,
+            cls: "image-converter-grid-header image-converter-quality-header"
         });
-        
+
         // Component Row 2: Resize dropdown and Quality slider
         const componentRow2 = this.processingCardContent.createDiv("image-converter-grid-component-row");
-        
+
         // Resize dropdown
         const resizeDiv = componentRow2.createDiv("image-converter-grid-component");
         this.resizePresetDropdown = new Setting(resizeDiv)
@@ -454,7 +455,7 @@ export class PresetSelectionModal extends Modal {
                     .onChange((value) => {
                         this.selectedConversionPreset.quality = value;
                         // Update the quality header text
-                        qualityHeader.textContent = `Quality ${value}%`;
+                        qualityHeader.textContent = `${t("LABEL_QUALITY")} ${value}%`;
                         this.updateProcessingPreview();
                     });
                 slider.sliderEl.addClass("image-converter-quality-slider");
@@ -470,17 +471,17 @@ export class PresetSelectionModal extends Modal {
 
     private createCompactPreview(container: HTMLElement) {
         const previewSection = container.createDiv("image-converter-compact-preview");
-        
+
         const previewHeader = previewSection.createDiv("image-converter-preview-header-compact");
-        previewHeader.createEl("span", { text: "Preview", cls: "image-converter-preview-title-compact" });
-        
+        previewHeader.createEl("span", { text: t("PREVIEW_TITLE"), cls: "image-converter-preview-title-compact" });
+
         this.previewContainer = previewSection.createDiv("image-converter-preview-content-compact");
     }
 
     private updateConversionSettings(container: HTMLElement): void {
         // This method is now simplified since we don't need to recreate the quality slider
         // The quality slider is already properly positioned in the 2x2 grid
-        
+
         // Only handle color depth for PNG if needed in future updates
         // For now, we keep the 2x2 grid layout clean and simple
     }
@@ -491,7 +492,7 @@ export class PresetSelectionModal extends Modal {
         new Setting(actionSection)
             .addButton((button: ButtonComponent) => {
                 button
-                    .setButtonText("Edit presets")
+                    .setButtonText(t("BUTTON_EDIT_PRESETS"))
                     .onClick(() => {
                         this.close();
                         const appWithSettings = this.app as { setting?: { open(): void; openTabById(id: string): void } };
@@ -499,13 +500,13 @@ export class PresetSelectionModal extends Modal {
                             appWithSettings.setting.open();
                             appWithSettings.setting.openTabById(this.plugin.manifest.id);
                         } else {
-                            new Notice("Unable to open settings.");
+                            new Notice(t("MSG_UNABLE_OPEN_SETTINGS"));
                         }
                     });
             })
             .addButton((button) => {
                 button
-                    .setButtonText("Apply")
+                    .setButtonText(t("BUTTON_APPLY"))
                     .setCta()
                     .onClick(() => {
                         // Save current session state to settings for persistence
@@ -519,7 +520,7 @@ export class PresetSelectionModal extends Modal {
                         // Apply session overrides to the copies
                         filenamePresetCopy.customTemplate = this.temporaryCustomFilenameOverride;
                         folderPresetCopy.customTemplate = this.temporaryCustomFolderOverride;
-                        
+
                         // Set folder preset type to "CUSTOM" when custom text is provided
                         if (this.temporaryCustomFolderOverride && this.temporaryCustomFolderOverride.trim() !== '') {
                             folderPresetCopy.type = "CUSTOM";
@@ -541,7 +542,7 @@ export class PresetSelectionModal extends Modal {
         // Global preset dropdown only (Variables button is now in the header)
         const miniSetting = new Setting(contentEl)
             .addDropdown((dropdown: DropdownComponent) => {
-                dropdown.addOption("none", "None");
+                dropdown.addOption("none", t("OPTION_NONE"));
                 this.settings.globalPresets.forEach((preset) => {
                     dropdown.addOption(preset.name, preset.name);
                 });
@@ -612,7 +613,7 @@ export class PresetSelectionModal extends Modal {
                     // Update session overrides and input fields
                     this.temporaryCustomFolderOverride = this.selectedFolderPreset.customTemplate || "";
                     this.temporaryCustomFilenameOverride = this.selectedFilenamePreset.customTemplate || "";
-                    
+
                     if (this.customFolderText) {
                         this.customFolderText.setValue(this.temporaryCustomFolderOverride);
                     }
@@ -675,12 +676,12 @@ export class PresetSelectionModal extends Modal {
                     const fullPath = [folderPath, filename].filter(Boolean).join("/");
 
                     newContent.createEl("div", {
-                        text: fullPath || "No path specified",
+                        text: fullPath || t("MSG_NO_PATH"),
                         cls: "image-converter-preview-path-compact"
                     });
                 } else {
                     newContent.createEl("div", {
-                        text: "Enter templates to see preview",
+                        text: t("MSG_ENTER_TEMPLATE"),
                         cls: "image-converter-preview-empty-compact"
                     });
                 }
@@ -695,7 +696,7 @@ export class PresetSelectionModal extends Modal {
                 if (this.previewContainer) {
                     this.previewContainer.empty();
                     this.previewContainer.createEl("div", {
-                        text: "Error generating preview",
+                        text: t("MSG_ERROR_PREVIEW"),
                         cls: "image-converter-preview-error-compact"
                     });
                 }
@@ -718,7 +719,7 @@ export class PresetSelectionModal extends Modal {
 
         // Create compact preview display
         const previewText = `${formatText} ${qualityText} • ${linkText} • ${resizeText}`;
-        
+
         // Update the text content of the preview div
         this.processingCardPreview.textContent = previewText;
     }

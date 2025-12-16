@@ -7,6 +7,7 @@ import {
 } from "obsidian";
 import ImageConverterPlugin from '../../main';
 import { BatchImageProcessor } from '../../local/BatchImageProcessor';
+import { t } from '../../lang/helpers';
 
 export class ProcessAllVaultModal extends Modal {
     private enlargeReduceSettings: Setting | null = null;
@@ -35,7 +36,7 @@ export class ProcessAllVaultModal extends Modal {
         this.resizeInputSettings = null;
         this.resizeInputsDiv = null;
         this.enlargeReduceDiv = null;
-    
+
         const { contentEl } = this;
         contentEl.empty();
     }
@@ -71,10 +72,10 @@ export class ProcessAllVaultModal extends Modal {
     private createHeader(contentEl: HTMLElement) {
         const headerContainer = contentEl.createDiv({ cls: "modal-header" });
         headerContainer.createEl("h2", {
-            text: "Convert, compress and resize all images",
+            text: t("MODAL_PROCESS_IMAGES_TITLE"),
         });
         headerContainer.createEl("h6", {
-            text: "in the Vault",
+            text: t("MODAL_IN_VAULT"),
             cls: "modal-subtitle",
         });
     }
@@ -82,22 +83,22 @@ export class ProcessAllVaultModal extends Modal {
     private createWarningMessage(contentEl: HTMLElement) {
         contentEl.createEl("p", {
             cls: "modal-warning",
-            text: "⚠️ This will modify all images in the Vault. Please ensure you have backups.",
+            text: t("MODAL_WARNING_BACKUP"),
         });
     }
 
     private createGeneralSettings(contentEl: HTMLElement) {
         new Setting(contentEl)
-            .setName("Convert to ⓘ")
+            .setName(t("SETTING_CONVERT_TO") + " ⓘ")
             .setDesc(
-                "Choose output format. 'Same as original' applies compression/resizing to current format."
+                t("SETTING_CONVERT_TO_DESC")
             )
             .setTooltip(
-                "Same as original: preserves current format while applying compression/resizing"
+                t("SETTING_CONVERT_TO_DESC")
             )
             .addDropdown((dropdown) => {
                 dropdown
-                    .addOption("disabled", "Same as original")
+                    .addOption("disabled", t("SETTING_SAME_AS_ORIGINAL"))
                     .addOptions({
                         webp: "WebP",
                         jpg: "JPG",
@@ -111,14 +112,14 @@ export class ProcessAllVaultModal extends Modal {
             });
 
         new Setting(contentEl)
-            .setName("Quality ⓘ")
-            .setDesc("Compression level (0-100)")
+            .setName(t("SETTING_QUALITY") + " ⓘ")
+            .setDesc(t("SETTING_QUALITY_DESC"))
             .setTooltip(
-                "100: No compression (original quality)\n75: Recommended (good balance)\n0-50: High compression (lower quality)"
+                t("SETTING_QUALITY_TOOLTIP")
             )
             .addText((text) => {
                 text
-                    .setPlaceholder("Enter quality (0-100)")
+                    .setPlaceholder(t("SETTING_QUALITY_DESC"))
                     .setValue(
                         (
                             this.plugin.settings.ProcessAllVaultquality * 100
@@ -141,23 +142,23 @@ export class ProcessAllVaultModal extends Modal {
 
     private createResizeSettings(contentEl: HTMLElement) {
         new Setting(contentEl)
-            .setName("Resize mode ⓘ")
+            .setName(t("SETTING_RESIZE_MODE") + " ⓘ")
             .setDesc(
-                "Choose how images should be resized. Note: Results are permanent."
+                t("SETTING_RESIZE_MODE_DESC")
             )
             .setTooltip(
-                "Fit: Maintains aspect ratio within dimensions\nFill: Exactly matches dimensions\nLongest Edge: Limits the longest side\nShortest Edge: Limits the shortest side\nWidth/Height: Constrains single dimension"
+                t("SETTING_RESIZE_TOOLTIP")
             )
             .addDropdown((dropdown) => {
                 dropdown
                     .addOptions({
                         None: "None",
-                        Fit: "Fit",
-                        Fill: "Fill",
-                        LongestEdge: "Longest Edge",
-                        ShortestEdge: "Shortest Edge",
-                        Width: "Width",
-                        Height: "Height",
+                        Fit: t("OPTION_FIT"),
+                        Fill: t("OPTION_FILL"),
+                        LongestEdge: t("OPTION_LONGEST"),
+                        ShortestEdge: t("OPTION_SHORTEST"),
+                        Width: t("OPTION_WIDTH"),
+                        Height: t("OPTION_HEIGHT"),
                     })
                     .setValue(
                         this.plugin.settings
@@ -183,12 +184,12 @@ export class ProcessAllVaultModal extends Modal {
 
     private createSkipSettings(contentEl: HTMLElement) {
         new Setting(contentEl)
-            .setName("Skip formats ⓘ")
+            .setName(t("SETTING_SKIP_FORMATS") + " ⓘ")
             .setDesc(
-                "Comma-separated list (no dots or spaces, e.g., png,gif)."
+                t("SETTING_SKIP_FORMATS_DESC")
             )
             .setTooltip(
-                "Comma-separated list of file formats to skip (e.g., tif,tiff,heic). Leave empty to process all formats."
+                t("SETTING_SKIP_FORMATS_TOOLTIP")
             )
             .addText((text) => {
                 text
@@ -201,12 +202,12 @@ export class ProcessAllVaultModal extends Modal {
             });
 
         new Setting(contentEl)
-            .setName("Skip images in target format ⓘ")
+            .setName(t("SETTING_SKIP_TARGET") + " ⓘ")
             .setDesc(
-                "Skip compression/resizing if image is already in target format."
+                t("SETTING_SKIP_TARGET_DESC")
             )
             .setTooltip(
-                "If image is already in target format, this allows you to skip its compression, conversion and resizing. Processing of all other formats will be still performed."
+                t("SETTING_SKIP_TARGET_TOOLTIP")
             )
             .addToggle((toggle) => {
                 toggle
@@ -226,7 +227,7 @@ export class ProcessAllVaultModal extends Modal {
             cls: "button-container",
         });
         new ButtonComponent(buttonContainer)
-            .setButtonText("Process All Images")
+            .setButtonText(t("BUTTON_PROCESS_ALL"))
             .setCta()
             .onClick(async () => {
                 this.close();
@@ -263,19 +264,19 @@ export class ProcessAllVaultModal extends Modal {
 
         this.enlargeReduceSettings = new Setting(this.enlargeReduceDiv)
             .setClass("enlarge-reduce-setting")
-            .setName("Enlarge or Reduce ⓘ")
+            .setName(t("SETTING_ENLARGE_REDUCE") + " ⓘ")
             .setDesc(
-                "Reduce and Enlarge: Adjusts all images. Reduce only: Shrinks larger images. Enlarge only: Enlarges smaller images."
+                t("SETTING_ENLARGE_REDUCE_DESC")
             )
             .setTooltip(
-                "• Reduce and Enlarge: Adjusts all images to fit specified dimensions\n• Reduce only: Only shrinks images larger than target\n• Enlarge only: Only enlarges images smaller than target"
+                t("SETTING_ENLARGE_REDUCE_DESC")
             )
             .addDropdown((dropdown) => {
                 dropdown
                     .addOptions({
-                        Always: "Reduce and Enlarge",
-                        Reduce: "Reduce only",
-                        Enlarge: "Enlarge only",
+                        Always: t("OPTION_ALWAYS"),
+                        Reduce: t("OPTION_REDUCE"),
+                        Enlarge: t("OPTION_ENLARGE"),
                     })
                     .setValue(
                         this.plugin.settings.ProcessAllVaultEnlargeOrReduce
@@ -311,14 +312,14 @@ export class ProcessAllVaultModal extends Modal {
         let desc = "";
 
         if (["Fit", "Fill"].includes(resizeMode)) {
-            name = "Resize dimensions";
-            desc = "Enter the desired width and height in pixels";
+            name = t("SETTING_RESIZE_DIMENSIONS");
+            desc = t("SETTING_RESIZE_WH_DESC");
             this.resizeInputSettings
                 .setName(name)
                 .setDesc(desc)
                 .addText((text) =>
                     text
-                        .setPlaceholder("Width")
+                        .setPlaceholder(t("LABEL_WIDTH"))
                         .setValue(
                             this.plugin.settings
                                 .ProcessAllVaultResizeModaldesiredWidth
@@ -335,7 +336,7 @@ export class ProcessAllVaultModal extends Modal {
                 )
                 .addText((text) =>
                     text
-                        .setPlaceholder("Height")
+                        .setPlaceholder(t("LABEL_HEIGHT"))
                         .setValue(
                             this.plugin.settings
                                 .ProcessAllVaultResizeModaldesiredHeight
@@ -354,16 +355,16 @@ export class ProcessAllVaultModal extends Modal {
             switch (resizeMode) {
                 case "LongestEdge":
                 case "ShortestEdge":
-                    name = `${resizeMode}`;
-                    desc = "Enter the desired length in pixels";
+                    name = resizeMode === "LongestEdge" ? t("OPTION_LONGEST") : t("OPTION_SHORTEST");
+                    desc = t("SETTING_RESIZE_LENGTH_DESC");
                     break;
                 case "Width":
-                    name = "Width";
-                    desc = "Enter the desired width in pixels";
+                    name = t("OPTION_WIDTH");
+                    desc = t("SETTING_RESIZE_WIDTH_DESC");
                     break;
                 case "Height":
-                    name = "Height";
-                    desc = "Enter the desired height in pixels";
+                    name = t("OPTION_HEIGHT");
+                    desc = t("SETTING_RESIZE_HEIGHT_DESC");
                     break;
             }
 

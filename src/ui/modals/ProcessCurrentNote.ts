@@ -9,6 +9,7 @@ import {
     TextComponent
 } from "obsidian";
 import ImageConverterPlugin from '../../main';
+import { t } from '../../lang/helpers';
 
 // import {
 //     ResizeMode,
@@ -53,10 +54,10 @@ export class ProcessCurrentNote extends Modal {
 
         // Header section
         const headerContainer = mainContainer.createDiv({ cls: 'modal-header' });
-        headerContainer.createEl('h2', { text: 'Convert, compress and resize' });
+        headerContainer.createEl('h2', { text: t("MODAL_PROCESS_IMAGES_TITLE") });
 
         headerContainer.createEl('h6', {
-            text: `all images in: ${this.activeFile.basename}.${this.activeFile.extension}`,
+            text: t("MODAL_IN_CURRENT_NOTE").replace("{0}", `${this.activeFile.basename}.${this.activeFile.extension}`),
             cls: 'modal-subtitle'
         });
 
@@ -66,23 +67,23 @@ export class ProcessCurrentNote extends Modal {
         // --- Image Counts Display ---
         const countsDisplay = contentEl.createDiv({ cls: 'image-counts-display' });
 
-        countsDisplay.createEl('span', { text: 'Total Images Found: ' });
+        countsDisplay.createEl('span', { text: t("LABEL_TOTAL_IMAGES") + ": " });
         this.imageCountDisplay = countsDisplay.createEl('span');
 
         countsDisplay.createEl('br');
 
-        countsDisplay.createEl('span', { text: 'To be Processed: ' });
+        countsDisplay.createEl('span', { text: t("LABEL_TO_PROCESS") + ": " });
         this.processedCountDisplay = countsDisplay.createEl('span');
 
         countsDisplay.createEl('br');
 
-        countsDisplay.createEl('span', { text: 'Skipped: ' });
+        countsDisplay.createEl('span', { text: t("LABEL_SKIPPED") + ": " });
         this.skippedCountDisplay = countsDisplay.createEl('span');
 
         // Warning message
         headerContainer.createEl('p', {
             cls: 'modal-warning',
-            text: '⚠️ This will modify all images in the current note. Please ensure you have backups.'
+            text: t("MODAL_WARNING_BACKUP")
         });
 
         // --- Settings Container ---
@@ -93,13 +94,13 @@ export class ProcessCurrentNote extends Modal {
 
         // Convert To setting
         this.convertToSetting = new Setting(formatQualityContainer)
-            .setName('Convert to ⓘ ')
-            .setDesc('Choose output format for your images')
-            .setTooltip('Same as original: preserves current format while applying compression/resizing')
+            .setName(t("SETTING_CONVERT_TO") + " ⓘ")
+            .setDesc(t("SETTING_CONVERT_TO_DESC"))
+            .setTooltip(t("SETTING_CONVERT_TO_DESC"))
             .addDropdown(dropdown =>
                 dropdown
                     .addOptions({
-                        disabled: 'Same as original',
+                        disabled: t("SETTING_SAME_AS_ORIGINAL"),
                         webp: 'WebP',
                         jpg: 'JPG',
                         png: 'PNG'
@@ -114,12 +115,12 @@ export class ProcessCurrentNote extends Modal {
 
         // Quality setting
         new Setting(formatQualityContainer)
-            .setName('Quality ⓘ')
-            .setDesc('Compression level (0-100)')
-            .setTooltip('100: No compression (original quality)\n75: Recommended (good balance)\n0-50: High compression (lower quality)')
+            .setName(t("SETTING_QUALITY") + " ⓘ")
+            .setDesc(t("SETTING_QUALITY_DESC"))
+            .setTooltip(t("SETTING_QUALITY_TOOLTIP"))
             .addText(text =>
                 text
-                    .setPlaceholder('Enter quality (0-100)')
+                    .setPlaceholder(t("SETTING_QUALITY_DESC"))
                     .setValue((this.plugin.settings.ProcessCurrentNotequality * 100).toString())
                     .onChange(async value => {
                         const quality = parseInt(value);
@@ -135,19 +136,19 @@ export class ProcessCurrentNote extends Modal {
 
         // Resize Mode setting
         this.resizeModeSetting = new Setting(resizeContainer)
-            .setName('Resize Mode ⓘ')
-            .setDesc('Choose how images should be resized. Note: Results are permanent.')
-            .setTooltip('Fit: Maintains aspect ratio within dimensions\nFill: Exactly matches dimensions\nLongest Edge: Limits the longest side\nShortest Edge: Limits the shortest side\nWidth/Height: Constrains single dimension')
+            .setName(t("SETTING_RESIZE_MODE") + " ⓘ")
+            .setDesc(t("SETTING_RESIZE_MODE_DESC"))
+            .setTooltip(t("SETTING_RESIZE_TOOLTIP"))
             .addDropdown(dropdown =>
                 dropdown
                     .addOptions({
                         None: 'None',
-                        LongestEdge: 'Longest Edge',
-                        ShortestEdge: 'Shortest Edge',
-                        Width: 'Width',
-                        Height: 'Height',
-                        Fit: 'Fit',
-                        Fill: 'Fill',
+                        LongestEdge: t("OPTION_LONGEST"),
+                        ShortestEdge: t("OPTION_SHORTEST"),
+                        Width: t("OPTION_WIDTH"),
+                        Height: t("OPTION_HEIGHT"),
+                        Fit: t("OPTION_FIT"),
+                        Fill: t("OPTION_FILL"),
                     })
                     .setValue(this.plugin.settings.ProcessCurrentNoteResizeModalresizeMode)
                     .onChange(async value => {
@@ -167,8 +168,8 @@ export class ProcessCurrentNote extends Modal {
 
         // Skip formats setting
         this.skipFormatsSetting = new Setting(skipContainer)
-            .setName('Skip File Formats ⓘ')
-            .setTooltip('Comma-separated list of file formats to skip (e.g., tif,tiff,heic). Leave empty to process all formats.')
+            .setName(t("SETTING_SKIP_FORMATS") + " ⓘ")
+            .setTooltip(t("SETTING_SKIP_FORMATS_TOOLTIP"))
             .addText(text =>
                 text
                     .setPlaceholder('tif,tiff,heic')
@@ -182,8 +183,8 @@ export class ProcessCurrentNote extends Modal {
 
         // Skip target format setting
         this.skipTargetFormatSetting = new Setting(skipContainer)
-            .setName('Skip images in target format ⓘ')
-            .setTooltip('If image is already in target format, this allows you to skip its compression, conversion and resizing. Processing of all other formats will be still performed.')
+            .setName(t("SETTING_SKIP_TARGET") + " ⓘ")
+            .setTooltip(t("SETTING_SKIP_TARGET_TOOLTIP"))
             .addToggle(toggle =>
                 toggle
                     .setValue(this.plugin.settings.ProcessCurrentNoteskipImagesInTargetFormat)
@@ -203,7 +204,7 @@ export class ProcessCurrentNote extends Modal {
         // Submit button
         const buttonContainer = settingsContainer.createDiv({ cls: 'button-container' });
         this.submitButton = new ButtonComponent(buttonContainer)
-            .setButtonText('Submit')
+            .setButtonText(t("BUTTON_SUBMIT"))
             .onClick(async () => { // Use async here
                 this.close();
                 if (this.activeFile.extension === 'md' || this.activeFile.extension === 'canvas') {
@@ -214,7 +215,7 @@ export class ProcessCurrentNote extends Modal {
                 }
             });
     }
-    
+
     private updateResizeInputVisibility(resizeMode: string): void {
         if (resizeMode === "None") {
             this.resizeInputsDiv?.empty();
@@ -243,15 +244,15 @@ export class ProcessCurrentNote extends Modal {
 
         this.enlargeReduceSettings = new Setting(this.enlargeReduceDiv)
             .setClass('enlarge-reduce-setting')
-            .setName('Enlarge or Reduce ⓘ')
-            .setDesc('Controls how images are adjusted relative to target size:')
-            .setTooltip('• Reduce and Enlarge: Adjusts all images to fit specified dimensions\n• Reduce only: Only shrinks images larger than target\n• Enlarge only: Only enlarges images smaller than target')
+            .setName(t("SETTING_ENLARGE_REDUCE") + " ⓘ")
+            .setDesc(t("SETTING_ENLARGE_REDUCE_DESC"))
+            .setTooltip(t("SETTING_ENLARGE_REDUCE_DESC"))
             .addDropdown((dropdown) => {
                 dropdown
                     .addOptions({
-                        Always: 'Reduce and Enlarge',
-                        Reduce: 'Reduce only',
-                        Enlarge: 'Enlarge only',
+                        Always: t("OPTION_ALWAYS"),
+                        Reduce: t("OPTION_REDUCE"),
+                        Enlarge: t("OPTION_ENLARGE"),
                     })
                     .setValue(this.plugin.settings.ProcessCurrentNoteEnlargeOrReduce)
                     .onChange(async (value: 'Always' | 'Reduce' | 'Enlarge') => {
@@ -283,13 +284,13 @@ export class ProcessCurrentNote extends Modal {
         let desc = '';
 
         if (['Fit', 'Fill'].includes(resizeMode)) {
-            name = 'Resize dimensions';
-            desc = 'Enter the desired width and height in pixels';
+            name = t("SETTING_RESIZE_DIMENSIONS");
+            desc = t("SETTING_RESIZE_WH_DESC");
             this.resizeInputSettings
                 .setName(name)
                 .setDesc(desc)
                 .addText((text: TextComponent) => text
-                    .setPlaceholder('Width')
+                    .setPlaceholder(t("LABEL_WIDTH"))
                     .setValue(this.plugin.settings.ProcessCurrentNoteresizeModaldesiredWidth.toString())
                     .onChange(async (value: string) => {
                         const width = parseInt(value);
@@ -299,7 +300,7 @@ export class ProcessCurrentNote extends Modal {
                         }
                     }))
                 .addText((text: TextComponent) => text
-                    .setPlaceholder('Height')
+                    .setPlaceholder(t("LABEL_HEIGHT"))
                     .setValue(this.plugin.settings.ProcessCurrentNoteresizeModaldesiredHeight.toString())
                     .onChange(async (value: string) => {
                         const height = parseInt(value);
@@ -312,16 +313,16 @@ export class ProcessCurrentNote extends Modal {
             switch (resizeMode) {
                 case 'LongestEdge':
                 case 'ShortestEdge':
-                    name = `${resizeMode}`;
-                    desc = 'Enter the desired length in pixels';
+                    name = resizeMode === 'LongestEdge' ? t("OPTION_LONGEST") : t("OPTION_SHORTEST");
+                    desc = t("SETTING_RESIZE_LENGTH_DESC");
                     break;
                 case 'Width':
-                    name = 'Width';
-                    desc = 'Enter the desired width in pixels';
+                    name = t("OPTION_WIDTH");
+                    desc = t("SETTING_RESIZE_WIDTH_DESC");
                     break;
                 case 'Height':
-                    name = 'Height';
-                    desc = 'Enter the desired height in pixels';
+                    name = t("OPTION_HEIGHT");
+                    desc = t("SETTING_RESIZE_HEIGHT_DESC");
                     break;
             }
 
@@ -492,7 +493,7 @@ export class ProcessCurrentNote extends Modal {
         this.submitButton = null;
         this.resizeInputsDiv = null;
         this.enlargeReduceDiv = null;
-        
+
         const { contentEl } = this;
         contentEl.empty();
     }

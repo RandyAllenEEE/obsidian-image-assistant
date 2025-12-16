@@ -11,6 +11,7 @@ import {
     normalizePath
 } from "obsidian";
 import ImageConverterPlugin from '../../main';
+import { t } from '../../lang/helpers';
 
 import { BatchImageProcessor } from '../../local/BatchImageProcessor';
 
@@ -49,14 +50,14 @@ export class ProcessFolderModal extends Modal {
         | ((source: ImageSource | null) => void)
         | null = null;
 
-        constructor(
-            app: App,
-            private plugin: ImageConverterPlugin,
-            private folderPath: string,
-            private batchImageProcessor: BatchImageProcessor  // Inject instead of creating new
-        ) {
-            super(app);
-        }
+    constructor(
+        app: App,
+        private plugin: ImageConverterPlugin,
+        private folderPath: string,
+        private batchImageProcessor: BatchImageProcessor  // Inject instead of creating new
+    ) {
+        super(app);
+    }
 
 
 
@@ -81,10 +82,10 @@ export class ProcessFolderModal extends Modal {
         this.skipTargetFormatSetting = null;
         this.resizeInputsDiv = null;
         this.enlargeReduceDiv = null;
-    
+
         // Clear description updater
         this.updateImageSourceDescription = null;
-    
+
         const { contentEl } = this;
         contentEl.empty();
     }
@@ -137,11 +138,11 @@ export class ProcessFolderModal extends Modal {
         const headerContainer = contentEl.createDiv({ cls: "modal-header" });
 
         // Main title
-        headerContainer.createEl("h2", { text: "Convert, compress and resize" });
+        headerContainer.createEl("h2", { text: t("MODAL_PROCESS_IMAGES_TITLE") });
 
         // Subtitle
         headerContainer.createEl("h6", {
-            text: `all images in: /${folderName}`,
+            text: t("MODAL_IN_FOLDER").replace("{0}", `/${folderName}`),
             cls: "modal-subtitle", // Add a class for styling
         });
     }
@@ -150,7 +151,7 @@ export class ProcessFolderModal extends Modal {
     private createWarningMessage(contentEl: HTMLElement) {
         contentEl.createEl("p", {
             cls: "modal-warning",
-            text: "⚠️ This will modify all images in the selected folder and subfolders (if recursive is enabled). Please ensure you have backups.",
+            text: t("MODAL_WARNING_BACKUP"),
         });
     }
 
@@ -169,13 +170,11 @@ export class ProcessFolderModal extends Modal {
 
         // Function to update the description text
         const updateDescription = (source: ImageSource | null) => {
-            let descText = "No selection."; // Default text
+            let descText = t("DESC_NO_SELECTION"); // Default text
             if (source === ImageSource.DIRECT) {
-                descText =
-                    "Processing images directly in the folder.";
+                descText = t("DESC_DIRECT_IMAGES");
             } else if (source === ImageSource.LINKED) {
-                descText =
-                    "Processing images linked in notes or Canvas files.";
+                descText = t("DESC_LINKED_IMAGES");
             }
             imageSourceDesc.setText(descText);
         };
@@ -186,21 +185,21 @@ export class ProcessFolderModal extends Modal {
         // Set initial description
         updateDescription(this.selectedImageSource);
         // Image Counts
-        countsDisplay.createEl("span", { text: "Total images found: " });
+        countsDisplay.createEl("span", { text: t("LABEL_TOTAL_IMAGES") + ": " });
         this.imageCountDisplay = countsDisplay.createEl("span", {
             text: this.imageCount.toString(),
         });
 
         countsDisplay.createEl("br");
 
-        countsDisplay.createEl("span", { text: "To be skipped: " });
+        countsDisplay.createEl("span", { text: t("LABEL_SKIPPED") + ": " });
         this.skippedCountDisplay = countsDisplay.createEl("span", {
             text: this.skippedCount.toString(),
         });
 
         countsDisplay.createEl("br");
 
-        countsDisplay.createEl("span", { text: "To be processed: " });
+        countsDisplay.createEl("span", { text: t("LABEL_TO_PROCESS") + ": " });
         this.processedCountDisplay = countsDisplay.createEl("span", {
             text: this.processedCount.toString(),
         });
@@ -210,12 +209,12 @@ export class ProcessFolderModal extends Modal {
 
     // --- Image Source Settings with Radio Buttons ---
     private createImageSourceSettings(contentEl: HTMLElement) {
-        contentEl.createEl("h4", { text: "Image source" }); // Heading for Image Source
+        contentEl.createEl("h4", { text: t("LABEL_IMAGE_SOURCE") }); // Heading for Image Source
 
         // --- Recursive Setting ---
         new Setting(contentEl)
-            .setName("Recursive")
-            .setDesc("Process images in all subfolders as well")
+            .setName(t("LABEL_RECURSIVE"))
+            .setDesc(t("SETTING_RECURSIVE_DESC"))
             .addToggle((toggle) =>
                 toggle.setValue(this.recursive).onChange(async (value) => {
                     this.recursive = value;
@@ -247,8 +246,8 @@ export class ProcessFolderModal extends Modal {
 
         // --- Create Radio Buttons ---
         new Setting(imageSourceSettingContainer)
-            .setName("Direct images")
-            .setDesc("Images directly in the folder")
+            .setName(t("LABEL_DIRECT_IMAGES"))
+            .setDesc(t("SETTING_DIRECT_IMAGES_DESC"))
             .addExtraButton((button) => {
                 buttonRefs[ImageSource.DIRECT] = button;
                 button
@@ -259,8 +258,8 @@ export class ProcessFolderModal extends Modal {
                     )
                     .setTooltip(
                         this.selectedImageSource === ImageSource.DIRECT
-                            ? "Selected"
-                            : "Select"
+                            ? t("TOOLTIP_SELECTED")
+                            : t("TOOLTIP_SELECT")
                     )
                     .onClick(async () => {
                         this.selectedImageSource = ImageSource.DIRECT;
@@ -275,8 +274,8 @@ export class ProcessFolderModal extends Modal {
             });
 
         new Setting(imageSourceSettingContainer)
-            .setName("Linked images")
-            .setDesc("Images linked in notes or Canvas")
+            .setName(t("LABEL_LINKED_IMAGES"))
+            .setDesc(t("SETTING_LINKED_IMAGES_DESC"))
             .addExtraButton((button) => {
                 buttonRefs[ImageSource.LINKED] = button;
                 button
@@ -287,8 +286,8 @@ export class ProcessFolderModal extends Modal {
                     )
                     .setTooltip(
                         this.selectedImageSource === ImageSource.LINKED
-                            ? "Selected"
-                            : "Select"
+                            ? t("TOOLTIP_SELECTED")
+                            : t("TOOLTIP_SELECT")
                     )
                     .onClick(async () => {
                         this.selectedImageSource = ImageSource.LINKED;
@@ -318,16 +317,12 @@ export class ProcessFolderModal extends Modal {
 
         // --- Convert To Setting ---
         this.convertToSetting = new Setting(contentEl)
-            .setName("Convert to ⓘ")
-            .setDesc(
-                "Choose output format. 'Same as original' applies compression/resizing to current format."
-            )
-            .setTooltip(
-                "Same as original: preserves current format while applying compression/resizing"
-            )
+            .setName(t("SETTING_CONVERT_TO") + " ⓘ")
+            .setDesc(t("SETTING_CONVERT_TO_DESC"))
+            .setTooltip(t("SETTING_CONVERT_TO_DESC"))
             .addDropdown((dropdown) => {
                 dropdown
-                    .addOption("disabled", "Same as original")
+                    .addOption("disabled", t("SETTING_SAME_AS_ORIGINAL"))
                     .addOptions({
                         webp: "WebP",
                         jpg: "JPG",
@@ -343,14 +338,12 @@ export class ProcessFolderModal extends Modal {
 
         // --- Quality Setting ---
         this.qualitySetting = new Setting(contentEl)
-            .setName("Quality ⓘ")
-            .setDesc("Compression level (0-100)")
-            .setTooltip(
-                "100: No compression (original quality)\n75: Recommended (good balance)\n0-50: High compression (lower quality)"
-            )
+            .setName(t("SETTING_QUALITY") + " ⓘ")
+            .setDesc(t("SETTING_QUALITY_DESC"))
+            .setTooltip(t("SETTING_QUALITY_TOOLTIP"))
             .addText((text) => {
                 text
-                    .setPlaceholder("Enter quality (0-100)")
+                    .setPlaceholder(t("SETTING_QUALITY_DESC"))
                     .setValue(
                         (
                             this.plugin.settings.ProcessCurrentNotequality * 100
@@ -380,13 +373,9 @@ export class ProcessFolderModal extends Modal {
 
         // --- Skip Formats Setting ---
         this.skipFormatsSetting = new Setting(contentEl)
-            .setName("Skip formats ⓘ")
-            .setDesc(
-                "Comma-separated list (no dots or spaces, e.g., png,gif)."
-            )
-            .setTooltip(
-                "Comma-separated list of file formats to skip (e.g., tif,tiff,heic). Leave empty to process all formats."
-            )
+            .setName(t("SETTING_SKIP_FORMATS") + " ⓘ")
+            .setDesc(t("SETTING_SKIP_FORMATS_DESC"))
+            .setTooltip(t("SETTING_SKIP_FORMATS_TOOLTIP"))
             .addText((text) => {
                 text
                     .setPlaceholder("png,gif")
@@ -403,13 +392,9 @@ export class ProcessFolderModal extends Modal {
 
         // --- Skip Target Format Setting ---
         this.skipTargetFormatSetting = new Setting(contentEl)
-            .setName("Skip images in target format ⓘ")
-            .setDesc(
-                "Skip compression/resizing if image is already in target format."
-            )
-            .setTooltip(
-                "If image is already in target format, this allows you to skip its compression, conversion and resizing. Processing of all other formats will be still performed."
-            )
+            .setName(t("SETTING_SKIP_TARGET") + " ⓘ")
+            .setDesc(t("SETTING_SKIP_TARGET_DESC"))
+            .setTooltip(t("SETTING_SKIP_TARGET_TOOLTIP"))
             .addToggle((toggle) => {
                 toggle
                     .setValue(
@@ -430,23 +415,19 @@ export class ProcessFolderModal extends Modal {
 
         // --- Resize Mode Setting ---
         this.resizeModeSetting = new Setting(contentEl)
-            .setName("Resize mode ⓘ")
-            .setDesc(
-                "Choose how images should be resized. Note: Results are permanent"
-            )
-            .setTooltip(
-                "Fit: Maintains aspect ratio within dimensions\nFill: Exactly matches dimensions\nLongest Edge: Limits the longest side\nShortest Edge: Limits the shortest side\nWidth/Height: Constrains single dimension"
-            )
+            .setName(t("SETTING_RESIZE_MODE") + " ⓘ")
+            .setDesc(t("SETTING_RESIZE_MODE_DESC"))
+            .setTooltip(t("SETTING_RESIZE_TOOLTIP"))
             .addDropdown((dropdown) => {
                 dropdown
                     .addOptions({
                         None: "None",
-                        Fit: "Fit (maintain aspect ratio within dimensions)",
-                        Fill: "Fill (exactly match dimensions)",
-                        LongestEdge: "Longest edge",
-                        ShortestEdge: "Shortest edge",
-                        Width: "Width",
-                        Height: "Height",
+                        Fit: t("OPTION_FIT"),
+                        Fill: t("OPTION_FILL"),
+                        LongestEdge: t("OPTION_LONGEST"),
+                        ShortestEdge: t("OPTION_SHORTEST"),
+                        Width: t("OPTION_WIDTH"),
+                        Height: t("OPTION_HEIGHT"),
                     })
                     .setValue(
                         this.plugin.settings
@@ -481,7 +462,7 @@ export class ProcessFolderModal extends Modal {
     private createProcessButton(contentEl: HTMLElement) {
         const buttonContainer = contentEl.createDiv({ cls: "button-container" });
         new ButtonComponent(buttonContainer)
-            .setButtonText("Process")
+            .setButtonText(t("BUTTON_PROCESS"))
             .setCta()
             .onClick(async () => { // Use async here
                 this.close();
@@ -518,19 +499,15 @@ export class ProcessFolderModal extends Modal {
 
         this.enlargeReduceSettings = new Setting(this.enlargeReduceDiv)
             .setClass("enlarge-reduce-setting")
-            .setName("Enlarge or Reduce ⓘ")
-            .setDesc(
-                "Reduce and Enlarge: Adjusts all images. Reduce only: Shrinks larger images. Enlarge only: Enlarges smaller images."
-            )
-            .setTooltip(
-                "• Reduce and Enlarge: Adjusts all images to fit specified dimensions\n• Reduce only: Only shrinks images larger than target\n• Enlarge only: Only enlarges images smaller than target"
-            )
+            .setName(t("SETTING_ENLARGE_REDUCE") + " ⓘ")
+            .setDesc(t("SETTING_ENLARGE_REDUCE_DESC"))
+            .setTooltip(t("SETTING_ENLARGE_REDUCE_DESC"))
             .addDropdown((dropdown) => {
                 dropdown
                     .addOptions({
-                        Always: "Reduce and Enlarge",
-                        Reduce: "Reduce only",
-                        Enlarge: "Enlarge only",
+                        Always: t("OPTION_ALWAYS"),
+                        Reduce: t("OPTION_REDUCE"),
+                        Enlarge: t("OPTION_ENLARGE"),
                     })
                     .setValue(
                         this.plugin.settings.ProcessCurrentNoteEnlargeOrReduce
@@ -566,14 +543,14 @@ export class ProcessFolderModal extends Modal {
         let desc = "";
 
         if (["Fit", "Fill"].includes(resizeMode)) {
-            name = "Resize dimensions";
-            desc = "Enter the desired width and height in pixels";
+            name = t("SETTING_RESIZE_DIMENSIONS");
+            desc = t("SETTING_RESIZE_WH_DESC");
             this.resizeInputSettings
                 .setName(name)
                 .setDesc(desc)
                 .addText((text: TextComponent) =>
                     text
-                        .setPlaceholder("Width")
+                        .setPlaceholder(t("LABEL_WIDTH"))
                         .setValue(
                             this.plugin.settings
                                 .ProcessCurrentNoteresizeModaldesiredWidth
@@ -590,7 +567,7 @@ export class ProcessFolderModal extends Modal {
                 )
                 .addText((text: TextComponent) =>
                     text
-                        .setPlaceholder("Height")
+                        .setPlaceholder(t("LABEL_HEIGHT"))
                         .setValue(
                             this.plugin.settings
                                 .ProcessCurrentNoteresizeModaldesiredHeight
@@ -609,16 +586,16 @@ export class ProcessFolderModal extends Modal {
             switch (resizeMode) {
                 case "LongestEdge":
                 case "ShortestEdge":
-                    name = `${resizeMode}`;
-                    desc = "Enter the desired length in pixels";
+                    name = resizeMode === "LongestEdge" ? t("OPTION_LONGEST") : t("OPTION_SHORTEST");
+                    desc = t("SETTING_RESIZE_LENGTH_DESC");
                     break;
                 case "Width":
-                    name = "Width";
-                    desc = "Enter the desired width in pixels";
+                    name = t("OPTION_WIDTH");
+                    desc = t("SETTING_RESIZE_WIDTH_DESC");
                     break;
                 case "Height":
-                    name = "Height";
-                    desc = "Enter the desired height in pixels";
+                    name = t("OPTION_HEIGHT");
+                    desc = t("SETTING_RESIZE_HEIGHT_DESC");
                     break;
             }
 

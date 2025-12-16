@@ -2,6 +2,7 @@
 import { App, Modal, Notice, TFile, Setting, MarkdownView } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { OutputFormat, ResizeMode, EnlargeReduce } from "../../settings/ImageAssistantSettings";
+import { t } from "../../lang/helpers";
 
 export interface SingleImageModalSettings {
     conversionPresetName: string;
@@ -36,7 +37,7 @@ export class ProcessSingleImageModal extends Modal {
         super(app);
         this.imageFile = file;
         this.loadModalSettings();
-        this.titleEl.setText(`Process Image: ${file.name}`);
+        this.titleEl.setText(t("MODAL_SINGLE_IMG_TITLE") + file.name);
     }
 
     private loadModalSettings() {
@@ -116,7 +117,7 @@ export class ProcessSingleImageModal extends Modal {
         );
 
         new Setting(this.conversionSettingsContainer)
-            .setName("Output Format")
+            .setName(t("MODAL_OUTPUT_FORMAT"))
             .addDropdown(dropdown => {
                 const options: Record<OutputFormat, string> = {
                     "WEBP": "WEBP",
@@ -146,7 +147,7 @@ export class ProcessSingleImageModal extends Modal {
 
         if (["WEBP", "JPEG", "ORIGINAL"].includes(this.modalSettings.outputFormat)) {
             new Setting(this.conversionSettingsContainer)
-                .setName("Quality")
+                .setName(t("MODAL_QUALITY"))
                 .addSlider(slider => {
                     slider.setLimits(1, 100, 1)
                         .setValue(this.modalSettings.quality)
@@ -160,7 +161,7 @@ export class ProcessSingleImageModal extends Modal {
 
         if (this.modalSettings.outputFormat === "PNG") {
             new Setting(this.conversionSettingsContainer)
-                .setName("Color depth")
+                .setName(t("MODAL_COLOR_DEPTH"))
                 .addSlider(slider => {
                     slider.setLimits(0, 1, 0.1)
                         .setValue(this.modalSettings.colorDepth)
@@ -174,7 +175,7 @@ export class ProcessSingleImageModal extends Modal {
 
         if (this.modalSettings.outputFormat === "PNGQUANT") {
             new Setting(this.conversionSettingsContainer)
-                .setName("pngquant executable path 🛈")
+                .setName(t("MODAL_PNGQUANT_PATH"))
                 .setTooltip("Provide full-path to the binary file. It can be inside vault or anywhere in your file system.")
                 .addText(text => {
                     const pngquantPreset = this.plugin.settings.conversionPresets.find(preset => preset.outputFormat === "PNGQUANT");
@@ -192,7 +193,7 @@ export class ProcessSingleImageModal extends Modal {
                 });
 
             new Setting(this.conversionSettingsContainer)
-                .setName("Quality min-max range 🛈")
+                .setName(t("MODAL_PNGQUANT_QUALITY"))
                 .setTooltip("Instructs pngquant to use the least amount of colors required to meet or exceed the max quality. min and max are numbers in range 0 (worst) to 100 (perfect).")
                 .addText(text => {
                     text.setValue(this.modalSettings.pngquantQuality)
@@ -206,7 +207,7 @@ export class ProcessSingleImageModal extends Modal {
 
         if (this.modalSettings.outputFormat === "AVIF") {
             new Setting(this.conversionSettingsContainer)
-                .setName("FFmpeg executable path 🛈")
+                .setName(t("MODAL_FFMPEG_PATH"))
                 .setTooltip("Provide full-path to the binary file. It can be inside vault or anywhere in your file system.")
                 .addText(text => {
                     const avifPreset = this.plugin.settings.conversionPresets.find(preset => preset.outputFormat === "AVIF");
@@ -224,7 +225,7 @@ export class ProcessSingleImageModal extends Modal {
                 });
 
             new Setting(this.conversionSettingsContainer)
-                .setName("FFmpeg CRF")
+                .setName(t("MODAL_FFMPEG_CRF"))
                 .setDesc("Lower values mean better quality (larger file size). 0 is lossless.")
                 .addSlider(slider => {
                     slider.setLimits(0, 63, 1)
@@ -237,7 +238,7 @@ export class ProcessSingleImageModal extends Modal {
                 });
 
             new Setting(this.conversionSettingsContainer)
-                .setName("FFmpeg Preset")
+                .setName(t("MODAL_FFMPEG_PRESET"))
                 .addDropdown(dropdown => {
                     dropdown.addOptions({
                         "ultrafast": "ultrafast",
@@ -264,7 +265,7 @@ export class ProcessSingleImageModal extends Modal {
         this.resizeSettingsContainer.empty();
 
         new Setting(this.resizeSettingsContainer)
-            .setName("Resize Mode")
+            .setName(t("MODAL_RESIZE_MODE"))
             .addDropdown(dropdown => {
                 const resizeOptions: Record<ResizeMode, string> = {
                     "None": "None",
@@ -287,29 +288,29 @@ export class ProcessSingleImageModal extends Modal {
             });
 
         if (["Fit", "Fill", "Width", "Height", "LongestEdge", "ShortestEdge"].includes(this.modalSettings.resizeMode)) {
-             //Consolidate all text inputs that effect the generate preview function
-              if (["Fit", "Fill", "Width"].includes(this.modalSettings.resizeMode)){
+            //Consolidate all text inputs that effect the generate preview function
+            if (["Fit", "Fill", "Width"].includes(this.modalSettings.resizeMode)) {
                 new Setting(this.resizeSettingsContainer)
-                .setName("Desired Width")
-                .addText(text => {
-                    text.setValue(this.modalSettings.desiredWidth.toString())
-                        .onChange(async (value) => {
-                            this.modalSettings.desiredWidth = parseInt(value, 10) || 0;
-                            if(!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))){
-                                await this.generatePreview();
-                            }
-                        });
-                    text.inputEl.setAttr('spellcheck', 'false');
-                });
-              }
+                    .setName(t("MODAL_DESIRED_WIDTH"))
+                    .addText(text => {
+                        text.setValue(this.modalSettings.desiredWidth.toString())
+                            .onChange(async (value) => {
+                                this.modalSettings.desiredWidth = parseInt(value, 10) || 0;
+                                if (!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))) {
+                                    await this.generatePreview();
+                                }
+                            });
+                        text.inputEl.setAttr('spellcheck', 'false');
+                    });
+            }
             if (["Fit", "Fill", "Height"].includes(this.modalSettings.resizeMode)) {
                 new Setting(this.resizeSettingsContainer)
-                    .setName("Desired Height")
+                    .setName(t("MODAL_DESIRED_HEIGHT"))
                     .addText(text => {
                         text.setValue(this.modalSettings.desiredHeight.toString())
                             .onChange(async (value) => {
                                 this.modalSettings.desiredHeight = parseInt(value, 10) || 0;
-                                if(!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))){
+                                if (!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))) {
                                     await this.generatePreview();
                                 }
                             });
@@ -319,12 +320,12 @@ export class ProcessSingleImageModal extends Modal {
 
             if (["LongestEdge", "ShortestEdge"].includes(this.modalSettings.resizeMode)) {
                 new Setting(this.resizeSettingsContainer)
-                    .setName(this.modalSettings.resizeMode === "LongestEdge" ? "Desired Longest Edge" : "Desired Shortest Edge")
+                    .setName(this.modalSettings.resizeMode === "LongestEdge" ? t("MODAL_DESIRED_LONG") : t("MODAL_DESIRED_SHORT"))
                     .addText(text => {
                         text.setValue(this.modalSettings.desiredLongestEdge.toString())
                             .onChange(async (value) => {
                                 this.modalSettings.desiredLongestEdge = parseInt(value, 10) || 0;
-                                if(!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))){
+                                if (!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))) {
                                     await this.generatePreview();
                                 }
                             });
@@ -333,7 +334,7 @@ export class ProcessSingleImageModal extends Modal {
             }
 
             new Setting(this.resizeSettingsContainer)
-                .setName("Enlarge/Reduce")
+                .setName(t("MODAL_ENLARGE_REDUCE"))
                 .addDropdown(dropdown => {
                     const enlargeReduceOptions: Record<EnlargeReduce, string> = {
                         "Auto": "Auto",
@@ -346,7 +347,7 @@ export class ProcessSingleImageModal extends Modal {
                     dropdown.setValue(this.modalSettings.enlargeOrReduce)
                         .onChange(async (value: EnlargeReduce) => {
                             this.modalSettings.enlargeOrReduce = value;
-                            if(!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))){
+                            if (!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))) {
                                 await this.generatePreview();
                             }
                         });
@@ -358,12 +359,12 @@ export class ProcessSingleImageModal extends Modal {
         this.buttonContainer.empty();
         new Setting(this.buttonContainer)
             .addButton(button => {
-                button.setButtonText("Process")
+                button.setButtonText(t("MODAL_BUTTON_PROCESS"))
                     .setCta()
                     .onClick(() => this.processImage());
             })
             .addButton(button => {
-                button.setButtonText("Cancel")
+                button.setButtonText(t("MODAL_BUTTON_CANCEL"))
                     .onClick(() => this.close());
             });
     }
@@ -374,12 +375,12 @@ export class ProcessSingleImageModal extends Modal {
         //  Skip preview for PNGQUANT and AVIF
         if (this.modalSettings.outputFormat === "PNGQUANT" || this.modalSettings.outputFormat === "AVIF") {
             this.previewContainer.empty();
-            this.previewContainer.createEl("p", { text: "Preview not available for this format." });
+            this.previewContainer.createEl("p", { text: t("MODAL_PREVIEW_UNAVAILABLE") });
             return;
         }
 
         this.previewContainer.empty();
-        const loadingEl = this.previewContainer.createEl("p", { text: "Generating preview..." });
+        const loadingEl = this.previewContainer.createEl("p", { text: t("MODAL_GENERATING_PREVIEW") });
 
         try {
             const fileBuffer = await this.app.vault.readBinary(this.imageFile);
@@ -422,7 +423,7 @@ export class ProcessSingleImageModal extends Modal {
             loadingEl.remove();
 
         } catch (error) {
-            loadingEl.setText(`Preview failed: ${error.message}`);
+            loadingEl.setText(t("MODAL_PREVIEW_FAILED") + error.message);
             console.error("Preview generation failed:", error);
         }
     }
@@ -632,7 +633,7 @@ export class ProcessSingleImageModal extends Modal {
         }
     }
     onClose() {
-		// No Changes
+        // No Changes
         this.saveModalSettings();
         if (this.previewImageUrl) {
             URL.revokeObjectURL(this.previewImageUrl);

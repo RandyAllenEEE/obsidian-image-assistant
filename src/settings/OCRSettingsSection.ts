@@ -1,5 +1,6 @@
 import { Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../main";
+import { t } from "../lang/helpers";
 
 /**
  * 渲染 OCR & LaTeX 设置区域
@@ -14,7 +15,7 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
     const chevronIcon = ocrHeaderEl.createEl("i");
     setIcon(chevronIcon, "chevron-down");
     chevronIcon.addClass("ocr-chevron-icon");
-    ocrHeaderEl.createEl("span", { text: "🤖 OCR & LaTeX 设置", cls: "settings-section-title" });
+    ocrHeaderEl.createEl("span", { text: t("SETTING_OCR_SECTION"), cls: "settings-section-title" });
 
     // 设置内容容器
     const ocrContentEl = ocrSection.createDiv({ cls: "ocr-settings-content" });
@@ -28,7 +29,7 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
     ocrHeaderEl.onClickEvent((event: MouseEvent) => {
         event.stopPropagation();
         isCollapsed = !isCollapsed;
-        
+
         if (isCollapsed) {
             ocrContentEl.hide();
             setIcon(chevronIcon, "chevron-right");
@@ -39,15 +40,15 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
     });
 
     // ========== General Section ==========
-    const generalHeader = ocrContentEl.createEl("h4", { 
-        text: "⚙️ General", 
-        cls: "ocr-subsection-header" 
+    const generalHeader = ocrContentEl.createEl("h4", {
+        text: "⚙️ General",
+        cls: "ocr-subsection-header"
     });
 
     // LaTeX Provider 选择
     new Setting(ocrContentEl)
-        .setName("LaTeX Provider")
-        .setDesc("选择 LaTeX 公式识别服务提供商")
+        .setName(t("SETTING_OCR_LATEX_PROVIDER"))
+        .setDesc(t("SETTING_OCR_LATEX_PROVIDER_DESC"))
         .addDropdown(dropdown => {
             dropdown
                 .addOption("SimpleTex", "SimpleTex (在线服务)")
@@ -63,8 +64,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
 
     // Markdown Provider 选择
     new Setting(ocrContentEl)
-        .setName("Markdown Provider")
-        .setDesc("选择文本识别服务提供商")
+        .setName(t("SETTING_OCR_MARKDOWN_PROVIDER"))
+        .setDesc(t("SETTING_OCR_MARKDOWN_PROVIDER_DESC"))
         .addDropdown(dropdown => {
             dropdown
                 .addOption("Texify", "Texify")
@@ -77,15 +78,15 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     // ========== Config Section ==========
-    const configHeader = ocrContentEl.createEl("h4", { 
-        text: "🔧 Config", 
-        cls: "ocr-subsection-header" 
+    const configHeader = ocrContentEl.createEl("h4", {
+        text: "🔧 Config",
+        cls: "ocr-subsection-header"
     });
 
     // SimpleTex 配置
-    const simpletexLabel = ocrContentEl.createEl("div", { 
-        text: "▸ SimpleTex", 
-        cls: "ocr-provider-label" 
+    const simpletexLabel = ocrContentEl.createEl("div", {
+        text: "▸ SimpleTex",
+        cls: "ocr-provider-label"
     });
 
     // 添加折叠功能
@@ -105,12 +106,12 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
 
     // 添加认证方式开关
     new Setting(simpletexContentEl)
-        .setName("认证方式")
-        .setDesc("选择 SimpleTeX 认证方式")
+        .setName(t("SETTING_OCR_AUTH_TYPE"))
+        .setDesc(t("SETTING_OCR_AUTH_TYPE_DESC"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("token", "Token (不推荐，可能会遇到CORS问题)")
-                .addOption("app", "App ID & Secret (推荐，避免CORS问题)")
+                .addOption("token", t("SETTING_OCR_AUTH_TOKEN"))
+                .addOption("app", t("SETTING_OCR_AUTH_APP"))
                 .setValue(plugin.settings.ocrSettings.simpleTexAppId && plugin.settings.ocrSettings.simpleTexAppSecret ? "app" : "token")
                 .onChange(async (value: "token" | "app") => {
                     // 不需要保存认证方式到设置中，只需在调用时判断使用哪种方式
@@ -121,8 +122,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
 
     // Token 配置
     new Setting(simpletexContentEl)
-        .setName("Token")
-        .setDesc("输入 SimpleTex API Token (不推荐，可能会遇到CORS问题)")
+        .setName(t("SETTING_OCR_TOKEN"))
+        .setDesc(t("SETTING_OCR_TOKEN_DESC"))
         .addText(text => {
             text
                 .setPlaceholder("Your SimpleTex token")
@@ -136,8 +137,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
 
     // 新增：SimpleTex APP ID 和 Secret 配置（推荐方式）
     new Setting(simpletexContentEl)
-        .setName("App ID")
-        .setDesc("输入 SimpleTex App ID (推荐，避免CORS问题)")
+        .setName(t("SETTING_OCR_APP_ID"))
+        .setDesc(t("SETTING_OCR_APP_ID_DESC"))
         .addText(text => {
             text
                 .setPlaceholder("Your SimpleTex App ID")
@@ -150,8 +151,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(simpletexContentEl)
-        .setName("App Secret")
-        .setDesc("输入 SimpleTex App Secret (推荐，避免CORS问题)")
+        .setName(t("SETTING_OCR_APP_SECRET"))
+        .setDesc(t("SETTING_OCR_APP_SECRET_DESC"))
         .addText(text => {
             text
                 .setPlaceholder("Your SimpleTex App Secret")
@@ -165,7 +166,7 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(simpletexContentEl)
-        .setName("认证方式说明")
+        .setName(t("SETTING_OCR_AUTH_HELP"))
         .setDesc(createFragment((frag) => {
             frag.createEl("p", { text: "推荐使用 App ID + App Secret 方式，可以避免 CORS 问题。" });
             frag.createEl("p", { text: "获取方式：" });
@@ -177,14 +178,14 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         }));
 
     // Pix2Tex 配置（永久显示）
-    const pix2texLabel = ocrContentEl.createEl("div", { 
-        text: "▸ Pix2Tex", 
-        cls: "ocr-provider-label" 
+    const pix2texLabel = ocrContentEl.createEl("div", {
+        text: "▸ Pix2Tex",
+        cls: "ocr-provider-label"
     });
 
     new Setting(ocrContentEl)
-        .setName("URL")
-        .setDesc("Pix2Tex 服务的 URL 地址")
+        .setName(t("SETTING_OCR_PL_URL"))
+        .setDesc(t("SETTING_OCR_PL_URL_DESC"))
         .addText(text => {
             text
                 .setPlaceholder("http://127.0.0.1:8502/predict/")
@@ -197,8 +198,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(ocrContentEl)
-        .setName("Username (Self-hosted optional)")
-        .setDesc("如果服务需要认证，输入用户名")
+        .setName(t("SETTING_OCR_PL_USER"))
+        .setDesc(t("SETTING_OCR_PL_USER_DESC"))
         .addText(text => {
             text
                 .setValue(plugin.settings.ocrSettings.pix2tex.username)
@@ -210,8 +211,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(ocrContentEl)
-        .setName("Password (Self-hosted optional)")
-        .setDesc("如果服务需要认证，输入密码")
+        .setName(t("SETTING_OCR_PL_PASS"))
+        .setDesc(t("SETTING_OCR_PL_PASS_DESC"))
         .addText(text => {
             text
                 .setValue(plugin.settings.ocrSettings.pix2tex.password)
@@ -224,14 +225,14 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     // Texify 配置（永久显示）
-    const texifyLabel = ocrContentEl.createEl("div", { 
-        text: "▸ Texify", 
-        cls: "ocr-provider-label" 
+    const texifyLabel = ocrContentEl.createEl("div", {
+        text: "▸ Texify",
+        cls: "ocr-provider-label"
     });
 
     new Setting(ocrContentEl)
-        .setName("URL")
-        .setDesc("Texify 服务的 URL 地址")
+        .setName(t("SETTING_OCR_PL_URL"))
+        .setDesc(t("SETTING_OCR_PL_URL_DESC"))
         .addText(text => {
             text
                 .setPlaceholder("http://127.0.0.1:5000/predict")
@@ -244,8 +245,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(ocrContentEl)
-        .setName("Username (Self-hosted optional)")
-        .setDesc("如果服务需要认证，输入用户名")
+        .setName(t("SETTING_OCR_PL_USER"))
+        .setDesc(t("SETTING_OCR_PL_USER_DESC"))
         .addText(text => {
             text
                 .setValue(plugin.settings.ocrSettings.texify.username)
@@ -257,8 +258,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(ocrContentEl)
-        .setName("Password (Self-hosted optional)")
-        .setDesc("如果服务需要认证，输入密码")
+        .setName(t("SETTING_OCR_PL_PASS"))
+        .setDesc(t("SETTING_OCR_PL_PASS_DESC"))
         .addText(text => {
             text
                 .setValue(plugin.settings.ocrSettings.texify.password)
@@ -271,14 +272,14 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     // LLM 配置（永久显示）
-    const llmLabel = ocrContentEl.createEl("div", { 
-        text: "▸ LLM", 
-        cls: "ocr-provider-label" 
+    const llmLabel = ocrContentEl.createEl("div", {
+        text: "▸ LLM",
+        cls: "ocr-provider-label"
     });
 
     new Setting(ocrContentEl)
-        .setName("Endpoint")
-        .setDesc("支持 OpenAI 兼容的 API 端点")
+        .setName(t("SETTING_OCR_LLM_ENDPOINT"))
+        .setDesc(t("SETTING_OCR_LLM_ENDPOINT_DESC"))
         .addText(text => {
             text
                 .setPlaceholder("https://api.openai.com/v1/chat/completions")
@@ -291,8 +292,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(ocrContentEl)
-        .setName("Model")
-        .setDesc("模型名称，例如 gpt-4-vision-preview")
+        .setName(t("SETTING_OCR_LLM_MODEL"))
+        .setDesc(t("SETTING_OCR_LLM_MODEL_DESC"))
         .addText(text => {
             text
                 .setPlaceholder("gpt-4-vision-preview")
@@ -305,8 +306,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(ocrContentEl)
-        .setName("API Key")
-        .setDesc("输入 API Key")
+        .setName(t("SETTING_OCR_LLM_KEY"))
+        .setDesc(t("SETTING_OCR_LLM_KEY_DESC"))
         .addText(text => {
             text
                 .setPlaceholder("sk-...")
@@ -320,8 +321,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(ocrContentEl)
-        .setName("Max Tokens")
-        .setDesc("最大生成 token 数")
+        .setName(t("SETTING_OCR_LLM_MAX_TOKENS"))
+        .setDesc(t("SETTING_OCR_LLM_MAX_TOKENS_DESC"))
         .addText(text => {
             text
                 .setPlaceholder("300")
@@ -336,14 +337,14 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     // Prompts 子标题
-    const promptsLabel = ocrContentEl.createEl("div", { 
-        text: "  ▪ Prompts", 
-        cls: "ocr-prompts-label" 
+    const promptsLabel = ocrContentEl.createEl("div", {
+        text: "  ▪ Prompts",
+        cls: "ocr-prompts-label"
     });
 
     new Setting(ocrContentEl)
-        .setName("LaTeX Prompt")
-        .setDesc("用于 LaTeX 转换的提示词")
+        .setName(t("SETTING_OCR_PROMPTS_LATEX"))
+        .setDesc(t("SETTING_OCR_PROMPTS_LATEX_DESC"))
         .addTextArea(text => {
             text
                 .setValue(plugin.settings.ocrSettings.aiModel.prompts.latex)
@@ -356,8 +357,8 @@ export function renderOCRSettingsSection(containerEl: HTMLElement, plugin: Image
         });
 
     new Setting(ocrContentEl)
-        .setName("Markdown Prompt")
-        .setDesc("用于 Markdown 转换的提示词")
+        .setName(t("SETTING_OCR_PROMPTS_MARKDOWN"))
+        .setDesc(t("SETTING_OCR_PROMPTS_MARKDOWN_DESC"))
         .addTextArea(text => {
             text
                 .setValue(plugin.settings.ocrSettings.aiModel.prompts.markdown)
