@@ -82,7 +82,7 @@ function makeResizer({ viewMode = 'source', overrides = {}, workspaceOverride }:
   plugin.manifest = { id: 'image-converter', dir: '/plugins/image-converter' } as any;
   plugin.supportedImageFormats = { isExcalidrawImage: () => false } as any;
   plugin.settings = Object.assign({
-    isImageResizeEnbaled: true,
+    isImageResizeEnabled: true,
     isDragResizeEnabled: true,
     isDragAspectRatioLocked: true,
     isScrollResizeEnabled: true,
@@ -626,7 +626,7 @@ describe('ImageResizer throttle policy when alignment disabled (13.23 variant)',
     plugin.manifest = { id: 'image-converter', dir: '/plugins/image-converter' } as any;
     plugin.supportedImageFormats = { isExcalidrawImage: () => false } as any;
     plugin.settings = Object.assign({
-      isImageResizeEnbaled: true,
+      isImageResizeEnabled: true,
       isDragResizeEnabled: true,
       isDragAspectRatioLocked: true,
       isScrollResizeEnabled: true,

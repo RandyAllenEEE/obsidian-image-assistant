@@ -1,7 +1,9 @@
-import { App, Component, Menu, TFile } from 'obsidian';
+import { App, Component, Menu, TFile, MarkdownView } from 'obsidian';
 import ImageConverterPlugin from '../main';
 import { ImageAlignmentManager, ImagePositionData } from './ImageAlignmentManager';
 import { t } from '../lang/helpers';
+import { pipeSyntaxParser, AlignType } from '../utils/PipeSyntaxParser';
+import { RefinedImageUtils } from '../utils/RefinedImageUtils';
 
 export interface ImageAlignmentOptions {
     align: 'left' | 'center' | 'right' | 'none';
@@ -9,12 +11,16 @@ export interface ImageAlignmentOptions {
 }
 
 export class ImageAlignment extends Component {
+    private refinedImageUtils: RefinedImageUtils;
 
     constructor(
         private app: App,
         private plugin: ImageConverterPlugin,
         private imageAlignmentManager: ImageAlignmentManager
-    ) { super(); }
+    ) {
+        super();
+        this.refinedImageUtils = new RefinedImageUtils(this.app);
+    }
 
     /**
      * Adds image alignment options to the context menu.
@@ -57,19 +63,25 @@ export class ImageAlignment extends Component {
                         .onClick(async () => {
                             await this.updateImageAlignment(img, { align: currentAlignment.align === 'right' ? 'none' : 'right', wrap: currentAlignment.wrap });
                         });
-                })
-                .addSeparator()
-                .addItem((subItem) => {
-                    const currentAlignment = this.getCurrentImageAlignment(img);
-                    subItem
-                        .setTitle(t("ALIGN_WRAP"))
-                        .setChecked(currentAlignment.wrap)
-                        .onClick(async () => {
-                            // Default to left alignment if no alignment is set
-                            const newAlign = currentAlignment.align === 'none' ? 'left' : currentAlignment.align;
-                            await this.updateImageAlignment(img, { align: newAlign, wrap: !currentAlignment.wrap });
-                        });
                 });
+
+            // 仅在左/右对齐时显示文字环绕选项
+            const currentAlignment = this.getCurrentImageAlignment(img);
+            if (currentAlignment.align === 'left' || currentAlignment.align === 'right') {
+                item
+                    .addSeparator()
+                    .addItem((subItem) => {
+                        subItem
+                            .setTitle(t("ALIGN_WRAP"))
+                            .setChecked(currentAlignment.wrap)
+                            .onClick(async () => {
+                                await this.updateImageAlignment(img, {
+                                    align: currentAlignment.align,
+                                    wrap: !currentAlignment.wrap
+                                });
+                            });
+                    });
+            }
         });
     }
 
@@ -142,9 +154,67 @@ export class ImageAlignment extends Component {
         const src = img.getAttribute('src');
         if (!src) return;
 
-        // Use getRelativePath to normalize the src before saving
-        const relativeSrc = this.imageAlignmentManager.getRelativePath(src);
+        // 获取当前编辑器视图
+        const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!markdownView) {
+            // 如果无法获取编辑器，仅更新 DOM
+            this.applyAlignmentVisualChanges(img, options);
+            return;
+        }
 
+        const editor = markdownView.editor;
+        if (!editor) {
+            this.applyAlignmentVisualChanges(img, options);
+            return;
+        }
+
+        // 尝试获取图片链接文本
+        const linkText = this.refinedImageUtils.getImageLinkTextFromEditor(img, editor);
+        if (!linkText) {
+            // 如果无法获取链接文本，仅更新 DOM
+            this.applyAlignmentVisualChanges(img, options);
+            return;
+        }
+
+        // 使用 PipeSyntaxParser 解析链接
+        const parsed = pipeSyntaxParser.parsePipeSyntax(linkText);
+        if (!parsed) {
+            // 解析失败，仅更新 DOM
+            this.applyAlignmentVisualChanges(img, options);
+            return;
+        }
+
+        // 更新 align 属性
+        let newAlign: AlignType = null;
+        if (options.align !== 'none') {
+            newAlign = options.wrap ? `${options.align}-wrap` as AlignType : options.align as AlignType;
+        }
+        parsed.align = newAlign;
+
+        // 构建新链接
+        const newLinkText = pipeSyntaxParser.buildPipeSyntax(parsed);
+
+        // 在编辑器中查找并替换链接
+        const lineNumber = this.refinedImageUtils.findLinkLineNumber(editor, linkText);
+        if (lineNumber !== -1) {
+            const line = editor.getLine(lineNumber);
+            const newLine = line.replace(linkText, newLinkText);
+            editor.setLine(lineNumber, newLine);
+        }
+
+        // 立即更新 DOM（不等待 MutationObserver）
+        this.applyAlignmentVisualChanges(img, options);
+
+        // 标记为已处理，避免 MutationObserver 重复处理
+        img.setAttribute('data-alignment-processed', 'true');
+    }
+
+    /**
+     * 应用对齐的视觉变化到 DOM
+     * @param img - The target image element.
+     * @param options - The alignment options.
+     */
+    private applyAlignmentVisualChanges(img: HTMLImageElement, options: ImageAlignmentOptions) {
         // --- Apply Visual Changes to IMG ---
         img.removeClass('image-position-left');
         img.removeClass('image-position-center');
@@ -172,26 +242,12 @@ export class ImageAlignment extends Component {
                 parentEmbed.addClass(options.wrap ? 'image-wrap' : 'image-no-wrap');
             }
         }
-
-
-        if (options.align === 'none') {
-            // Use the hash for removal
-            void this.plugin.ImageAlignmentManager!.removeImageFromCache(activeFile.path, relativeSrc);
-        } else {
-            // Use the hash for saving
-            void this.plugin.ImageAlignmentManager!.saveImageAlignmentToCache(
-                activeFile.path,
-                relativeSrc,  // Use normalized src
-                options.align,
-                img.style.width,
-                img.style.height,
-                options.wrap
-            );
-        }
     }
 
+
+
     /**
-     * Gets the current alignment of an image. Check cache first and then fallback to CSS.
+     * Gets the current alignment of an image. 从 CSS 类检测对齐信息（不再使用缓存）
      * @param img - The target image element.
      * @returns The current alignment options.
      */
@@ -202,6 +258,8 @@ export class ImageAlignment extends Component {
         const src = img.getAttr('src'); // Use getAttr instead of getAttribute
         if (!src) return { align: 'none', wrap: false };
 
+        // 注：由于我们不再使用缓存，直接从 CSS 类检测
+        /* 
         // First, try to get alignment from cache
         const cachedAlignment = this.imageAlignmentManager.getImageAlignment(
             activeFile.path,
@@ -214,6 +272,7 @@ export class ImageAlignment extends Component {
                 wrap: cachedAlignment.wrap
             };
         }
+        */
 
         // Fallback to CSS class detection
         const alignClass = Array.from(img.classList).find(className => className.startsWith('image-position-'));

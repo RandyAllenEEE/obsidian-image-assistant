@@ -1,12 +1,18 @@
 import { MarkdownView } from "obsidian"
 import ImageConverterPlugin from '../main';
+import { RefinedImageUtils } from '../utils/RefinedImageUtils';
+import { pipeSyntaxParser } from '../utils/PipeSyntaxParser';
+import { TFile } from 'obsidian';
 
 export class ImageCaptionManager {
     private observer: MutationObserver | null = null;
     private observerTimeout: ReturnType<typeof setTimeout> | null = null;
     private processing = false;
+    private refinedImageUtils: RefinedImageUtils;
 
     constructor(private plugin: ImageConverterPlugin) {
+        console.error('DEBUG: ImageCaptionManager Constructor Called');
+        this.refinedImageUtils = new RefinedImageUtils(this.plugin.app);
         this.initializeObserver();
         this.applyCaptionStyles();
         this.applyCaptionClass();
@@ -63,15 +69,6 @@ export class ImageCaptionManager {
 
             return false;
         });
-
-        // Only log relevant mutations
-        // if (relevantMutations.length > 0) {
-        //     console.log("Relevant Mutations:", relevantMutations.map(m => ({
-        //         type: m.type,
-        //         target: (m.target as Element).className,
-        //         attributeName: m.attributeName
-        //     })));
-        // }
 
         // Debounce the processing
         this.observerTimeout = setTimeout(() => {
@@ -139,23 +136,56 @@ export class ImageCaptionManager {
         }
 
         const embedSrc = embed.getAttribute('src') || '';
-        const altText = img.getAttribute('alt') || '';
         const extension = embedSrc.split('.').pop()?.split('?')[0]?.toLowerCase() || '';
         const excludedExtensions = skipCaptionExtensions.split(',').map(ext => ext.trim().toLowerCase());
 
-        // Handle caption visibility
-        const isFilename = altText.trim().toLowerCase() === embedSrc.trim().toLowerCase();
-        const shouldHideCaption = excludedExtensions.includes(extension) || isFilename;
+        let altText = img.getAttribute('alt') || '';
 
-        if (shouldHideCaption) {
+        // Try to get refined alt text from editor if possible (Editing Mode)
+        // This handles cases where the DOM alt might be polluted or incomplete
+        // For Reading Mode, we have to rely on what Obsidian gives us in the DOM, 
+        // which usually includes the full alt string.
+        const file = this.plugin.app.workspace.getActiveFile();
+        if (file) {
+            const linkText = this.refinedImageUtils.getImageLinkText(img, file);
+            if (linkText) {
+                const parsed = pipeSyntaxParser.parsePipeSyntax(linkText);
+                if (parsed && parsed.alt) {
+                    altText = parsed.alt;
+                }
+            }
+        }
+
+        // Handle caption visibility
+        // Logic: 
+        // 1. If excluded extension -> Remove alt
+        // 2. If alt is missing, empty, or equals filename -> Replace with " " (Space) 
+        //    to maintain layout (caption container) without text.
+        // 3. Otherwise -> Use alt text.
+
+        if (excludedExtensions.includes(extension)) {
             embed.removeAttribute('alt');
             img.removeAttribute('alt');
-        } else if (isInCallout) {
-            // Special handling for callout images
+            return;
+        }
+
+        const isFilename = altText.trim().toLowerCase() === embedSrc.split('/').pop()?.split('?')[0]?.toLowerCase();
+
+        if (!altText || altText.trim() === '' || isFilename) {
+            // Set to space to ensure container is rendered but empty
+            embed.setAttribute('alt', ' ');
+            // We generally don't mess with img.alt in a way that breaks accessibility, 
+            // but for this visual plugin requirement, we sync them.
+            img.setAttribute('alt', ' ');
+        } else {
+            // Genuine caption
+            embed.setAttribute('alt', altText);
+            // Ensure img has it too
+            img.setAttribute('alt', altText);
+        }
+
+        if (isInCallout) {
             embed.setAttribute('data-in-callout', 'true');
-            if (altText) {
-                embed.setAttribute('alt', altText);
-            }
         }
     }
 
@@ -279,4 +309,3 @@ export class ImageCaptionManager {
         }
     }
 }
-

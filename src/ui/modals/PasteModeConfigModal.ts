@@ -49,6 +49,12 @@ export class PasteModeConfigModal extends Modal {
     }
 
     async setPasteMode(mode: "local" | "cloud") {
+        // Validate input parameter
+        if (mode !== "local" && mode !== "cloud") {
+            new Notice(t("NOTICE_INVALID_PASTE_MODE"));
+            return;
+        }
+
         const file = this.app.workspace.getActiveFile();
         if (!file) {
             new Notice(t("NOTICE_NO_ACTIVE_FILE"));

@@ -8,7 +8,9 @@ import {
     EditorPosition,
     MarkdownView,
     FileSystemAdapter,
-    requestUrl
+    requestUrl,
+    Modal,
+    FuzzySuggestModal
 } from "obsidian";
 import { SupportedImageFormats } from "./local/SupportedImageFormats";
 import { FolderAndFilenameManagement } from "./local/FolderAndFilenameManagement";
@@ -33,6 +35,7 @@ import { ImageCaptionManager } from "./ui/ImageCaptionManager"
 import { UploaderManager } from "./cloud/uploader/index";
 import { CloudLinkFormatter } from "./cloud/CloudLinkFormatter";
 import { UploadHelper, ImageLink } from "./utils/UploadHelper";
+import { UploadHistoryManager } from "./utils/UploadHistoryManager";
 import { basename, dirname, extname, join } from "path-browserify";
 import { resolve } from "path-browserify";
 
@@ -67,10 +70,46 @@ import { CloudImageDeleter } from "./cloud/CloudImageDeleter";
 import { NetworkImageDownloader } from "./cloud/NetworkImageDownloader";
 import { UnusedFileCleanerModal } from "./utils/UnusedFileCleanerModal";
 import { PasteModeConfigModal } from "./ui/modals/PasteModeConfigModal";
+import { NotificationManager } from "./utils/NotificationManager";
 
 // OCR imports
 import EditorInteract from "./ocr/EditorInteract";
 import { getLatexProvider, getMarkdownProvider } from "./ocr/providers/index";
+
+/**
+ * Folder Selector Modal for selecting a folder from the vault
+ * 文件夹选择器模态框，用于从库中选择文件夹
+ */
+class FolderSelectorModal extends FuzzySuggestModal<TFolder> {
+    private onChoose: (folder: TFolder) => void;
+
+    constructor(app: any, onChoose: (folder: TFolder) => void) {
+        super(app);
+        this.onChoose = onChoose;
+        this.setPlaceholder(t("DIALOG_SELECT_FOLDER_PLACEHOLDER"));
+    }
+
+    getItems(): TFolder[] {
+        const folders: TFolder[] = [];
+        const files = this.app.vault.getAllLoadedFiles();
+
+        for (const file of files) {
+            if (file instanceof TFolder) {
+                folders.push(file);
+            }
+        }
+
+        return folders;
+    }
+
+    getItemText(folder: TFolder): string {
+        return folder.path || "/";
+    }
+
+    onChooseItem(folder: TFolder): void {
+        this.onChoose(folder);
+    }
+}
 
 export default class ImageConverterPlugin extends Plugin {
     settings: ImageAssistantSettings;
@@ -105,6 +144,8 @@ export default class ImageConverterPlugin extends Plugin {
     processAllVaultModal: ProcessAllVaultModal
     // captions
     captionManager: ImageCaptionManager;
+    // upload history
+    historyManager: UploadHistoryManager;
     // upload helper for batch upload and download
     uploadHelper: UploadHelper;
     // network image downloader
@@ -114,7 +155,7 @@ export default class ImageConverterPlugin extends Plugin {
     // Vault Reference Manager
     vaultReferenceManager: VaultReferenceManager;
     // Concurrent queue for rate limiting
-    private concurrentQueue: ConcurrentQueue = new ConcurrentQueue(3);
+    private concurrentQueue: ConcurrentQueue;
 
     private processedImage: ArrayBuffer | null = null;
     private temporaryBuffers: (ArrayBuffer | Blob | null)[] = [];
@@ -142,11 +183,23 @@ export default class ImageConverterPlugin extends Plugin {
         await this.loadSettings();
         this.addSettingTab(new ImageConverterSettingTab(this.app, this));
 
+        // Initialize concurrent queue with settings
+        this.concurrentQueue = new ConcurrentQueue(
+            this.settings.cloudUploadSettings.uploadConcurrency
+        );
+
         // Initialize core components immediately
         this.supportedImageFormats = new SupportedImageFormats(this.app);
 
         // Ensure temp folder exists for cloud upload
         await this.ensureTempFolderExists();
+
+        // 应用编辑模式 Wrap 开关
+        if (this.settings.enableEditModeWrap) {
+            document.body.addClass('image-assistant-wrap-in-edit-mode');
+        } else {
+            document.body.removeClass('image-assistant-wrap-in-edit-mode');
+        }
 
         // ✅ 立即注册所有命令（在 onLayoutReady 之前）
         // 这确保命令可以在 Obsidian 设置界面中绑定快捷键
@@ -178,7 +231,7 @@ export default class ImageConverterPlugin extends Plugin {
             this.registerEvent(
                 this.app.workspace.on('file-open', (file) => {
                     if (file) {
-                        this.ImageAlignmentManager?.applyAlignmentsToNote(file.path);
+                        this.ImageAlignmentManager?.refreshAllImages();
 
                         if (this.settings.enableImageCaptions) {
                             this.captionManager.refresh();
@@ -216,17 +269,17 @@ export default class ImageConverterPlugin extends Plugin {
             this.initializeComponents();
 
             // Apply Image Alignment and Resizing when switching Live to Reading mode etc.
-            if (this.settings.isImageAlignmentEnabled || this.settings.isImageResizeEnbaled) {
+            if (this.settings.isImageAlignmentEnabled || this.settings.isImageResizeEnabled) {
                 this.registerEvent(
                     this.app.workspace.on('layout-change', () => {
                         if (this.settings.isImageAlignmentEnabled) {
                             const currentFile = this.app.workspace.getActiveFile();
                             if (currentFile) {
-                                void this.ImageAlignmentManager?.applyAlignmentsToNote(currentFile.path);
+                                void this.ImageAlignmentManager?.refreshAllImages();
                             }
                         }
 
-                        if (this.settings.isImageResizeEnbaled) {
+                        if (this.settings.isImageResizeEnabled) {
                             const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
                             if (activeView) {
                                 this.imageResizer?.onLayoutChange(activeView);
@@ -264,7 +317,7 @@ export default class ImageConverterPlugin extends Plugin {
         this.imageProcessor = new ImageProcessor(this.supportedImageFormats);
         this.vaultReferenceManager = new VaultReferenceManager(this.app);
 
-        if (this.settings.isImageResizeEnbaled) {
+        if (this.settings.isImageResizeEnabled) {
             this.imageResizer = new ImageResizer(this);
             // Delay initialization to avoid startup issues
             this.app.workspace.onLayoutReady(() => {
@@ -344,14 +397,6 @@ export default class ImageConverterPlugin extends Plugin {
                                 new ProcessFolderModal(this.app, this, file.path, this.batchImageProcessor).open();
                             });
                     });
-                } else if (file instanceof TFile && (file.extension === 'md' || file.extension === 'canvas')) {
-                    menu.addItem((item) => {
-                        item.setTitle(file.extension === 'md' ? t("MENU_PROCESS_NOTE_IMAGES") : t("MENU_PROCESS_CANVAS_IMAGES"))
-                            .setIcon("cog")
-                            .onClick(() => {
-                                new ProcessCurrentNote(this.app, this, file, this.batchImageProcessor).open();
-                            });
-                    });
                 }
             })
         );
@@ -427,6 +472,44 @@ export default class ImageConverterPlugin extends Plugin {
             }
         });
 
+        // 批量上传文件夹内的所有本地图片到图床
+        this.addCommand({
+            id: 'upload-folder-images',
+            name: t("CMD_UPLOAD_FOLDER"),
+            callback: async () => {
+                // 只在图床模式下可用
+                if (this.settings.pasteHandlingMode !== 'cloud') {
+                    new Notice(t("MSG_ONLY_CLOUD_MODE"));
+                    return;
+                }
+                // 打开文件夹选择器
+                new FolderSelectorModal(this.app, async (folder) => {
+                    // 询问用户是否包含子文件夹
+                    const recursive = await new Promise<boolean>((resolve) => {
+                        const modal = new Modal(this.app);
+                        modal.titleEl.setText(t("DIALOG_FOLDER_UPLOAD_TITLE"));
+                        modal.contentEl.createEl("p", { text: t("DIALOG_FOLDER_UPLOAD_DESC") });
+
+                        const buttonContainer = modal.contentEl.createDiv({ cls: "modal-button-container" });
+                        buttonContainer.createEl("button", { text: t("DIALOG_FOLDER_UPLOAD_CURRENT_ONLY") })
+                            .addEventListener("click", () => {
+                                modal.close();
+                                resolve(false);
+                            });
+                        buttonContainer.createEl("button", { text: t("DIALOG_FOLDER_UPLOAD_INCLUDE_SUBFOLDERS"), cls: "mod-cta" })
+                            .addEventListener("click", () => {
+                                modal.close();
+                                resolve(true);
+                            });
+
+                        modal.open();
+                    });
+
+                    await this.uploadFolderImages(folder.path, recursive);
+                }).open();
+            }
+        });
+
         // 清理无用文件
         this.addCommand({
             id: 'clean-unused-files',
@@ -445,30 +528,33 @@ export default class ImageConverterPlugin extends Plugin {
             }
         });
 
-        // OCR 命令（不依赖其他组件，可以立即执行）
-        this.addCommand({
-            id: 'ocr-latex-multiline',
-            name: t("CMD_OCR_LATEX_MULTI"),
-            callback: async () => {
-                await this.handleOCRLatex(true);
-            }
-        });
+        // OCR 命令（不依赖其他组件，但只在桌面端可用）
+        // 移动端不支持 electron clipboard API
+        if (!Platform.isMobile) {
+            this.addCommand({
+                id: 'ocr-latex-multiline',
+                name: t("CMD_OCR_LATEX_MULTI"),
+                callback: async () => {
+                    await this.handleOCRLatex(true);
+                }
+            });
 
-        this.addCommand({
-            id: 'ocr-latex-inline',
-            name: t("CMD_OCR_LATEX_INLINE"),
-            callback: async () => {
-                await this.handleOCRLatex(false);
-            }
-        });
+            this.addCommand({
+                id: 'ocr-latex-inline',
+                name: t("CMD_OCR_LATEX_INLINE"),
+                callback: async () => {
+                    await this.handleOCRLatex(false);
+                }
+            });
 
-        this.addCommand({
-            id: 'ocr-markdown',
-            name: t("CMD_OCR_MARKDOWN"),
-            callback: async () => {
-                await this.handleOCRMarkdown();
-            }
-        });
+            this.addCommand({
+                id: 'ocr-markdown',
+                name: t("CMD_OCR_MARKDOWN"),
+                callback: async () => {
+                    await this.handleOCRMarkdown();
+                }
+            });
+        }
 
         this.addReloadCommand();
     }
@@ -518,12 +604,30 @@ export default class ImageConverterPlugin extends Plugin {
 
     // Load settings method
     async loadSettings() {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        const data = await this.loadData();
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+
+        // 向后兼容：迁移拼写错误的设置项
+        // isImageResizeEnbaled -> isImageResizeEnabled
+        if (data && 'isImageResizeEnbaled' in data && !('isImageResizeEnabled' in data)) {
+            console.log('[Settings Migration] Migrating isImageResizeEnbaled to isImageResizeEnabled');
+            this.settings.isImageResizeEnabled = data.isImageResizeEnbaled;
+            // 保存迁移后的设置
+            await this.saveSettings();
+        }
     }
 
     // Save settings method
     async saveSettings() {
         await this.saveData(this.settings);
+    }
+
+    /**
+     * Update concurrent queue with new concurrency value
+     * Called when upload concurrency setting is changed
+     */
+    updateConcurrentQueue(concurrency: number) {
+        this.concurrentQueue = new ConcurrentQueue(concurrency);
     }
 
     // Command to open settings tab
@@ -616,8 +720,15 @@ export default class ImageConverterPlugin extends Plugin {
 
     /**
      * 获取剪贴板中的图片数据
+     * 注意: 仅桌面端可用，移动端不支持 electron API
      */
     private getClipboardImage(): Uint8Array | null {
+        // 移动端检查
+        if (Platform.isMobile) {
+            new Notice(t("MSG_OCR_DESKTOP_ONLY"));
+            return null;
+        }
+
         try {
             // 动态导入 electron,避免在非桌面端报错
             // @ts-ignore
@@ -1612,10 +1723,12 @@ export default class ImageConverterPlugin extends Plugin {
         // Process each file
         for (const file of supportedFiles) {
             console.log('[Cloud Upload] Processing file:', file.name, 'size:', file.size, 'type:', file.type);
+
+            // Insert uploading placeholder
+            const timestamp = Date.now();
+            const placeholder = `![Uploading file...${timestamp}]()`;
+
             try {
-                // Insert uploading placeholder
-                const timestamp = Date.now();
-                const placeholder = `![Uploading file...${timestamp}]()`;
                 editor.replaceRange(placeholder, cursor);
                 console.log('[Cloud Upload] Inserted placeholder:', placeholder);
 
@@ -1659,7 +1772,12 @@ export default class ImageConverterPlugin extends Plugin {
                 console.error('[Cloud Upload] Upload failed:', error);
                 console.error('[Cloud Upload] Error stack:', error.stack);
                 new Notice(`Upload failed: ${error.message}`);
-                // Leave placeholder in place for user to see the error
+
+                // Remove placeholder on failure
+                const content = editor.getValue();
+                const cleanedContent = content.replace(placeholder, '');
+                editor.setValue(cleanedContent);
+                console.log('[Cloud Upload] Placeholder removed due to upload failure');
             } finally {
                 // Clear memory after processing
                 this.clearMemory();
@@ -1699,14 +1817,9 @@ export default class ImageConverterPlugin extends Plugin {
             const isNetworkImage = img.path.startsWith('http://') || img.path.startsWith('https://');
 
             // 🔴 跳过已上传图片
-            if (this.settings.cloudUploadSettings.uploadedImages && this.settings.cloudUploadSettings.uploadedImages.length > 0) {
-                const uploadedUrls = new Set(
-                    this.settings.cloudUploadSettings.uploadedImages.map(item => item.imgUrl)
-                );
-                if (uploadedUrls.has(img.path)) {
-                    console.log('[Batch Upload] Skipping already uploaded image:', img.path);
-                    return false;
-                }
+            if (this.historyManager.isUrlUploaded(img.path)) {
+                console.log('[Batch Upload] Skipping already uploaded image:', img.path);
+                return false;
             }
 
             if (isNetworkImage) {
@@ -1817,26 +1930,37 @@ export default class ImageConverterPlugin extends Plugin {
         console.log('[Batch Upload] Prepared', uploadTasks.length, 'unique upload tasks for', totalLinks, 'image links');
         new Notice(`Uploading ${uploadTasks.length} unique image(s)...`);
 
+        // 使用NotificationManager收集验证错误
+        const notificationManager = new NotificationManager();
+
         // 验证本地文件存在性
         const validationErrors: string[] = [];
         for (const task of uploadTasks) {
             if (!task.isNetworkImage && task.file) {
                 const exists = await this.validateFileExists(task.file);
                 if (!exists) {
+                    // 收集验证错误
+                    notificationManager.collectError(
+                        task.file.name,
+                        '文件不存在'
+                    );
                     validationErrors.push(task.file.name);
                 }
             }
         }
 
         if (validationErrors.length > 0) {
-            new Notice(`⚠️ 发现 ${validationErrors.length} 个文件不存在，已跳过: ${validationErrors.join(', ')}`);
             console.warn('[Batch Upload] Files not found:', validationErrors);
             // 过滤掉不存在的文件
             const filteredTasks = uploadTasks.filter(task =>
                 task.isNetworkImage || !validationErrors.includes(task.file!.name)
             );
             if (filteredTasks.length === 0) {
-                new Notice('没有可上传的图片');
+                notificationManager.showBatchSummary(
+                    uploadTasks.length,
+                    0,
+                    "批量上传"
+                );
                 return;
             }
             // 更新 uploadTasks
@@ -1880,14 +2004,17 @@ export default class ImageConverterPlugin extends Plugin {
 
             // 检查上传结果数量
             if (uploadedUrls.length !== uploadTasks.length) {
-                new Notice('Warning: Uploaded file count does not match expected count.');
+                notificationManager.collectError(
+                    'batch-upload-mismatch',
+                    `上传数量不匹配: 期望 ${uploadTasks.length}，实际 ${uploadedUrls.length}`
+                );
                 console.warn('[Batch Upload] Expected', uploadTasks.length, 'but got', uploadedUrls.length);
             }
 
             // ====================
             // Stage 2: 多引用验证
             // ====================
-            new Notice('正在扫描引用...');
+            new Notice(t("MSG_SCANNING_REFS"));
 
             // 为每个本地图片检查 Vault 级别的引用
             const multiReferenceImages: BatchUploadTaskInfo[] = [];
@@ -1970,7 +2097,7 @@ export default class ImageConverterPlugin extends Plugin {
             });
 
             if (userChoice === 'cancel') {
-                new Notice('已取消替换操作,图片已上传');
+                new Notice(t("MSG_UPLOAD_CANCELLED"));
                 return;
             }
 
@@ -2004,7 +2131,7 @@ export default class ImageConverterPlugin extends Plugin {
 
                 // 更新编辑器内容
                 helper.setValue(content);
-                new Notice(`已替换当前笔记中的 ${replacedLinkCount} 个链接`);
+                new Notice(t("MSG_REPLACED_CURRENT_NOTE").replace("{0}", replacedLinkCount.toString()));
 
             } else if (userChoice === 'replace-all' || userChoice === 'replace-all-delete') {
                 // 替换所有引用
@@ -2018,7 +2145,9 @@ export default class ImageConverterPlugin extends Plugin {
                     if (matchInfo) {
                         // 本地图片:替换所有 Vault 引用
                         // Use VaultReferenceManager to update all references for this image
-                        await this.updateLinksWithManager(matchInfo.task.file!.path, cloudUrl);
+                        const count = await this.updateLinksWithManager(matchInfo.task.file!.path, cloudUrl);
+                        replacedLinkCount += count;
+                        console.log(`[Batch Upload] Replaced ${count} references for:`, matchInfo.task.file!.path);
                     } else {
                         // 网络图片:仅替换当前笔记
                         let content = helper.getValue();
@@ -2038,7 +2167,7 @@ export default class ImageConverterPlugin extends Plugin {
                     }
                 }
 
-                new Notice(`已替换 ${replacedLinkCount} 个图片链接`);
+                new Notice(t("MSG_REPLACED_ALL_LINKS").replace("{0}", replacedLinkCount.toString()));
 
                 // 删除本地源文件(仅当用户选择"替换所有并删除本地")
                 if (userChoice === 'replace-all-delete' && uploadTasks.length > 0) {
@@ -2056,7 +2185,7 @@ export default class ImageConverterPlugin extends Plugin {
                         }
                     }
                     if (deletedCount > 0) {
-                        new Notice(`已删除 ${deletedCount} 个本地源文件`);
+                        new Notice(t("MSG_DELETED_SOURCE_FILES").replace("{0}", deletedCount.toString()));
                     }
                 }
             }
@@ -2093,7 +2222,593 @@ export default class ImageConverterPlugin extends Plugin {
             await this.networkDownloader.downloadAllNetworkImages();
         } catch (error) {
             console.error('[Download] Download all images failed:', error);
-            new Notice(`下载失败: ${error.message}`);
+            new Notice(t("MSG_DOWNLOAD_FAILED").replace("{0}", error.message));
+        }
+    }
+
+    /**
+     * Public method to upload folder images
+     * @param folderPath - Path to the folder
+     * @param recursive - Whether to process subfolders recursively
+     */
+    async uploadFolderImagesPublic(folderPath: string, recursive: boolean = false): Promise<void> {
+        await this.uploadFolderImages(folderPath, recursive);
+    }
+
+    /**
+     * Public method to download folder images
+     * @param folderPath - Path to the folder
+     * @param recursive - Whether to process subfolders recursively
+     */
+    async downloadFolderImagesPublic(folderPath: string, recursive: boolean = false): Promise<void> {
+        await this.downloadFolderImages(folderPath, recursive);
+    }
+
+    /**
+     * Upload all local images in a folder to cloud storage
+     * 批量上传文件夹中的所有本地图片到图床
+     * @param folderPath - Folder path
+     * @param recursive - Whether to include subfolders
+     */
+    private async uploadFolderImages(folderPath: string, recursive: boolean = false): Promise<void> {
+        // Step 1: Validate folder
+        const folder = this.app.vault.getAbstractFileByPath(folderPath);
+        if (!(folder instanceof TFolder)) {
+            new Notice(t("MSG_INVALID_FOLDER"));
+            return;
+        }
+
+        // Step 2: Collect all image files in folder
+        const allFiles = this.app.vault.getFiles();
+        const normalizedFolderPath = folderPath.replace(/\\/g, '/').replace(/\/$/, '');
+        const prefix = normalizedFolderPath === '' || normalizedFolderPath === '/' ? '' : `${normalizedFolderPath}/`;
+
+        const isImmediateChild = (filePath: string) => {
+            if (!prefix) {
+                // Root folder: immediate children have no '/'
+                return filePath.indexOf('/') === -1;
+            }
+            if (!filePath.startsWith(prefix)) return false;
+            const remainder = filePath.slice(prefix.length);
+            return remainder.indexOf('/') === -1;
+        };
+
+        const imageFiles = allFiles.filter((file) => {
+            if (!this.supportedImageFormats.isSupported(undefined, file.name)) return false;
+            const normalized = file.path.replace(/\\/g, '/');
+            if (recursive) {
+                return prefix === '' ? true : normalized.startsWith(prefix);
+            }
+            return isImmediateChild(normalized);
+        });
+
+        if (imageFiles.length === 0) {
+            new Notice(t("MSG_NO_IMAGES_IN_FOLDER"));
+            return;
+        }
+
+        console.log('[Folder Upload] Found', imageFiles.length, 'image file(s) in folder:', folderPath);
+
+        // Step 3: Filter out already uploaded images and network images
+        const filteredFiles = imageFiles.filter(file => {
+            // Skip already uploaded images
+            if (this.historyManager.isLocalPathUploaded(file.path)) {
+                console.log('[Folder Upload] Skipping already uploaded image:', file.path);
+                return false;
+            }
+            return true;
+        });
+
+        if (filteredFiles.length === 0) {
+            new Notice(t("MSG_NO_IMAGES_TO_UPLOAD"));
+            return;
+        }
+
+        console.log('[Folder Upload] Prepared', filteredFiles.length, 'image(s) to upload');
+        new Notice(t("MSG_UPLOADING_IMAGES").replace("{0}", filteredFiles.length.toString()));
+
+        // Step 4: Use NotificationManager to collect errors
+        const notificationManager = new NotificationManager();
+
+        // Validate file existence
+        const validationErrors: string[] = [];
+        for (const file of filteredFiles) {
+            const exists = await this.validateFileExists(file);
+            if (!exists) {
+                notificationManager.collectError(file.name, t("MSG_FILE_NOT_FOUND"));
+                validationErrors.push(file.name);
+            }
+        }
+
+        if (validationErrors.length > 0) {
+            console.warn('[Folder Upload] Files not found:', validationErrors);
+            const validFiles = filteredFiles.filter(file => !validationErrors.includes(file.name));
+            if (validFiles.length === 0) {
+                notificationManager.showBatchSummary(
+                    filteredFiles.length,
+                    0,
+                    t("MSG_FOLDER_UPLOAD")
+                );
+                return;
+            }
+            filteredFiles.length = 0;
+            filteredFiles.push(...validFiles);
+        }
+
+        // Step 5: Upload images with concurrent control
+        try {
+            const uploaderManager = new UploaderManager(
+                this.settings.cloudUploadSettings.uploader,
+                this
+            );
+
+            // Prepare upload paths
+            const pathsToUpload = filteredFiles.map(file => this.buildUploadPath(file));
+            console.log('[Folder Upload] Uploading files:', pathsToUpload);
+            console.log('[Folder Upload] Remote mode:', this.settings.cloudUploadSettings.remoteServerMode);
+
+            // Upload with concurrent queue (using uploadConcurrency setting)
+            const uploadResult = await this.concurrentQueue.run(
+                pathsToUpload.map(path => async () => {
+                    const result = await uploaderManager.upload([path]);
+                    if (!result.success) {
+                        throw new Error(result.msg || 'Upload failed');
+                    }
+                    return result.result[0];
+                })
+            );
+
+            const uploadedUrls = uploadResult;
+            console.log('[Folder Upload] Upload result:', uploadedUrls);
+
+            // Check upload result count
+            if (uploadedUrls.length !== filteredFiles.length) {
+                notificationManager.collectError(
+                    'folder-upload-mismatch',
+                    t("MSG_UPLOAD_COUNT_MISMATCH")
+                        .replace("{0}", filteredFiles.length.toString())
+                        .replace("{1}", uploadedUrls.length.toString())
+                );
+                console.warn('[Folder Upload] Expected', filteredFiles.length, 'but got', uploadedUrls.length);
+            }
+
+            // Step 6: Scan for vault-wide references
+            new Notice(t("MSG_SCANNING_REFS"));
+
+            const multiReferenceImages: BatchUploadTaskInfo[] = [];
+            const fileWithVaultMatches: Array<{
+                file: TFile;
+                cloudUrl: string;
+                vaultMatches: ImageMatchResult;
+            }> = [];
+
+            for (let i = 0; i < Math.min(filteredFiles.length, uploadedUrls.length); i++) {
+                const file = filteredFiles[i];
+                const cloudUrl = uploadedUrls[i];
+
+                // Use VaultReferenceManager to check references
+                const references = await this.vaultReferenceManager.getFilesReferencingImage(file.path);
+
+                // Convert to ImageMatchResult structure
+                const fileGroups = new Map<string, ImageMatch[]>();
+                for (const ref of references) {
+                    if (!fileGroups.has(ref.file.path)) {
+                        fileGroups.set(ref.file.path, []);
+                    }
+                    fileGroups.get(ref.file.path)?.push({
+                        lineNumber: 0,
+                        line: ref.original,
+                        original: ref.original
+                    });
+                }
+
+                const vaultMatches: ImageMatchResult = {
+                    totalCount: references.length,
+                    files: []
+                };
+
+                for (const [path, matchItems] of fileGroups.entries()) {
+                    vaultMatches.files.push({
+                        path: path,
+                        matches: matchItems
+                    });
+                }
+
+                const totalReferences = vaultMatches.totalCount;
+
+                // Save file and match info
+                fileWithVaultMatches.push({
+                    file,
+                    cloudUrl,
+                    vaultMatches
+                });
+
+                // Record to multi-reference list if has references
+                if (totalReferences > 0) {
+                    multiReferenceImages.push({
+                        imageName: file.name,
+                        vaultReferences: totalReferences,
+                        currentNoteReferences: 0, // No current note context in folder upload
+                        otherNotesReferences: totalReferences,
+                        hasMultipleReferences: true
+                    });
+                }
+            }
+
+            // Step 7: Show confirmation dialog
+            const userChoice = await new Promise<'replace-current' | 'replace-all' | 'replace-all-delete' | 'cancel'>((resolve) => {
+                new BatchUploadConfirmDialog(
+                    this.app,
+                    filteredFiles.length,
+                    multiReferenceImages,
+                    folderPath, // Use folder path instead of current note path
+                    resolve
+                ).open();
+            });
+
+            if (userChoice === 'cancel') {
+                new Notice(t("MSG_UPLOAD_CANCELLED"));
+                return;
+            }
+
+            // Step 8: Replace links based on user choice
+            let replacedLinkCount = 0;
+
+            if (userChoice === 'replace-current') {
+                // For folder upload, 'replace-current' means no replacement (only upload)
+                new Notice(t("MSG_UPLOAD_ONLY_NO_REPLACEMENT"));
+            } else if (userChoice === 'replace-all' || userChoice === 'replace-all-delete') {
+                // Replace all vault references
+                for (let i = 0; i < Math.min(filteredFiles.length, uploadedUrls.length); i++) {
+                    const matchInfo = fileWithVaultMatches[i];
+                    if (matchInfo) {
+                        // Use VaultReferenceManager to update all references
+                        const count = await this.updateLinksWithManager(matchInfo.file.path, matchInfo.cloudUrl);
+                        replacedLinkCount += count;
+                        console.log(`[Folder Upload] Replaced ${count} references for:`, matchInfo.file.path);
+                    }
+                }
+
+                new Notice(t("MSG_REPLACED_ALL_LINKS").replace("{0}", replacedLinkCount.toString()));
+
+                // Delete local files (only when user chooses "replace all and delete")
+                if (userChoice === 'replace-all-delete' && filteredFiles.length > 0) {
+                    let deletedCount = 0;
+                    for (const file of filteredFiles) {
+                        try {
+                            await this.app.fileManager.trashFile(file);
+                            deletedCount++;
+                            console.log('[Folder Upload] Deleted source file:', file.path);
+                        } catch (error) {
+                            console.error('[Folder Upload] Failed to delete source file:', file.path, error);
+                            notificationManager.collectError(file.name, t("MSG_FILE_NOT_FOUND"));
+                        }
+                    }
+                    if (deletedCount > 0) {
+                        new Notice(t("MSG_DELETED_SOURCE_FILES").replace("{0}", deletedCount.toString()));
+                    }
+                }
+            }
+
+            // Refresh image captions (if enabled)
+            if (this.settings.enableImageCaptions) {
+                this.captionManager.refresh();
+            }
+
+            // Show batch summary if there were errors
+            const totalErrors = notificationManager.getErrorCount();
+            if (totalErrors > 0) {
+                notificationManager.showBatchSummary(
+                    filteredFiles.length,
+                    uploadedUrls.length,
+                    t("MSG_FOLDER_UPLOAD")
+                );
+            }
+
+        } catch (error) {
+            console.error('[Folder Upload] Upload failed:', error);
+            new Notice(t("MSG_BATCH_UPLOAD_FAILED").replace("{0}", error.message));
+            notificationManager.showBatchSummary(
+                filteredFiles.length,
+                0,
+                t("MSG_FOLDER_UPLOAD")
+            );
+        } finally {
+            // Clear memory after batch upload
+            this.clearMemory();
+        }
+    }
+
+    /**
+     * Download all network images referenced in notes within a folder
+     * 批量下载文件夹内笔记引用的所有网络图片
+     * @param folderPath - Folder path
+     * @param recursive - Whether to include subfolders
+     */
+    private async downloadFolderImages(folderPath: string, recursive: boolean = false): Promise<void> {
+        // Step 1: Validate folder
+        const folder = this.app.vault.getAbstractFileByPath(folderPath);
+        if (!(folder instanceof TFolder)) {
+            new Notice(t("MSG_INVALID_FOLDER"));
+            return;
+        }
+
+        // Step 2: Collect all markdown files in folder
+        const allFiles = this.app.vault.getMarkdownFiles();
+        const normalizedFolderPath = folderPath.replace(/\\/g, '/').replace(/\/$/, '');
+        const prefix = normalizedFolderPath === '' || normalizedFolderPath === '/' ? '' : `${normalizedFolderPath}/`;
+
+        const isImmediateChild = (filePath: string) => {
+            if (!prefix) {
+                // Root folder: immediate children have no '/'
+                return filePath.indexOf('/') === -1;
+            }
+            if (!filePath.startsWith(prefix)) return false;
+            const remainder = filePath.slice(prefix.length);
+            return remainder.indexOf('/') === -1;
+        };
+
+        const markdownFiles = allFiles.filter((file) => {
+            const normalized = file.path.replace(/\\/g, '/');
+            if (recursive) {
+                return prefix === '' ? true : normalized.startsWith(prefix);
+            }
+            return isImmediateChild(normalized);
+        });
+
+        if (markdownFiles.length === 0) {
+            new Notice(t("MSG_NO_NOTES_IN_FOLDER"));
+            return;
+        }
+
+        console.log('[Folder Download] Found', markdownFiles.length, 'markdown file(s) in folder:', folderPath);
+
+        // Step 3: Extract all network images from notes
+        const networkImageMap = new Map<string, { url: string; notes: TFile[] }>();
+
+        for (const noteFile of markdownFiles) {
+            try {
+                const content = await this.app.vault.read(noteFile);
+
+                // Extract network images using regex (Markdown format)
+                const markdownRegex = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
+                let match;
+                while ((match = markdownRegex.exec(content)) !== null) {
+                    const url = match[1];
+                    if (!networkImageMap.has(url)) {
+                        networkImageMap.set(url, { url, notes: [] });
+                    }
+                    const existing = networkImageMap.get(url)!;
+                    if (!existing.notes.includes(noteFile)) {
+                        existing.notes.push(noteFile);
+                    }
+                }
+
+                // Extract network images (Wikilink format)
+                const wikilinkRegex = /!\[\[(https?:\/\/[^\]]+)\]\]/g;
+                while ((match = wikilinkRegex.exec(content)) !== null) {
+                    const url = match[1];
+                    if (!networkImageMap.has(url)) {
+                        networkImageMap.set(url, { url, notes: [] });
+                    }
+                    const existing = networkImageMap.get(url)!;
+                    if (!existing.notes.includes(noteFile)) {
+                        existing.notes.push(noteFile);
+                    }
+                }
+            } catch (error) {
+                console.error('[Folder Download] Failed to read note:', noteFile.path, error);
+            }
+        }
+
+        const networkImages = Array.from(networkImageMap.values());
+
+        if (networkImages.length === 0) {
+            new Notice(t("MSG_NO_NETWORK_IMAGES_IN_FOLDER"));
+            return;
+        }
+
+        console.log('[Folder Download] Found', networkImages.length, 'unique network image(s)');
+
+        // Step 4: Apply blacklist filter
+        const blackDomains = this.settings.cloudUploadSettings?.newWorkBlackDomains || "";
+        const filteredImages = networkImages.filter(img => {
+            if (!blackDomains.trim()) return true;
+            return !this.isBlacklistedDomain(img.url);
+        });
+
+        if (filteredImages.length < networkImages.length) {
+            new Notice(t("MSG_FILTERED_BLACKLISTED").replace("{0}", (networkImages.length - filteredImages.length).toString()));
+        }
+
+        if (filteredImages.length === 0) {
+            new Notice(t("MSG_ALL_IMAGES_BLACKLISTED"));
+            return;
+        }
+
+        // Step 5: Build download tasks with reference information
+        const tasks: any[] = filteredImages.map(img => {
+            const filename = this.extractFilenameFromUrl(img.url);
+            return {
+                url: img.url,
+                originalSource: img.url,
+                suggestedName: filename,
+                selected: true
+            };
+        });
+
+        // Step 6: Show download modal
+        const { NetworkImageDownloadModal } = await import('./cloud/NetworkImageDownloadModal');
+
+        const modal = new NetworkImageDownloadModal(
+            this.app,
+            tasks,
+            async (choice) => {
+                await this.executeFolderDownload(choice, filteredImages, folderPath);
+            }
+        );
+
+        modal.open();
+    }
+
+    /**
+     * Execute folder download operation
+     * 执行文件夹下载操作
+     */
+    private async executeFolderDownload(
+        choice: { mode: string; selectedTasks: any[] },
+        imageData: Array<{ url: string; notes: TFile[] }>,
+        folderPath: string
+    ): Promise<void> {
+        const { mode, selectedTasks } = choice;
+        const notificationManager = new NotificationManager();
+
+        try {
+            let successCount = 0;
+            let skippedCount = 0;
+
+            // Use concurrent queue for download
+            const concurrency = this.settings.cloudUploadSettings.uploadConcurrency || 3;
+            const queue = new ConcurrentQueue(concurrency);
+
+            const downloadTasks = selectedTasks.map(task => async () => {
+                const imageInfo = imageData.find(img => img.url === task.url);
+                if (!imageInfo) return;
+
+                try {
+                    // Get attachment folder for the first note that references this image
+                    const firstNote = imageInfo.notes[0];
+                    const attachmentPath = await this.app.fileManager.getAvailablePathForAttachment(
+                        "",
+                        firstNote.path
+                    );
+
+                    // Download image using NetworkImageDownloader
+                    const result = await this.networkDownloader.downloadSingleImageInternal(
+                        task.url,
+                        attachmentPath,
+                        task.suggestedName,
+                        firstNote
+                    );
+
+                    if (result.success && result.localPath) {
+                        successCount++;
+
+                        // Replace links in all notes that reference this image (if mode is download-and-replace)
+                        if (mode === "download-and-replace") {
+                            for (const noteFile of imageInfo.notes) {
+                                try {
+                                    await this.vaultReferenceManager.updateReferencesInFile(
+                                        noteFile,
+                                        task.url,
+                                        (location) => {
+                                            // Extract original alt text and size params
+                                            let altText = "";
+                                            let sizeParams = "";
+                                            const markdownMatch = location.original.match(/!\[([^\]]*)\]/);
+                                            if (markdownMatch) {
+                                                const fullAlt = markdownMatch[1];
+                                                const sizeMatch = fullAlt.match(/^(.*?)\|(\d+x\d*|\d*x\d+|\d+)$/);
+                                                if (sizeMatch) {
+                                                    altText = sizeMatch[1];
+                                                    sizeParams = `|${sizeMatch[2]}`;
+                                                } else {
+                                                    altText = fullAlt;
+                                                }
+                                            }
+
+                                            // Generate new link with relative path
+                                            const relativePath = this.app.metadataCache.fileToLinktext(
+                                                this.app.vault.getAbstractFileByPath(result.localPath!) as TFile,
+                                                noteFile.path
+                                            );
+                                            return `![${altText}${sizeParams}](${encodeURI(relativePath)})`;
+                                        }
+                                    );
+                                    console.log('[Folder Download] Replaced links in:', noteFile.path);
+                                } catch (error) {
+                                    console.error('[Folder Download] Failed to replace links in:', noteFile.path, error);
+                                    notificationManager.collectError(
+                                        noteFile.name,
+                                        t("MSG_REPLACE_FAILED").replace("{0}", error.message)
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        notificationManager.collectError(
+                            task.suggestedName,
+                            result.error || t("MSG_UNKNOWN_ERROR"),
+                            task.url
+                        );
+                        console.error('[Folder Download] Failed:', task.url, '-', result.error);
+                    }
+                } catch (error) {
+                    notificationManager.collectError(
+                        task.suggestedName,
+                        error.message || t("MSG_PROCESSING_FAILED"),
+                        task.url
+                    );
+                    console.error('[Folder Download] Error processing', task.url, ':', error);
+                }
+            });
+
+            // Execute download tasks with concurrency control
+            await queue.run(downloadTasks);
+
+            // Show completion notice
+            const totalSelected = selectedTasks.length;
+            if (mode === "download-and-replace") {
+                new Notice(
+                    t("MSG_DOWNLOAD_REPLACE_COMPLETE")
+                        .replace("{0}", successCount.toString())
+                        .replace("{1}", totalSelected.toString())
+                );
+            } else if (mode === "download-only") {
+                new Notice(
+                    t("MSG_DOWNLOAD_COMPLETE")
+                        .replace("{0}", successCount.toString())
+                        .replace("{1}", totalSelected.toString())
+                );
+            }
+
+            // Show batch summary if there were errors
+            const totalErrors = notificationManager.getErrorCount();
+            if (totalErrors > 0) {
+                notificationManager.showBatchSummary(
+                    totalSelected,
+                    successCount,
+                    t("MSG_FOLDER_DOWNLOAD")
+                );
+            }
+
+            // Refresh image captions (if enabled)
+            if (this.settings.enableImageCaptions) {
+                this.captionManager.refresh();
+            }
+
+        } catch (error) {
+            console.error('[Folder Download] Download failed:', error);
+            new Notice(t("MSG_BATCH_DOWNLOAD_FAILED").replace("{0}", error.message));
+        } finally {
+            // Clear memory after batch download
+            this.clearMemory();
+        }
+    }
+
+    /**
+     * Extract filename from URL
+     * 从 URL 中提取文件名
+     */
+    private extractFilenameFromUrl(url: string): string {
+        try {
+            const urlObj = new URL(url);
+            const pathname = urlObj.pathname;
+            const filename = pathname.substring(pathname.lastIndexOf('/') + 1);
+            return decodeURIComponent(filename) || 'downloaded-image.jpg';
+        } catch (error) {
+            console.error('[Extract Filename] Invalid URL:', url, error);
+            return 'downloaded-image.jpg';
         }
     }
 
@@ -2167,10 +2882,12 @@ export default class ImageConverterPlugin extends Plugin {
         // Process each file
         for (const file of supportedFiles) {
             console.log('[Cloud Upload] Processing file:', file.name, 'size:', file.size, 'type:', file.type);
+
+            // Insert uploading placeholder
+            const timestamp = Date.now();
+            const placeholder = `![Uploading file...${timestamp}]()`;
+
             try {
-                // Insert uploading placeholder
-                const timestamp = Date.now();
-                const placeholder = `![Uploading file...${timestamp}]()`;
                 editor.replaceRange(placeholder, cursor);
                 console.log('[Cloud Upload] Inserted placeholder:', placeholder);
 
@@ -2214,7 +2931,12 @@ export default class ImageConverterPlugin extends Plugin {
                 console.error('[Cloud Upload] Upload failed:', error);
                 console.error('[Cloud Upload] Error stack:', error.stack);
                 new Notice(`Upload failed: ${error.message}`);
-                // Leave placeholder in place for user to see the error
+
+                // Remove placeholder on failure
+                const content = editor.getValue();
+                const cleanedContent = content.replace(placeholder, '');
+                editor.setValue(cleanedContent);
+                console.log('[Cloud Upload] Placeholder removed due to upload failure');
             } finally {
                 // Clear memory after processing
                 this.clearMemory();
@@ -2230,6 +2952,7 @@ export default class ImageConverterPlugin extends Plugin {
     /**
      * Handle pasted text containing image URLs in cloud mode
      * Extract image URLs and upload them to cloud storage
+     * Supports both Markdown and Wikilink formats
      */
     private async handlePasteTextCloud(
         clipboardText: string,
@@ -2242,18 +2965,25 @@ export default class ImageConverterPlugin extends Plugin {
             return; // Network image upload is disabled
         }
 
-        // Extract image URLs from pasted text
+        // Extract image URLs from pasted text (Markdown format)
         const imageUrlRegex = /!\[(.*?)\]\((https?:\/\/[^\s)]+)\)/g;
-        const matches = [...clipboardText.matchAll(imageUrlRegex)];
+        const markdownMatches = [...clipboardText.matchAll(imageUrlRegex)];
 
-        if (matches.length === 0) {
+        // Extract image URLs from pasted text (Wikilink format)
+        // Import from RegexPatterns
+        const { REGEX_WIKI_NETWORK_IMAGE } = await import('./utils/RegexPatterns');
+        const wikilinkMatches = [...clipboardText.matchAll(REGEX_WIKI_NETWORK_IMAGE)];
+
+        const totalMatches = markdownMatches.length + wikilinkMatches.length;
+
+        if (totalMatches === 0) {
             return; // No image URLs found
         }
 
-        console.log('[Cloud Upload] Found', matches.length, 'image URL(s) in pasted text');
+        console.log('[Cloud Upload] Found', totalMatches, 'image URL(s) in pasted text');
 
-        // Filter out blacklisted domains
-        const validMatches = matches.filter(match => {
+        // Filter out blacklisted domains for Markdown format
+        const validMarkdownMatches = markdownMatches.filter(match => {
             const url = match[2];
             if (this.isBlacklistedDomain(url)) {
                 console.log('[Cloud Upload] Skipping blacklisted URL:', url);
@@ -2262,7 +2992,17 @@ export default class ImageConverterPlugin extends Plugin {
             return true;
         });
 
-        if (validMatches.length === 0) {
+        // Filter out blacklisted domains for Wikilink format
+        const validWikilinkMatches = wikilinkMatches.filter(match => {
+            const url = match[1];
+            if (this.isBlacklistedDomain(url)) {
+                console.log('[Cloud Upload] Skipping blacklisted URL:', url);
+                return false;
+            }
+            return true;
+        });
+
+        if (validMarkdownMatches.length === 0 && validWikilinkMatches.length === 0) {
             return; // All URLs are blacklisted
         }
 
@@ -2281,7 +3021,8 @@ export default class ImageConverterPlugin extends Plugin {
             this
         );
 
-        for (const match of validMatches) {
+        // Process Markdown format matches
+        for (const match of validMarkdownMatches) {
             const originalLink = match[0]; // Full markdown link
             const altText = match[1];
             const imageUrl = match[2];
@@ -2319,11 +3060,51 @@ export default class ImageConverterPlugin extends Plugin {
             }
         }
 
+        // Process Wikilink format matches
+        for (const match of validWikilinkMatches) {
+            const originalLink = match[0]; // Full wikilink: ![[https://...]]
+            const imageUrl = match[1];
+            const pipeParams = match[2] || ''; // Pipe parameters like |alt text
+
+            try {
+                console.log('[Cloud Upload] Uploading network image (Wikilink):', imageUrl);
+
+                // Upload the network image
+                const uploadResult = await uploaderManager.upload([imageUrl]);
+
+                if (uploadResult.success && uploadResult.result.length > 0) {
+                    const cloudUrl = uploadResult.result[0];
+                    console.log('[Cloud Upload] Network image uploaded to:', cloudUrl);
+
+                    // Generate cloud link with size parameters (Wikilink format)
+                    const cloudLink = CloudLinkFormatter.formatCloudLink(
+                        cloudUrl,
+                        this.settings.cloudUploadSettings,
+                        originalLink // Determine from match original
+                    );
+
+                    // Replace the original link with the new cloud link
+                    newContent = newContent.replace(originalLink, cloudLink);
+                    console.log('[Cloud Upload] Replaced Wikilink URL:', imageUrl, '->', cloudUrl);
+                } else {
+                    console.error('[Cloud Upload] Upload failed for:', imageUrl);
+                    new Notice(`Failed to upload network image: ${imageUrl}`);
+                }
+            } catch (error) {
+                console.error('[Cloud Upload] Error uploading network image:', error);
+                new Notice(`Error uploading ${imageUrl}: ${error.message}`);
+            } finally {
+                // Clear memory after processing
+                this.clearMemory();
+            }
+        }
+
         // Insert the modified content
         editor.replaceRange(newContent, cursor);
 
-        if (validMatches.length > 0) {
-            new Notice(`Uploaded ${validMatches.length} network image(s) successfully!`);
+        const totalUploaded = validMarkdownMatches.length + validWikilinkMatches.length;
+        if (totalUploaded > 0) {
+            new Notice(`Uploaded ${totalUploaded} network image(s) successfully!`);
         }
 
         // Refresh captions if enabled
@@ -2743,8 +3524,8 @@ export default class ImageConverterPlugin extends Plugin {
     /**
      * WRAPPER: Update links using VaultReferenceManager
      */
-    private async updateLinksWithManager(imagePath: string, cloudUrl: string, scopeFiles?: string[]): Promise<void> {
-        await this.vaultReferenceManager.updateReferences(imagePath, (loc) => {
+    private async updateLinksWithManager(imagePath: string, cloudUrl: string, scopeFiles?: string[]): Promise<number> {
+        const count = await this.vaultReferenceManager.updateReferences(imagePath, (loc) => {
             // Check if we should only update specific files (for 'replace-current' logic)
             if (scopeFiles && !scopeFiles.includes(loc.file.path)) {
                 return loc.original; // No change
@@ -2760,6 +3541,8 @@ export default class ImageConverterPlugin extends Plugin {
         if (this.settings.enableImageCaptions) {
             this.captionManager.refresh();
         }
+
+        return count;
     }
 
     /**
@@ -2767,12 +3550,12 @@ export default class ImageConverterPlugin extends Plugin {
      */
     private async deleteCloudImage(cloudUrl: string): Promise<void> {
         if (this.settings.cloudUploadSettings.uploader !== 'PicList') {
-            new Notice(`⚠️ 当前上传器不支持删除,请手动删除云端文件`);
+            new Notice(t("MSG_DELETE_NOT_SUPPORTED"));
             return;
         }
 
         try {
-            new Notice(`正在删除云端图片...`);
+            new Notice(t("MSG_DELETING_CLOUD"));
 
             const deleter = new CloudImageDeleter(this);
             const success = await deleter.deleteImage({
@@ -2780,13 +3563,13 @@ export default class ImageConverterPlugin extends Plugin {
             });
 
             if (success) {
-                new Notice(`✓ 已删除云端图片`);
+                new Notice(t("MSG_DELETE_CLOUD_SUCCESS"));
             } else {
-                new Notice(`⚠️ 删除云端图片失败`);
+                new Notice(t("MSG_DELETE_CLOUD_FAILED"));
             }
         } catch (error) {
             console.error('[Delete Cloud] Error:', error);
-            new Notice(`❌ 删除云端图片失败: ${error.message}`);
+            new Notice(t("MSG_DELETE_CLOUD_ERROR").replace("{0}", error.message));
         }
     }
 

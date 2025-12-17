@@ -112,16 +112,16 @@ export default class PicGoUploader implements Uploader {
     return response;
   }
 
-// src/uploader/picgo.ts
+  // src/uploader/picgo.ts
 
   private async uploadFileByClipboard(fileList?: FileList): Promise<any> {
     // 1. 安全检查：如果 fileList 是空的，直接返回错误，防止后续代码报错
     if (!fileList || fileList.length === 0) {
-        return {
-            success: false,
-            msg: "No files found in clipboard",
-            result: [],
-        };
+      return {
+        success: false,
+        msg: "No files found in clipboard",
+        result: [],
+      };
     }
 
     let res: Awaited<ReturnType<typeof requestUrl>>;
@@ -172,11 +172,10 @@ export default class PicGoUploader implements Uploader {
     // piclist
     if (data.fullResult) {
       const uploadUrlFullResultList = data.fullResult || [];
-      this.settings.uploadedImages = [
-        ...(this.settings.uploadedImages || []),
-        ...uploadUrlFullResultList,
-      ];
-      this.plugin.saveSettings();
+      for (const result of uploadUrlFullResultList) {
+        await this.plugin.historyManager.addRecord(result as any);
+      }
+      // this.plugin.saveSettings(); // No longer needed for history
     }
 
     return {

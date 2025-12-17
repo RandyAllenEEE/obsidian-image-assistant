@@ -21,7 +21,7 @@ export class CloudImageDeleter {
      */
     async deleteImage(imageInfo: CloudImageInfo): Promise<boolean> {
         const settings = this.plugin.settings.cloudUploadSettings;
-        
+
         // Only PicList supports deletion
         if (settings.uploader !== 'PicList') {
             console.warn('[Cloud Delete] Uploader is not PicList, skipping cloud deletion');
@@ -34,14 +34,11 @@ export class CloudImageDeleter {
         }
 
         try {
-            // Find the image in uploaded images list
-            const uploadedImages = settings.uploadedImages || [];
-            const matchingImage = uploadedImages.find(img => 
-                img.url === imageInfo.url || img.imgUrl === imageInfo.url
-            );
+            // Find the image in history
+            const matchingImage = this.plugin.historyManager.getRecord(imageInfo.url);
 
             if (!matchingImage) {
-                console.warn('[Cloud Delete] Image not found in uploaded images list');
+                console.warn('[Cloud Delete] Image not found in upload history');
                 return false;
             }
 
@@ -60,11 +57,8 @@ export class CloudImageDeleter {
             console.log('[Cloud Delete] Delete response:', data);
 
             if (data.success) {
-                // Remove from uploaded images list
-                settings.uploadedImages = uploadedImages.filter(img => 
-                    img.url !== imageInfo.url && img.imgUrl !== imageInfo.url
-                );
-                await this.plugin.saveSettings();
+                // Remove from history
+                await this.plugin.historyManager.removeRecord(imageInfo.url);
                 return true;
             } else {
                 console.error('[Cloud Delete] Delete failed:', data.msg || data.message);

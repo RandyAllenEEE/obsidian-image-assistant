@@ -115,7 +115,9 @@ export class BatchImageProcessor {
 
             const totalImages = filesToProcess.length;
 
-            const queue = new ConcurrentQueue(5); // Process 5 images concurrently
+            // Use uploadConcurrency setting for batch processing
+            const concurrency = this.plugin.settings.cloudUploadSettings.uploadConcurrency || 3;
+            const queue = new ConcurrentQueue(concurrency);
             const tasks = filesToProcess.map(linkedFile => async () => {
                 imageCount++; // Increment count when task starts or finishes (here effectively when task starts execution in our queue logic)
 
@@ -278,7 +280,9 @@ export class BatchImageProcessor {
             const startTime = Date.now();
             const totalImages = images.length;
 
-            const queue = new ConcurrentQueue(5);
+            // Use uploadConcurrency setting for batch processing
+            const concurrency = this.plugin.settings.cloudUploadSettings.uploadConcurrency || 3;
+            const queue = new ConcurrentQueue(concurrency);
             const tasks = images.map(image => async () => {
                 // Skip image if its format is in the skipFormats list
                 if (skipFormats.includes(image.extension.toLowerCase())) {
@@ -452,7 +456,9 @@ export class BatchImageProcessor {
             const startTime = Date.now();
             const totalImages = filesToProcess.length;
 
-            const queue = new ConcurrentQueue(5);
+            // Use uploadConcurrency setting for batch processing
+            const concurrency = this.plugin.settings.cloudUploadSettings.uploadConcurrency || 3;
+            const queue = new ConcurrentQueue(concurrency);
             const tasks = filesToProcess.map(image => async () => {
                 imageCount++;
 

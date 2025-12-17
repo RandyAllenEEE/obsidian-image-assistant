@@ -19,13 +19,24 @@ enum ImageSource {
     DIRECT = "direct",
     LINKED = "linked",
 }
+
+// Operation Mode Enum
+enum OperationMode {
+    CONVERT = "convert",
+    UPLOAD = "upload",
+    DOWNLOAD = "download",
+}
 export class ProcessFolderModal extends Modal {
     private recursive = false;
+
+    // --- Operation Mode ---
+    private selectedMode: OperationMode = OperationMode.CONVERT; // Default to Convert
 
     // --- Image Source Enum ---
     private selectedImageSource: ImageSource = ImageSource.DIRECT; // Default to Direct
 
     // --- Settings UI Elements ---
+    operationModeSetting: Setting | null = null;
     imageSourceSetting: Setting | null = null;
     qualitySetting: Setting | null = null;
     convertToSetting: Setting | null = null;
@@ -36,6 +47,7 @@ export class ProcessFolderModal extends Modal {
     skipTargetFormatSetting: Setting | null = null;
     resizeInputsDiv: HTMLDivElement | null = null;
     enlargeReduceDiv: HTMLDivElement | null = null;
+    settingsContainer: HTMLElement | null = null; // Store reference to settings container
 
     // --- Image Counts ---
     private imageCount = 0;
@@ -70,6 +82,20 @@ export class ProcessFolderModal extends Modal {
         await this.updateImageCountsAndDisplay();
     }
 
+    /**
+     * Re-render the entire UI based on current state
+     * Called when operation mode changes
+     */
+    private async display() {
+        const { contentEl } = this;
+        contentEl.empty();
+        if (!contentEl.hasClass("image-convert-modal")) {
+            contentEl.addClass("image-convert-modal");
+        }
+        await this.createUI(contentEl);
+        await this.updateImageCountsAndDisplay();
+    }
+
     onClose() {
         // Clear settings UI elements
         this.imageSourceSetting = null;
@@ -97,40 +123,43 @@ export class ProcessFolderModal extends Modal {
         // --- Warning Message ---
         this.createWarningMessage(contentEl);
 
-
         // --- Image Counts ---
         this.createImageCountsDisplay(contentEl);
 
-
         // Create settings sections (no longer collapsible)
-        const settingsContainer = contentEl.createDiv({
+        this.settingsContainer = contentEl.createDiv({
             cls: "settings-container",
         });
 
+        // === NEW: Operation Mode Selection ===
+        this.createOperationModeSettings(this.settingsContainer);
 
+        // Image Source Settings (recursive option)
+        this.createImageSourceSettings(this.settingsContainer);
 
-        this.createImageSourceSettings(settingsContainer);
+        // Conditional settings based on selected mode
+        if (this.selectedMode === OperationMode.CONVERT) {
+            // Format and Quality Container
+            const formatQualityContainer = this.settingsContainer.createDiv({
+                cls: "format-quality-container",
+            });
+            this.createGeneralSettings(formatQualityContainer);
 
-        // Format and Quality Container
-        const formatQualityContainer = settingsContainer.createDiv({
-            cls: "format-quality-container",
-        });
-        this.createGeneralSettings(formatQualityContainer);
+            // Resize Container
+            const resizeContainer = this.settingsContainer.createDiv({
+                cls: "resize-container",
+            });
+            this.createResizeSettings(resizeContainer);
 
-        // Resize Container
-        const resizeContainer = settingsContainer.createDiv({
-            cls: "resize-container",
-        });
-        this.createResizeSettings(resizeContainer);
+            // Skip Container
+            const skipContainer = this.settingsContainer.createDiv({
+                cls: "skip-container",
+            });
+            this.createSkipSettings(skipContainer);
+        }
+        // For UPLOAD and DOWNLOAD modes, we don't show conversion settings
 
-        // Skip Container
-        const skipContainer = settingsContainer.createDiv({
-            cls: "skip-container",
-        });
-        this.createSkipSettings(skipContainer);
-
-        this.createProcessButton(settingsContainer);
-
+        this.createActionButton(this.settingsContainer);
     }
 
     private createHeader(contentEl: HTMLElement) {
@@ -153,6 +182,106 @@ export class ProcessFolderModal extends Modal {
             cls: "modal-warning",
             text: t("MODAL_WARNING_BACKUP"),
         });
+    }
+
+    // === NEW: Operation Mode Selection ===
+    private createOperationModeSettings(contentEl: HTMLElement) {
+        contentEl.createEl("h4", { text: t("LABEL_OPERATION_MODE") });
+
+        const modeContainer = contentEl.createDiv({ cls: "operation-mode-container" });
+
+        // Store button references for updating icons
+        const buttonRefs: Record<OperationMode, any> = {
+            [OperationMode.CONVERT]: null,
+            [OperationMode.UPLOAD]: null,
+            [OperationMode.DOWNLOAD]: null,
+        };
+
+        // Function to update the icons of the radio buttons
+        const updateIcons = () => {
+            Object.entries(buttonRefs).forEach(([mode, button]) => {
+                if (button) {
+                    button.setIcon(
+                        this.selectedMode === mode
+                            ? "lucide-check-circle"
+                            : "lucide-circle"
+                    );
+                }
+            });
+        };
+
+        // Create radio buttons for each mode
+        new Setting(modeContainer)
+            .setName(t("MODE_CONVERT"))
+            .setDesc(t("DESC_MODE_CONVERT"))
+            .addExtraButton((button) => {
+                buttonRefs[OperationMode.CONVERT] = button;
+                button
+                    .setIcon(
+                        this.selectedMode === OperationMode.CONVERT
+                            ? "lucide-check-circle"
+                            : "lucide-circle"
+                    )
+                    .setTooltip(
+                        this.selectedMode === OperationMode.CONVERT
+                            ? t("TOOLTIP_SELECTED")
+                            : t("TOOLTIP_SELECT")
+                    )
+                    .onClick(async () => {
+                        this.selectedMode = OperationMode.CONVERT;
+                        updateIcons();
+                        this.display(); // Re-render to show/hide settings
+                    });
+            });
+
+        new Setting(modeContainer)
+            .setName(t("MODE_UPLOAD"))
+            .setDesc(t("DESC_MODE_UPLOAD"))
+            .addExtraButton((button) => {
+                buttonRefs[OperationMode.UPLOAD] = button;
+                button
+                    .setIcon(
+                        this.selectedMode === OperationMode.UPLOAD
+                            ? "lucide-check-circle"
+                            : "lucide-circle"
+                    )
+                    .setTooltip(
+                        this.selectedMode === OperationMode.UPLOAD
+                            ? t("TOOLTIP_SELECTED")
+                            : t("TOOLTIP_SELECT")
+                    )
+                    .onClick(async () => {
+                        this.selectedMode = OperationMode.UPLOAD;
+                        updateIcons();
+                        this.display(); // Re-render to show/hide settings
+                    });
+            });
+
+        new Setting(modeContainer)
+            .setName(t("MODE_DOWNLOAD"))
+            .setDesc(t("DESC_MODE_DOWNLOAD"))
+            .addExtraButton((button) => {
+                buttonRefs[OperationMode.DOWNLOAD] = button;
+                button
+                    .setIcon(
+                        this.selectedMode === OperationMode.DOWNLOAD
+                            ? "lucide-check-circle"
+                            : "lucide-circle"
+                    )
+                    .setTooltip(
+                        this.selectedMode === OperationMode.DOWNLOAD
+                            ? t("TOOLTIP_SELECTED")
+                            : t("TOOLTIP_SELECT")
+                    )
+                    .onClick(async () => {
+                        this.selectedMode = OperationMode.DOWNLOAD;
+                        updateIcons();
+                        this.display(); // Re-render to show/hide settings
+                    });
+            });
+
+        // Set initial icons
+        updateIcons();
     }
 
     // --- Image Counts Display ---
@@ -459,15 +588,50 @@ export class ProcessFolderModal extends Modal {
         this.createEnlargeReduceSettings();
     }
 
-    private createProcessButton(contentEl: HTMLElement) {
+    private createActionButton(contentEl: HTMLElement) {
         const buttonContainer = contentEl.createDiv({ cls: "button-container" });
+        
+        // Determine button text based on selected mode
+        let buttonText = "";
+        switch (this.selectedMode) {
+            case OperationMode.CONVERT:
+                buttonText = t("BUTTON_START_CONVERT");
+                break;
+            case OperationMode.UPLOAD:
+                buttonText = t("BUTTON_START_UPLOAD");
+                break;
+            case OperationMode.DOWNLOAD:
+                buttonText = t("BUTTON_START_DOWNLOAD");
+                break;
+        }
+        
         new ButtonComponent(buttonContainer)
-            .setButtonText(t("BUTTON_PROCESS"))
+            .setButtonText(buttonText)
             .setCta()
-            .onClick(async () => { // Use async here
+            .onClick(async () => {
                 this.close();
-                await this.batchImageProcessor.processImagesInFolder(this.folderPath, this.recursive);
+                await this.executeOperation();
             });
+    }
+
+    /**
+     * Execute the operation based on selected mode
+     */
+    private async executeOperation(): Promise<void> {
+        switch (this.selectedMode) {
+            case OperationMode.CONVERT:
+                // Original conversion/compression functionality
+                await this.batchImageProcessor.processImagesInFolder(this.folderPath, this.recursive);
+                break;
+            case OperationMode.UPLOAD:
+                // Batch upload local images in folder
+                await this.plugin.uploadFolderImagesPublic(this.folderPath, this.recursive);
+                break;
+            case OperationMode.DOWNLOAD:
+                // Batch download network images referenced in folder notes
+                await this.plugin.downloadFolderImagesPublic(this.folderPath, this.recursive);
+                break;
+        }
     }
 
     // --- Helper Methods for Settings ---

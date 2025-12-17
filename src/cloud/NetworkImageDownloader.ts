@@ -5,6 +5,8 @@ import { UploadHelper, ImageLink } from "../utils/UploadHelper";
 import { FolderAndFilenameManagement } from "../local/FolderAndFilenameManagement";
 import type ImageConverterPlugin from "../main";
 import { NetworkImageDownloadModal, DownloadTask, DownloadChoice, DownloadMode } from "./NetworkImageDownloadModal";
+import { NotificationManager } from "../utils/NotificationManager";
+import { ConcurrentQueue } from "../utils/AsyncLock";
 
 interface DownloadResult {
     success: boolean;
@@ -92,6 +94,60 @@ export class NetworkImageDownloader {
     }
 
     /**
+     * Download a single network image from context menu
+     * 从右键菜单下载单个网络图片
+     * @param url - Network image URL
+     * @param activeFile - Current active file
+     * @param editor - Editor instance (optional, for link replacement)
+     * @returns true if download succeeded
+     */
+    async downloadSingleImage(
+        url: string,
+        activeFile: TFile,
+        editor?: any
+    ): Promise<boolean> {
+        try {
+            // Get attachment folder path
+            const folderPath = await this.app.fileManager.getAvailablePathForAttachment(
+                "",
+                activeFile.path
+            );
+
+            // Ensure folder exists
+            await this.folderManager.ensureFolderExists(folderPath);
+
+            // Extract filename from URL
+            const suggestedName = this.extractFilenameFromUrl(url);
+
+            // Download the image
+            const result = await this.downloadSingleImageInternal(
+                url,
+                folderPath,
+                suggestedName,
+                activeFile
+            );
+
+            if (result.success && result.localPath) {
+                // Replace link if editor is provided
+                if (editor) {
+                    await this.replaceImageLinkInCurrentNote(
+                        activeFile,
+                        url,
+                        result.localPath
+                    );
+                }
+                return true;
+            } else {
+                console.error(`[Download] Failed to download ${url}: ${result.error}`);
+                return false;
+            }
+        } catch (error) {
+            console.error('[Download] Error in downloadSingleImage:', error);
+            return false;
+        }
+    }
+
+    /**
      * 执行下载操作
      */
     private async executeDownload(
@@ -109,15 +165,22 @@ export class NetworkImageDownloader {
         // 确保文件夹存在
         await this.folderManager.ensureFolderExists(folderPath);
 
+        // 使用NotificationManager收集错误
+        const notificationManager = new NotificationManager();
         let successCount = 0;
-        let failedCount = 0;
         let skippedCount = 0;
 
         new Notice(`🚀 开始处理 ${selectedTasks.length} 张图片...`);
 
-        for (let i = 0; i < selectedTasks.length; i++) {
-            const task = selectedTasks[i];
-            new Notice(`🔄 (${i + 1}/${selectedTasks.length}): ${task.suggestedName}`);
+        // Use uploadConcurrency setting for batch download
+        const concurrency = this.plugin.settings.cloudUploadSettings.uploadConcurrency || 3;
+        const queue = new ConcurrentQueue(concurrency);
+        
+        let processedCount = 0;
+        const tasks = selectedTasks.map(task => async () => {
+            processedCount++;
+            // 仅在特定间隔显示进度，避免通知刷屏
+            notificationManager.showProgress(processedCount, selectedTasks.length, task.suggestedName);
 
             try {
                 if (mode === "replace-only") {
@@ -136,11 +199,16 @@ export class NetworkImageDownloader {
                         successCount++;
                     } else {
                         console.warn(`[Download] Local file not found for: ${task.suggestedName}`);
+                        notificationManager.collectError(
+                            task.suggestedName,
+                            "本地文件不存在",
+                            task.url
+                        );
                         skippedCount++;
                     }
                 } else {
                     // 下载模式（仅下载 或 下载并替换）
-                    const result = await this.downloadSingleImage(
+                    const result = await this.downloadSingleImageInternal(
                         task.url,
                         folderPath,
                         task.suggestedName,
@@ -159,33 +227,57 @@ export class NetworkImageDownloader {
                             );
                         }
                     } else {
-                        failedCount++;
+                        // 收集错误而非立即通知
+                        notificationManager.collectError(
+                            task.suggestedName,
+                            result.error || "未知错误",
+                            task.url
+                        );
                         console.error(`[Download] Failed: ${task.url} - ${result.error}`);
                     }
                 }
             } catch (error) {
-                failedCount++;
+                // 收集异常错误
+                notificationManager.collectError(
+                    task.suggestedName,
+                    error.message || "处理失败",
+                    task.url
+                );
                 console.error(`[Download] Error processing ${task.url}:`, error);
             }
+        });
+
+        // Execute tasks with concurrency control
+        await queue.run(tasks);
+
+        // 准备额外信息
+        let extraInfo = "";
+        if (skippedCount > 0) {
+            extraInfo += `跳过: ${skippedCount} 张\n`;
         }
-
-        // 显示统计结果
-        let message = `✅ 处理完成\n`;
-        message += `总计: ${selectedTasks.length} 张\n`;
-        message += `成功: ${successCount} 张\n`;
-        if (failedCount > 0) message += `失败: ${failedCount} 张\n`;
-        if (skippedCount > 0) message += `跳过: ${skippedCount} 张\n`;
-
+        
         // 根据模式显示不同的成功消息
         if (mode === "download-only") {
-            message += `\n📦 图片已下载，链接未更改`;
+            extraInfo += `📦 图片已下载，链接未更改`;
         } else if (mode === "download-and-replace") {
-            message += `\n🔄 图片已下载并替换为本地路径`;
+            extraInfo += `🔄 图片已下载并替换为本地路径`;
         } else if (mode === "replace-only") {
-            message += `\n🔄 链接已替换为本地路径`;
+            extraInfo += `🔄 链接已替换为本地路径`;
         }
 
-        new Notice(message, 5000);
+        // 使用NotificationManager显示汇总通知
+        const operationType = mode === "download-only"
+            ? "图片下载"
+            : mode === "download-and-replace"
+            ? "下载并替换"
+            : "链接替换";
+        
+        notificationManager.showBatchSummary(
+            selectedTasks.length,
+            successCount,
+            operationType,
+            extraInfo.trim()
+        );
     }
 
     /**
@@ -231,15 +323,25 @@ export class NetworkImageDownloader {
     }
 
     /**
-     * 下载单张网络图片
+     * 下载单张网络图片（内部方法，现公开以供批量下载使用）
      */
-    private async downloadSingleImage(
+    async downloadSingleImageInternal(
         url: string,
         folderPath: string,
         suggestedName: string,
         activeFile: TFile
     ): Promise<DownloadResult> {
         try {
+            // 安全验证: 检查 URL 协议和域名
+            const validationError = this.validateUrl(url);
+            if (validationError) {
+                return {
+                    success: false,
+                    url: url,
+                    error: validationError
+                };
+            }
+
             // 1. 下载图片
             const response = await requestUrl({ url });
 
@@ -413,6 +515,47 @@ export class NetworkImageDownloader {
             // 需要向上
             const relativeParts = Array(upLevels).fill('..').concat(downPath);
             return relativeParts.join('/');
+        }
+    }
+
+    /**
+     * 验证 URL 的安全性
+     * 返回错误消息，如果验证通过则返回 null
+     */
+    private validateUrl(url: string): string | null {
+        try {
+            const urlObj = new URL(url);
+
+            // 1. 验证协议：只允许 http 和 https
+            if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+                return `Invalid protocol: ${urlObj.protocol}. Only HTTP and HTTPS are allowed.`;
+            }
+
+            // 2. 验证域名：不允许内网地址
+            const hostname = urlObj.hostname.toLowerCase();
+            
+            // 检查 localhost
+            if (hostname === 'localhost' || hostname === '127.0.0.1') {
+                return 'Security: Internal network addresses are not allowed (localhost/127.0.0.1).';
+            }
+
+            // 检查私有 IP 范围
+            if (
+                hostname.startsWith('192.168.') ||
+                hostname.startsWith('10.') ||
+                /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(hostname) // 172.16.x.x - 172.31.x.x
+            ) {
+                return 'Security: Private network addresses are not allowed.';
+            }
+
+            // 检查链路本地地址 169.254.x.x
+            if (hostname.startsWith('169.254.')) {
+                return 'Security: Link-local addresses are not allowed.';
+            }
+
+            return null; // 验证通过
+        } catch (error) {
+            return `Invalid URL format: ${error.message}`;
         }
     }
 

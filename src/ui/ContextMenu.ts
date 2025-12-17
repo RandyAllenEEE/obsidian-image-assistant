@@ -23,6 +23,7 @@ import { ImageAnnotationModal } from './ImageAnnotation';
 import { Crop } from './Crop';
 import { ProcessSingleImageModal } from "./modals/ProcessSingleImageModal";
 import { CloudImageDeleter } from '../cloud/CloudImageDeleter';
+import { pipeSyntaxParser } from '../utils/PipeSyntaxParser';
 
 interface ImageMatch {
 	lineNumber: number;
@@ -149,8 +150,10 @@ export class ContextMenu extends Component {
 	) {
 		this.currentMenu = menu;
 
+		// Check if image is network image
+		const isNetwork = this.isNetworkImage(img);
 
-		this.addRenameAndMoveInputs(menu, img, activeFile);
+		this.addRenameAndMoveInputs(menu, img, activeFile, isNetwork);
 
 		menu.addSeparator();
 
@@ -170,15 +173,21 @@ export class ContextMenu extends Component {
 			this.plugin.ImageAlignmentManager.addAlignmentOptionsToContextMenu(menu, img, activeFile);
 		}
 
-		this.addProcessImageMenuItem(menu, img, event); // Pass the event here
+		// Network images: only show download option
+		// Local images: show all processing options and upload
+		if (isNetwork) {
+			// Network image: show download option
+			this.addDownloadNetworkImageMenuItem(menu, img, event);
+		} else {
+			// Local image: show converter options (process, crop, annotate)
+			this.addProcessImageMenuItem(menu, img, event);
+			this.addCropRotateFlipMenuItem(menu, img);
+			this.addAnnotateImageMenuItem(menu, img);
 
-		this.addCropRotateFlipMenuItem(menu, img);
-
-		this.addAnnotateImageMenuItem(menu, img);
-
-		// Add upload option for local images in cloud mode
-		if (this.plugin.settings.pasteHandlingMode === 'cloud') {
-			this.addUploadToCloudMenuItem(menu, img, event);
+			// Add upload option for local images in cloud mode
+			if (this.plugin.settings.pasteHandlingMode === 'cloud') {
+				this.addUploadToCloudMenuItem(menu, img, event);
+			}
 		}
 
 		menu.addSeparator();
@@ -194,6 +203,15 @@ export class ContextMenu extends Component {
 		this.addDeleteImageAndLinkMenuItem(menu, event);
 
 		return true;
+	}
+
+	/**
+	 * Check if an image is a network image (URL starts with http:// or https://)
+	 */
+	private isNetworkImage(img: HTMLImageElement): boolean {
+		const src = img.getAttribute('src');
+		if (!src) return false;
+		return src.startsWith('http://') || src.startsWith('https://');
 	}
 
 
@@ -213,33 +231,18 @@ export class ContextMenu extends Component {
 
 			const { editor } = activeView;
 			const isExternal = !imagePath;
-			const matches = await this.findImageMatches(editor, imagePath, isExternal);
+			// Handle valid URL if imagePath is null (Network Image)
+			const effectiveImagePath = imagePath ? imagePath : (this.isNetworkImage(img) ? img.getAttribute('src') : null);
+
+			const matches = await this.findImageMatches(editor, effectiveImagePath, isExternal);
 
 			if (matches && matches.length > 0) {
 				const [firstMatch] = matches;
 
-				// Handle wiki-style links
-				const wikiMatch = firstMatch.fullMatch.match(/!\[\[([^\]]+?)(?:\|([^|\]]+?))?\s*(?:\|([^|\]]+?))?\]\]/);
-				if (wikiMatch) {
-					const secondPart = wikiMatch[2] || "";
-					const thirdPart = wikiMatch[3] || "";
-
-					const isDimensions = (part: string) => /^\s*\d+x\d+\s*$/.test(part);
-
-					if (thirdPart && !isDimensions(secondPart)) {
-						return secondPart.trim();
-					}
-					if (secondPart && !isDimensions(secondPart)) {
-						return secondPart.trim();
-					}
-					return "";
-				}
-
-				// Handle markdown-style links
-				const markdownMatch = firstMatch.fullMatch.match(/!\[([^|\]]*?)(?:\|(\d+x\d+))?\]\(([^)]+)\)/);
-				if (markdownMatch) {
-					const caption = markdownMatch[1] || "";
-					return caption.trim();
+				// 使用 PipeSyntaxParser 解析
+				const parsed = pipeSyntaxParser.parsePipeSyntax(firstMatch.fullMatch);
+				if (parsed && parsed.alt && parsed.alt !== ' ') {
+					return parsed.alt;
 				}
 			}
 			return "";
@@ -261,43 +264,20 @@ export class ContextMenu extends Component {
 
 			const { editor } = activeView;
 			const isExternal = !imagePath;
-			const matches = await this.findImageMatches(editor, imagePath, isExternal);
+			// Handle valid URL if imagePath is null (Network Image)
+			const effectiveImagePath = imagePath ? imagePath : (this.isNetworkImage(img) ? img.getAttribute('src') : null);
+
+			const matches = await this.findImageMatches(editor, effectiveImagePath, isExternal);
 
 			if (matches && matches.length > 0) {
 				const [firstMatch] = matches;
 
-				// Handle wiki-style links
-				const wikiMatch = firstMatch.fullMatch.match(/!\[\[([^\]]+?)(?:\|([^|\]]+?))?\s*(?:\|([^|\]]+?))?\]\]/);
-				if (wikiMatch) {
-					const secondPart = wikiMatch[2] || "";
-					const thirdPart = wikiMatch[3] || "";
-
-					const isDimensions = (part: string) => /^\s*\d+(?:x\d+)?\s*$/.test(part);
-
-					// Check third part first, then second part for dimensions
-					let dimensionPart = '';
-					if (isDimensions(thirdPart)) {
-						dimensionPart = thirdPart.trim();
-					} else if (isDimensions(secondPart)) {
-						dimensionPart = secondPart.trim();
-					}
-
-					if (dimensionPart) {
-						const parts = dimensionPart.split('x');
-						return {
-							width: parts[0],
-							height: parts.length > 1 ? parts[1] : ''
-						};
-					}
-				}
-
-				// Handle markdown-style links
-				const markdownMatch = firstMatch.fullMatch.match(/!\[([^|\]]*?)(?:\|(\d+(?:x\d+)?))?\]\(([^)]+)\)/);
-				if (markdownMatch && markdownMatch[2]) {
-					const parts = markdownMatch[2].split('x');
+				// 使用 PipeSyntaxParser 解析
+				const parsed = pipeSyntaxParser.parsePipeSyntax(firstMatch.fullMatch);
+				if (parsed && parsed.size) {
 					return {
-						width: parts[0],
-						height: parts.length > 1 ? parts[1] : ''
+						width: parsed.size.width ? parsed.size.width.toString() : '',
+						height: parsed.size.height ? parsed.size.height.toString() : ''
 					};
 				}
 			}
@@ -310,51 +290,58 @@ export class ContextMenu extends Component {
 
 	private async updateImageLinkWithDimensions(
 		editor: Editor,
-		match: { lineNumber: number, line: string },
+		match: { lineNumber: number, line: string, fullMatch: string, index: number },
 		newCaption: string,
 		width: string,
 		height: string
 	): Promise<string> {
-		// Format dimensions based on what's provided
-		const dimensionsPart = width ? (height ? `${width}x${height}` : width) : '';
+		const { line, fullMatch, index } = match;
 
-		const { line } = match;
+		// Use the fullMatch found by the parser directly
+		const linkText = fullMatch;
 
-		// Handle Wiki-style links
-		if (line.includes("![[")) {
-			return line.replace(
-				/!\[\[([^\]]+?)(?:\|([^|\]]+?))?\s*(?:\|([^|\]]+?))?\]\]/g,
-				(fullMatch, path) => {
-					if (newCaption && dimensionsPart) {
-						return `![[${path}|${newCaption}|${dimensionsPart}]]`;
-					}
-					if (newCaption) {
-						return `![[${path}|${newCaption}]]`;
-					}
-					if (dimensionsPart) {
-						return `![[${path}|${dimensionsPart}]]`;
-					}
-					return `![[${path}]]`;
-				}
-			);
+		// 使用 PipeSyntaxParser 解析
+		const parsed = pipeSyntaxParser.parsePipeSyntax(linkText);
+		if (!parsed) {
+			return line; // 解析失败，返回原行
 		}
 
-		// Handle Markdown-style links
-		return line.replace(
-			/!\[([^|\]]*?)(?:\|(\d+(?:x\d+)?))?\]\(([^)]+)\)/g,
-			(fullMatch, caption, dimensions, path) => {
-				if (newCaption && dimensionsPart) {
-					return `![${newCaption}|${dimensionsPart}](${path})`;
+		// 更新属性
+		parsed.alt = newCaption; // Update caption (empty string is fine, it means remove/empty)
+
+		if (width || height) {
+			// 构建尺寸对象
+			const widthNum = width ? parseInt(width) : undefined;
+			const heightNum = height ? parseInt(height) : undefined;
+
+			if (widthNum !== undefined || heightNum !== undefined) {
+				let format: 'WxH' | 'W' | 'Wx' | 'xH';
+				if (widthNum !== undefined && heightNum !== undefined) {
+					format = 'WxH';
+				} else if (widthNum !== undefined) {
+					format = 'W';
+				} else {
+					format = 'xH';
 				}
-				if (newCaption) {
-					return `![${newCaption}](${path})`;
-				}
-				if (dimensionsPart) {
-					return `![|${dimensionsPart}](${path})`;
-				}
-				return `![](${path})`;
+
+				parsed.size = {
+					width: widthNum,
+					height: heightNum,
+					format
+				};
 			}
-		);
+		} else {
+			// 如果没有提供宽度和高度，移除 size 属性
+			parsed.size = undefined;
+		}
+
+		// 构建新链接
+		const newLinkText = pipeSyntaxParser.buildPipeSyntax(parsed);
+
+		// 替换链接 - Use exact splicing based on index and length
+		const prefix = line.substring(0, index);
+		const suffix = line.substring(index + fullMatch.length);
+		return prefix + newLinkText + suffix;
 	}
 
 	private async handleDimensionsAndCaptionUpdate(
@@ -382,11 +369,18 @@ export class ContextMenu extends Component {
 		if (!activeView) return;
 
 		const { editor } = activeView;
+		// For Network images, img.src is the URL and imagePath logic above might return null
+		// But for our purposes, we want to match it.
+		// If it's network, imagePath currently is likely null. We should pass the src URL.
 		const imagePath = (this.folderAndFilenameManagement && typeof (this.folderAndFilenameManagement as any).getImagePath === 'function')
 			? (this.folderAndFilenameManagement as any).getImagePath(img)
 			: null;
-		const isExternal = !imagePath;
-		const matches = await this.findImageMatches(editor, imagePath, isExternal);
+
+		// Handle valid URL if imagePath is null (Network Image)
+		const effectiveImagePath = imagePath ? imagePath : (this.isNetworkImage(img) ? img.getAttribute('src') : null);
+		const isExternal = !isImageResolvable; // Or true if network
+
+		const matches = await this.findImageMatches(editor, effectiveImagePath, isExternal);
 
 		if (matches.length === 0) {
 			new Notice('Failed to find image link in the current note.');
@@ -439,8 +433,9 @@ export class ContextMenu extends Component {
 	 * @param menu - The Menu object to add the input fields to.
 	 * @param img - The HTMLImageElement that was right-clicked.
 	 * @param activeFile - The currently active TFile.
+	 * @param isNetwork - Whether the image is a network image.
 	 */
-	addRenameAndMoveInputs(menu: Menu, img: HTMLImageElement, activeFile: TFile) {
+	addRenameAndMoveInputs(menu: Menu, img: HTMLImageElement, activeFile: TFile, isNetwork: boolean = false) {
 		const isNativeMenus = (this.app.vault as any).getConfig('nativeMenus');
 
 		if (!isNativeMenus && !Platform.isMobile) {
@@ -496,8 +491,9 @@ export class ContextMenu extends Component {
 				nameInput.placeholder = t("PLACEHOLDER_NAME");
 				nameInput.className = 'image-converter-contextmenu-name-input';
 				nameInput.id = 'image-converter-name-input';
-				if (!isImageResolvable) {
+				if (!isImageResolvable || isNetwork) {
 					nameInput.classList.add('image-converter-contextmenu-disabled');
+					nameInput.disabled = true;
 				}
 				nameGroup.appendChild(nameInput);
 
@@ -521,8 +517,9 @@ export class ContextMenu extends Component {
 				pathInput.placeholder = t("PLACEHOLDER_PATH");
 				pathInput.className = 'image-converter-contextmenu-path-input';
 				pathInput.id = 'image-converter-path-input';
-				if (!isImageResolvable) {
+				if (!isImageResolvable || isNetwork) {
 					pathInput.classList.add('image-converter-contextmenu-disabled');
+					pathInput.disabled = true;
 				}
 				pathGroup.appendChild(pathInput);
 
@@ -625,8 +622,8 @@ export class ContextMenu extends Component {
 
 				// Single confirm button handler
 				this.registerDomEvent(confirmButton, 'click', async () => {
-					if (isImageResolvable) {
-						// First handle rename and move
+					if (isImageResolvable && !isNetwork) {
+						// Only handle rename and move for local resolvable images
 						await this.handleRenameAndMove(
 							menu,
 							nameInput,
@@ -639,8 +636,10 @@ export class ContextMenu extends Component {
 							file,
 							activeFile
 						);
+					}
 
-						// Then handle caption and dimensions update together
+					// Handle caption and dimensions update for any editable image type (Local or Network)
+					if (isImageResolvable || isNetwork) {
 						await this.handleDimensionsAndCaptionUpdate(
 							menu,
 							captionInput,
@@ -648,7 +647,7 @@ export class ContextMenu extends Component {
 							heightInput,
 							img,
 							activeFile,
-							isImageResolvable
+							isImageResolvable || isNetwork
 						);
 					}
 				});
@@ -901,117 +900,56 @@ export class ContextMenu extends Component {
 	 * @returns An array of objects, each containing the line number, line content, and full match
 	 *          for each matching image link found. Returns an empty array if no matches are found.
 	 */
-	private async findImageMatches(
+		private async findImageMatches(
 		editor: Editor,
 		imagePath: string | null,
 		isExternal: boolean
-	): Promise<{ lineNumber: number, line: string, fullMatch: string }[]> {
-		// Helper function to resolve relative paths
-		const resolveRelativePath = (linkPath: string, activeFilePath: string): string => {
-			const activeFileDir = path.dirname(activeFilePath);
-			if (linkPath.startsWith('./') || linkPath.startsWith('../')) {
-				return normalizePath(path.join(activeFileDir, linkPath));
-			}
-			return normalizePath(linkPath);
-		};
-
+	): Promise<{ lineNumber: number, line: string, fullMatch: string, index: number }[]> {
 		const lineCount = editor.getDoc().lineCount();
 		const frontmatterEnd = this.findFrontmatterEnd(editor);
-		const matches: { lineNumber: number, line: string, fullMatch: string }[] = [];
+		const matches: { lineNumber: number, line: string, fullMatch: string, index: number }[] = [];
 		const activeFile = this.app.workspace.getActiveFile();
 
 		if (!activeFile) return matches;
 
 		for (let i = frontmatterEnd + 1; i < lineCount; i++) {
 			const line = editor.getLine(i);
+            const links = pipeSyntaxParser.extractAllLinks(line);
 
-			// Check wiki-style links (![[path/to/image.png]])  Added ? after last ] to be non-greedy
-			const wikiMatches = [...line.matchAll(/!\[\[([^\]]+?)(?:\|[^\]]+?)??\]\]/g)];
-			for (const match of wikiMatches) {
-				const fullMatch = match[0].trim();
+            for (const link of links) {
+                const linkPath = link.data.path;
+                
+                if (isExternal) {
+                    // For external/network images, imagePath is effectively the URL
+                    // We compare the path in the link with the passed imagePath (URL)
+                    if (imagePath && linkPath === imagePath) {
+                         matches.push({ lineNumber: i, line, fullMatch: link.fullMatch, index: link.index });
+                    }
+                } else {
+                    // For local images
+                     if (imagePath && !linkPath.startsWith('http')) {
+                        // Helper to resolve relative paths
+                         const resolveRelativePath = (p: string, activeFilePath: string): string => {
+                            const activeFileDir = path.dirname(activeFilePath);
+                            if (p.startsWith('./') || p.startsWith('../')) {
+                                return normalizePath(path.join(activeFileDir, p));
+                            }
+                            return normalizePath(p);
+                        };
 
-				const filename = this.extractFilenameFromLink(fullMatch);
-				if (filename && !isExternal) {
-					const resolvedPath = resolveRelativePath(filename, activeFile.path);
-
-					if (imagePath) {
-						const normalizedImagePath = this.normalizeImagePath(imagePath);
-						const normalizedResolvedPath = this.normalizeImagePath(resolvedPath);
-
-						// Check for exact match or if the normalized image path ends with the resolved path
-						if (normalizedImagePath === normalizedResolvedPath ||
-							normalizedImagePath.endsWith(normalizedResolvedPath)) {
-							matches.push({ lineNumber: i, line, fullMatch });
-							// console.log('Wiki match found:', {
-							// 	normalizedImagePath,
-							// 	normalizedResolvedPath,
-							// 	fullMatch
-							// });
-						}
-					}
-				}
-			}
-
-			// Check markdown-style links (![alt](path/to/image.png))
-			const mdMatches = [...line.matchAll(/!\[([^\]]*?)(?:\|\d+(?:\|\d+)?)?\]\(([^)]+)\)/g)];
-			for (const match of mdMatches) {
-				const [fullMatch, , linkPath] = match;
-
-				if (!isExternal && linkPath) {
-					const resolvedPath = resolveRelativePath(linkPath, activeFile.path);
-
-					if (imagePath) {
-						const normalizedImagePath = this.normalizeImagePath(imagePath);
-						const normalizedResolvedPath = this.normalizeImagePath(resolvedPath);
+                        const resolvedLinkPath = resolveRelativePath(linkPath, activeFile.path);
+                        const normalizedImagePath = this.normalizeImagePath(imagePath);
+						const normalizedResolvedPath = this.normalizeImagePath(resolvedLinkPath);
 
 						// Check for exact match or if the normalized image path ends with the resolved path
 						if (normalizedImagePath === normalizedResolvedPath ||
 							normalizedImagePath.endsWith(normalizedResolvedPath)) {
-							matches.push({ lineNumber: i, line, fullMatch });
-							// console.log('Markdown match found:', {
-							// 	normalizedImagePath,
-							// 	normalizedResolvedPath,
-							// 	fullMatch
-							// });
+							matches.push({ lineNumber: i, line, fullMatch: link.fullMatch, index: link.index });
 						}
-
-						// Additional check for paths starting with ./
-						if (linkPath.startsWith('./')) {
-							const linkPathWithoutDotSlash = linkPath.substring(2);
-							const normalizedLinkPathWithoutDotSlash = this.normalizeImagePath(linkPathWithoutDotSlash);
-
-							if (normalizedImagePath.endsWith(normalizedLinkPathWithoutDotSlash)) {
-								matches.push({ lineNumber: i, line, fullMatch });
-								// console.log('Markdown dot-slash match found:', {
-								// 	normalizedImagePath,
-								// 	normalizedLinkPathWithoutDotSlash,
-								// 	fullMatch
-								// });
-							}
-						}
-					}
-				} else if (isExternal && (linkPath.startsWith('http://') || linkPath.startsWith('https://'))) {
-					// For external images, check if the URL matches the imagePath
-					if (imagePath && linkPath === imagePath) {
-						matches.push({ lineNumber: i, line, fullMatch });
-						// console.log('External link match found:', {
-						// 	linkPath,
-						// 	fullMatch
-						// });
-					}
-				}
-			}
+                    }
+                }
+            }
 		}
-
-		// Log all matches for debugging
-		// if (matches.length > 0) {
-		// 	console.log('All matches found:', matches);
-		// } else {
-		// 	console.log('No matches found for:', {
-		// 		imagePath,
-		// 		isExternal
-		// 	});
-		// }
 
 		return matches;
 	}
@@ -1674,6 +1612,75 @@ export class ContextMenu extends Component {
 		} catch (error) {
 			console.error('[Upload] Error uploading image:', error);
 			new Notice(t("MSG_UPLOAD_FAILED").replace("{0}", error.message));
+		}
+	}
+
+	/**
+	 * Add "Download Network Image" menu item for network images
+	 * 为网络图片添加"下载到本地"菜单项
+	 * @param menu - The Menu object to add the item to.
+	 * @param img - The HTMLImageElement.
+	 * @param event - The MouseEvent object.
+	 */
+	addDownloadNetworkImageMenuItem(menu: Menu, img: HTMLImageElement, event: MouseEvent) {
+		const src = img.getAttribute('src');
+		if (!src) return;
+
+		// Only show for network images
+		if (!src.startsWith('http://') && !src.startsWith('https://')) {
+			return;
+		}
+
+		menu.addItem((item) => {
+			item.setTitle(t("MENU_DOWNLOAD_NETWORK_IMAGE"))
+				.setIcon('download')
+				.onClick(async () => {
+					await this.downloadNetworkImage(img);
+				});
+		});
+	}
+
+	/**
+	 * Download a network image to local storage
+	 * 下载网络图片到本地
+	 * @param img - The HTMLImageElement
+	 */
+	private async downloadNetworkImage(img: HTMLImageElement) {
+		try {
+			const src = img.getAttribute('src');
+			if (!src) {
+				new Notice(t("MSG_RESOLVE_PATH_FAIL"));
+				return;
+			}
+
+			// Get active view and editor
+			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (!activeView || !activeView.file) {
+				new Notice(t("MSG_NO_ACTIVE_VIEW"));
+				return;
+			}
+
+			const activeFile = activeView.file;
+			const editor = activeView.editor;
+
+			// Call NetworkImageDownloader to download the single image
+			const downloader = this.plugin.networkDownloader;
+			if (!downloader) {
+				new Notice("Network image downloader not available");
+				return;
+			}
+
+			// Download and replace the link (pass editor for automatic link replacement)
+			const success = await downloader.downloadSingleImage(src, activeFile, editor);
+
+			if (success) {
+				new Notice(t("MSG_DOWNLOAD_SUCCESS"));
+			} else {
+				new Notice(t("MSG_DOWNLOAD_FAILED").replace("{0}", "Unknown error"));
+			}
+		} catch (error) {
+			console.error('[Download] Error downloading network image:', error);
+			new Notice(t("MSG_DOWNLOAD_FAILED").replace("{0}", error.message));
 		}
 	}
 

@@ -2,6 +2,7 @@ import { Editor, MarkdownView, EditorPosition, EditorChange, Debouncer, debounce
 import ImageConverterPlugin from "../main";
 import { ImagePositionData } from './ImageAlignmentManager';
 import { LinkFormatter } from '../utils/LinkFormatter';
+import { pipeSyntaxParser } from '../utils/PipeSyntaxParser';
 
 export interface ResizeState {
     isResizing: boolean;
@@ -105,7 +106,7 @@ export class ImageResizer {
         }
 
         // Only register events if master switch is enabled
-        if (this.plugin.settings.isImageResizeEnbaled) {
+        if (this.plugin.settings.isImageResizeEnabled) {
             // Create a fresh scope for this view
             this.eventScope = new Component();
             this.registerEditorEvents();
@@ -164,7 +165,7 @@ export class ImageResizer {
     onLayoutChange(markdownView: MarkdownView) {
         // Clear cached editor width when layout changes
         this.cachedEditorMaxWidth = null;
-        
+
         // Handle layout changes (e.g., reposition handles)
         this.cleanupHandles();
         this.onload(markdownView);
@@ -569,7 +570,7 @@ export class ImageResizer {
             } else {
                 // Handle-based resizing (internal images)
                 const isAspectFixed = this.plugin.settings.isDragAspectRatioLocked;
- 
+
                 switch (this.currentHandle) {
                     case 'n': // Top handle: adjust height from the top
                         if (isAspectFixed) {
@@ -622,9 +623,9 @@ export class ImageResizer {
             if (newWidth > maxEditorWidth) {
                 const aspectRatio = this.initialAspectRatio;
                 newWidth = maxEditorWidth;
-                
+
                 // Recalculate height to maintain aspect ratio
-                if (this.currentHandle === "border" || 
+                if (this.currentHandle === "border" ||
                     ["nw", "ne", "sw", "se"].includes(this.currentHandle || "")) {
                     // For proportional handles, always maintain aspect ratio
                     newHeight = newWidth / aspectRatio;
@@ -793,11 +794,15 @@ export class ImageResizer {
         // Check if alignment is enabled
         const isAlignmentEnabled = this.plugin.settings.isImageAlignmentEnabled;
 
+        // 注：我们不再使用缓存和 hash，改为基于 Pipe Syntax
+        /*
         // Only get the image hash if alignment is enabled
         let imageHash = null;
         if (isAlignmentEnabled && this.plugin.ImageAlignmentManager) {
             imageHash = this.plugin.ImageAlignmentManager.getImageHash(notePath, imageName);
         }
+        */
+        const imageHash = imageName; // 临时使用 imageName 作为 key
 
         // Check if the image has a positional class
         const hasPositionalClass = isAlignmentEnabled && Array.from(image.classList).some(className =>
@@ -934,39 +939,39 @@ export class ImageResizer {
         }
         return currentLine;
     }
-    
-        /**
-     * Finds the end line of a callout block, starting from a given line.
-     *
-     * @param editor The editor instance.
-     * @param startLine The line number to start searching from.
-     * @returns The line number of the end of the callout, or the startLine if not in a callout.
-     */
-        private getEndOfCallout(editor: Editor, startLine: number): number {
-            let currentLine = startLine;
-            let lineContent = editor.getLine(currentLine);
-    
-            // Check if we're *actually* in a callout
-            if (!lineContent.trimStart().startsWith(">")) {
-                return startLine; // Not in a callout, return the starting line
-            }
-            //If not trimmed there will be added extra line
-            const [firstNonWhitespaceChar] = lineContent.trimStart();
-            // Iterate downwards, checking for the end of the callout
-            while (currentLine < editor.lastLine()) {
-                currentLine++;
-                lineContent = editor.getLine(currentLine);
-                //If not trimmed there will be added extra line
-                const [currentLineNonWhitespaceChar] = lineContent.trimStart();
-                // A callout ends when a line doesn't start with ">"
-                if (currentLineNonWhitespaceChar != firstNonWhitespaceChar) {
-                    return currentLine - 1; // Return the *previous* line (end of callout)
-                }
-            }
-    
-            // If we reach the end of the file and it's all callout, return the last line
-            return editor.lastLine();
+
+    /**
+ * Finds the end line of a callout block, starting from a given line.
+ *
+ * @param editor The editor instance.
+ * @param startLine The line number to start searching from.
+ * @returns The line number of the end of the callout, or the startLine if not in a callout.
+ */
+    private getEndOfCallout(editor: Editor, startLine: number): number {
+        let currentLine = startLine;
+        let lineContent = editor.getLine(currentLine);
+
+        // Check if we're *actually* in a callout
+        if (!lineContent.trimStart().startsWith(">")) {
+            return startLine; // Not in a callout, return the starting line
         }
+        //If not trimmed there will be added extra line
+        const [firstNonWhitespaceChar] = lineContent.trimStart();
+        // Iterate downwards, checking for the end of the callout
+        while (currentLine < editor.lastLine()) {
+            currentLine++;
+            lineContent = editor.getLine(currentLine);
+            //If not trimmed there will be added extra line
+            const [currentLineNonWhitespaceChar] = lineContent.trimStart();
+            // A callout ends when a line doesn't start with ">"
+            if (currentLineNonWhitespaceChar != firstNonWhitespaceChar) {
+                return currentLine - 1; // Return the *previous* line (end of callout)
+            }
+        }
+
+        // If we reach the end of the file and it's all callout, return the last line
+        return editor.lastLine();
+    }
 
     /**
      * Updates Markdown links within the current editor that match the resized image.
@@ -1013,7 +1018,7 @@ export class ImageResizer {
         if (this.isExternalLink(imageName)) {
             // Check cloud upload settings
             const cloudSettings = this.plugin.settings.cloudUploadSettings;
-            
+
             // Only update markdown if user chose 'actual' size source
             if (cloudSettings.imageSizeSource !== 'actual') {
                 console.log('[ImageResizer] Skipping markdown update for external image (imageSizeSource is not "actual"):', imageName);
@@ -1034,133 +1039,86 @@ export class ImageResizer {
             console.warn("Could not get active file for image:", image);
             return;
         }
-        const notePath = activeFile.path;
-
-        // const cachedAlignment: ImagePositionData | null = null;
-        // Update ImageAlignmentManager cache after resizing
-        if (this.plugin.settings.isImageAlignmentEnabled && this.plugin.ImageAlignmentManager) {
-            const cachedAlignment = this.plugin.ImageAlignmentManager.getImageAlignment(notePath, imageName);
-            if (cachedAlignment) {
-                await this.plugin.ImageAlignmentManager.saveImageAlignmentToCache(
-                    notePath,
-                    imageName,
-                    cachedAlignment.position,
-                    `${Math.round(newWidth)}px`,
-                    `${Math.round(newHeight)}px`,
-                    cachedAlignment.wrap
-                );
-            }
-        }
 
         // Prepare changes before applying them
         const changes: EditorChange[] = [];
         let cursorPosition: EditorPosition | null = null; // Initialize cursor position
         const cursorLocation = this.plugin.settings.resizeCursorLocation;
 
-
         editor.getValue()
             .split('\n')
             .forEach((lineContent, line) => {
                 if (this.isFrontmatter(line, editor)) return;
 
-                const matches = this.findAllMatches(lineContent).filter(match => {
-                    const matchFilename = this.isBase64Image(match.path) ? match.path : this.getFilenameFromPath(match.path);
+                // Use pipeSyntaxParser to find all links
+                const matches = pipeSyntaxParser.extractAllLinks(lineContent).filter(match => {
+                    const matchFilename = this.isBase64Image(match.data.path) ? match.data.path : this.getFilenameFromPath(match.data.path);
                     return matchFilename === normalizedTargetName;
                 });
 
                 matches.forEach(match => {
-                    let widthParam = "";
-                    let heightParam = "";
                     let updatedContent = "";
 
-                    const cachedAlignment: ImagePositionData | null = this.plugin.settings.isImageAlignmentEnabled && this.plugin.ImageAlignmentManager ?
-                        this.plugin.ImageAlignmentManager.getImageAlignment(notePath, imageName) : null;
+                    // Calculate new size string based on handler
+                    let newSizeString = `${Math.round(newWidth)}`; // default
 
-                    const cachedWidth = cachedAlignment?.width || undefined; // Default to undefined if not found which we later filter out
-                    const cachedHeight = cachedAlignment?.height || undefined; // Default to undefined if not found which we later filter out
-                    const dimensionPart = `${Math.round(newWidth)}x${Math.round(newHeight)}`;
+                    const isAspectLocked = this.plugin.settings.isDragAspectRatioLocked;
 
-                    if (match.type === "md") {
-
-                        if (this.currentHandle === "border") {
-                            widthParam = `${Math.round(newWidth)}x`;
-                            heightParam = `${Math.round(newHeight)}`;
-                        } else if (["n", "s"].includes(currentHandle || "")) {
-                            widthParam = cachedWidth ?? (match.existingWidth !== undefined ? `${match.existingWidth}x` : "x");
-                            heightParam = `${Math.round(newHeight)}`;
-                            if (widthParam === "x") widthParam = `${this.initialWidth}x`;
-                        } else if (["e", "w"].includes(currentHandle || "")) {
-                            widthParam = `${Math.round(newWidth)}x`;
-                            heightParam = cachedHeight ?? (match.existingHeight !== undefined ? `${match.existingHeight}` : "");
-                            if (heightParam === "") heightParam = `${this.initialHeight}`;
-                        } else {
-                            widthParam = `${Math.round(newWidth)}x`;
-                            heightParam = `${Math.round(newHeight)}`;
+                    // Logic to determine format based on handle and locking
+                    if (this.isExternalLink(imageName)) {
+                        // External images (border resize) usually just Width
+                        newSizeString = `${Math.round(newWidth)}`;
+                    } else if (currentHandle) {
+                        if (["nw", "ne", "sw", "se"].includes(currentHandle)) {
+                            // Proportional resize
+                            newSizeString = `${Math.round(newWidth)}`; // Standard Obsidian format is just Width
+                        } else if (["n", "s"].includes(currentHandle)) {
+                            // Vertical resize
+                            if (isAspectLocked) {
+                                newSizeString = `${Math.round(newWidth)}`; // If locked, width drives it
+                            } else {
+                                newSizeString = `x${Math.round(newHeight)}`; // Height only
+                            }
+                        } else if (["e", "w"].includes(currentHandle)) {
+                            // Horizontal resize
+                            newSizeString = `${Math.round(newWidth)}`;
                         }
-
-                        if (match.caption) {
-                            updatedContent = `![${match.altText || ""}${match.spacing.beforeFirstPipe}|${match.caption}${match.spacing.beforeSecondPipe}|${dimensionPart}](${match.path})`;
-                        } else {
-                            updatedContent = `![${match.altText || ""}${match.spacing.beforeFirstPipe}|${dimensionPart}](${match.path})`;
-                        }
-
-
-
                     } else {
-                        if (this.currentHandle === "border") {
-                            widthParam = `${Math.round(newWidth)}x`;
-                            heightParam = `${Math.round(newHeight)}`;
-                        } else if (["n", "s"].includes(currentHandle || "")) {
-                            widthParam = cachedWidth ?? (match.existingWidth !== undefined ? `${match.existingWidth}x` : "x");
-                            heightParam = `${Math.round(newHeight)}`;
-                            if (widthParam === "x") widthParam = `${this.initialWidth}x`;
-                        } else if (["e", "w"].includes(currentHandle || "")) {
-                            widthParam = `${Math.round(newWidth)}x`;
-                            heightParam = cachedHeight ?? (match.existingHeight !== undefined ? `${match.existingHeight}` : "");
-                            if (heightParam === "") heightParam = `${this.initialHeight}`;
-                        } else {
-                            widthParam = `${Math.round(newWidth)}x`;
-                            heightParam = `${Math.round(newHeight)}`;
-                        }
-
-                        const dimensionPart = `${Math.round(newWidth)}x${Math.round(newHeight)}`; // Single 'x'
-
-                        if (match.caption) {
-                            updatedContent = `![[${match.path}${match.spacing.beforeFirstPipe}|${match.caption}${match.spacing.beforeSecondPipe}|${dimensionPart}]]`;
-                        } else {
-                            updatedContent = `![[${match.path}${match.spacing.beforeFirstPipe}|${dimensionPart}]]`;
-                        }
-
+                        // Scroll wheel or other -> Width
+                        newSizeString = `${Math.round(newWidth)}`;
                     }
 
-                    if (updatedContent) {
-                        const startCh = match.index;
-                        const endCh = startCh + match.fullMatch.length;
-                        changes.push({ from: { line, ch: startCh }, to: { line, ch: endCh }, text: updatedContent });
+                    // Update the parsed data object
+                    const updatedData = { ...match.data };
 
-                        // Determine cursor position based on settings
-                        let endLine = line; // Initialize endLine with the current line
-                        if (cursorLocation === "front") {
-                            cursorPosition = { line, ch: startCh };
-                        } else if (cursorLocation === "back") {
-                            cursorPosition = { line, ch: startCh + updatedContent.length };
-                        } else if (cursorLocation === "below") {
-                            endLine = this.getEndLineOfLink(editor, line, startCh, endCh);
-                            // NEW: Check for callout and adjust endLine
-                            endLine = this.getEndOfCallout(editor, endLine);
-                            cursorPosition = { line: endLine + 1, ch: 0 };
-                        }
+                    if (newSizeString.startsWith('x')) {
+                        const h = parseInt(newSizeString.substring(1));
+                        updatedData.size = { height: h, format: 'xH' };
+                    } else {
+                        const w = parseInt(newSizeString);
+                        updatedData.size = { width: w, format: 'W' };
                     }
+
+                    // Build new link text using the Builder
+                    updatedContent = pipeSyntaxParser.buildPipeSyntax(updatedData);
+
+                    // Calculate replacement range
+                    const startCh = match.index;
+                    const endCh = match.index + match.fullMatch.length;
+
+                    changes.push({
+                        from: { line, ch: startCh },
+                        to: { line, ch: endCh },
+                        text: updatedContent,
+                    });
                 });
             });
 
-        // Apply changes atomically
         if (changes.length > 0) {
-            editor.transaction({ changes });
-        }
-        // Set cursor position based on setting, even if no textual changes were needed
-        if (cursorPosition && this.plugin.settings.resizeCursorLocation !== "none") {
-            editor.setCursor(cursorPosition);
+            // Apply changes as a single transaction
+            editor.transaction({
+                changes: changes,
+            });
         }
     }
 
@@ -1291,130 +1249,7 @@ export class ImageResizer {
      * @param content - The content string to search.
      * @returns An array of match objects with details about each image link.
      */
-    private findAllMatches(content: string): Array<{
-        type: "md" | "wiki";
-        fullMatch: string;
-        index: number;
-        path: string;
-        altText?: string;
-        caption?: string;
-        existingWidth?: number;
-        existingHeight?: number;
-        spacing: {
-            beforeFirstPipe: string;
-            beforeSecondPipe: string;
-        };
-    }> {
-        const matches: Array<{
-            type: "md" | "wiki";
-            fullMatch: string;
-            index: number;
-            path: string;
-            altText?: string;
-            caption?: string;
-            existingWidth?: number;
-            existingHeight?: number;
-            spacing: {
-                beforeFirstPipe: string;
-                beforeSecondPipe: string;
-            };
-        }> = [];
-
-        // Helper function to check if a string represents dimensions
-        const isDimensions = (str: string): boolean => {
-            return /^\d+x\d+$/.test(str.trim());
-        };
-
-        // Find Wiki-style links
-        const wikiRegex = /!\[\[([^|\]]+?)(?:\s*\|([^|\]]*?))?(?:\s*\|([^|\]]*))?\]\]/g;
-        let wikiMatch;
-        while ((wikiMatch = wikiRegex.exec(content)) !== null) {
-            const path = wikiMatch[1].trim();
-            let caption: string | undefined = wikiMatch[2]?.trim();
-            let dimensionPart = wikiMatch[3]?.trim();
-
-            // If we only have one pipe part, check if it's dimensions
-            if (caption && !dimensionPart) {
-                if (isDimensions(caption)) {
-                    dimensionPart = caption;
-                    caption = undefined;
-                }
-            }
-
-            // Parse dimensions if they exist
-            let existingWidth: number | undefined;
-            let existingHeight: number | undefined;
-
-            if (dimensionPart) {
-                const dimensionMatch = dimensionPart.match(/^(\d+)x(\d+)$/);
-                if (dimensionMatch) {
-                    existingWidth = parseInt(dimensionMatch[1], 10);
-                    existingHeight = parseInt(dimensionMatch[2], 10);
-                }
-            }
-
-            matches.push({
-                type: "wiki",
-                fullMatch: wikiMatch[0],
-                index: wikiMatch.index,
-                path,
-                caption,
-                existingWidth,
-                existingHeight,
-                spacing: {
-                    beforeFirstPipe: wikiMatch[0].match(/\[\[[^|]+?(\s*)\|/)?.[1] || '',
-                    beforeSecondPipe: wikiMatch[0].match(/\|[^|]*?(\s*)\|/)?.[1] || ''
-                }
-            });
-        }
-
-        // Find Markdown-style links
-        const mdRegex = /!\[([^\]]*?)(?:\s*\|([^\]|]*?))?(?:\s*\|([^\]|]*))?\]\(([^)]+)\)/g;
-        let mdMatch;
-        while ((mdMatch = mdRegex.exec(content)) !== null) {
-            const altText = mdMatch[1]?.trim();
-            let caption: string | undefined = mdMatch[2]?.trim();
-            let dimensionPart = mdMatch[3]?.trim();
-            const path = mdMatch[4].trim();
-
-            // If we only have one pipe part, check if it's dimensions
-            if (caption && !dimensionPart) {
-                if (isDimensions(caption)) {
-                    dimensionPart = caption;
-                    caption = undefined;
-                }
-            }
-
-            // Parse dimensions if they exist
-            let existingWidth: number | undefined;
-            let existingHeight: number | undefined;
-
-            if (dimensionPart) {
-                const dimensionMatch = dimensionPart.match(/^(\d+)x(\d+)$/);
-                if (dimensionMatch) {
-                    existingWidth = parseInt(dimensionMatch[1], 10);
-                    existingHeight = parseInt(dimensionMatch[2], 10);
-                }
-            }
-
-            matches.push({
-                type: "md",
-                fullMatch: mdMatch[0],
-                index: mdMatch.index,
-                path,
-                altText,
-                caption,
-                existingWidth,
-                existingHeight,
-                spacing: {
-                    beforeFirstPipe: mdMatch[0].match(/\[([^\]]*?)(\s*)\|/)?.[2] || '',
-                    beforeSecondPipe: mdMatch[0].match(/\|[^|]*?(\s*)\|/)?.[1] || ''
-                }
-            });
-        }
-
-        return matches;
-    }
+    // findAllMatches removed - replaced by pipeSyntaxParser.extractAllLinks
 
     /**
      * Gets the image name from an HTMLImageElement.
@@ -1473,7 +1308,7 @@ export class ImageResizer {
         if (!this.markdownView) return false;
 
         // Check master switch first
-        if (!this.plugin.settings.isImageResizeEnbaled) {
+        if (!this.plugin.settings.isImageResizeEnabled) {
             return false;
         }
 
@@ -1515,6 +1350,9 @@ export class ImageResizer {
         const imageName = this.getImageName(image);
         if (!imageName) return;
 
+        // 注：我们不再使用缓存和 hash，改为基于 Pipe Syntax
+        // 尺寸更新已经在 throttledUpdateImageLink 中处理，这里不需要再保存到缓存
+        /*
         const imageHash = this.plugin.ImageAlignmentManager!.getImageHash(
             notePath,
             imageName
@@ -1536,6 +1374,13 @@ export class ImageResizer {
 
             // Remove the dimensions from the buffer after saving
             delete this.resizeBuffer[imageHash];
+        }
+        */
+
+        // 使用 imageName 作为 key 清理 buffer
+        const imageKey = imageName;
+        if (this.resizeBuffer[imageKey]) {
+            delete this.resizeBuffer[imageKey];
         }
     };
 

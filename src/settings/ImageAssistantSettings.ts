@@ -42,7 +42,8 @@ export interface CloudUploadSettings {
     applyImage: boolean;
     deleteSource: boolean;
     downloadPath: string;  // 下载图片的目标路径
-    uploadedImages?: Record<string, any>[];
+    // uploadedImages?: Record<string, any>[]; // MOVED: To upload_history.json
+    uploadConcurrency: number;  // 上传并发数 (1-10，默认3)
 }
 
 export type FolderPresetType =
@@ -215,6 +216,12 @@ export interface ImageAssistantSettings {
     imageAlignment_cacheCleanupInterval: number;
     imageAlignment_cacheLocation: ".obsidian" | "plugin";
 
+    // 新增：默认对齐方式
+    defaultImageAlignment: 'left' | 'center' | 'right';
+
+    // 新增：编辑模式启用文字环绕
+    enableEditModeWrap: boolean;
+
     isDragResizeEnabled: boolean;
     isDragAspectRatioLocked: boolean;
     isScrollResizeEnabled: boolean;
@@ -222,7 +229,7 @@ export interface ImageAssistantSettings {
 
     resizeSensitivity: number;
     scrollwheelModifier: "None" | "Shift" | "Control" | "Alt" | "Meta";
-    isImageResizeEnbaled: boolean;
+    isImageResizeEnabled: boolean;
     resizeState: { isResizing: boolean; };
 
     enableContextMenu: boolean;
@@ -423,6 +430,9 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
     ["imageAlignment_cacheCleanupInterval"]: 3600000,
     ["imageAlignment_cacheLocation"]: 'plugin',
 
+    defaultImageAlignment: 'center',
+    enableEditModeWrap: false,
+
     isDragResizeEnabled: true,
     isScrollResizeEnabled: true,
     isDragAspectRatioLocked: false,
@@ -430,7 +440,7 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
 
     resizeSensitivity: 0.1,
     scrollwheelModifier: "Shift",
-    isImageResizeEnbaled: true,
+    isImageResizeEnabled: true,
     resizeState: { isResizing: false },
 
     enableContextMenu: true,
@@ -469,7 +479,8 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
         newWorkBlackDomains: '',
         applyImage: true,
         deleteSource: false,
-        downloadPath: 'attachments'  // 默认下载路径
+        downloadPath: 'attachments',  // 默认下载路径
+        uploadConcurrency: 3  // 默认并发数为3
     },
 
     // Unused file cleaner settings
@@ -928,6 +939,22 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     })
                 );
+
+            // Upload Concurrency Settings
+            new Setting(cloudSettingsContainer)
+                .setName(t("SETTING_CONCURRENCY_NAME"))
+                .setDesc(t("SETTING_CONCURRENCY_DESC"))
+                .addSlider(slider => slider
+                    .setLimits(1, 10, 1)
+                    .setValue(this.plugin.settings.cloudUploadSettings.uploadConcurrency)
+                    .setDynamicTooltip()
+                    .onChange(async (value) => {
+                        this.plugin.settings.cloudUploadSettings.uploadConcurrency = value;
+                        await this.plugin.saveSettings();
+                        // 更新并发队列
+                        this.plugin.updateConcurrentQueue(value);
+                    })
+                );
         }
     }
 
@@ -997,7 +1024,46 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         });
 
         if (this.plugin.settings.isImageAlignmentEnabled) { // Conditionally render cleanup options
+            // --- 默认对齐方式设置 ---
+            new Setting(imageAlignmentSection)
+                .setName(t("SETTING_DEFAULT_ALIGN"))
+                .setDesc(t("SETTING_DEFAULT_ALIGN_DESC"))
+                .addDropdown(dropdown => dropdown
+                    .addOption("left", t("ALIGN_LEFT"))
+                    .addOption("center", t("ALIGN_CENTER"))
+                    .addOption("right", t("ALIGN_RIGHT"))
+                    .setValue(this.plugin.settings.defaultImageAlignment)
+                    .onChange(async (value: 'left' | 'center' | 'right') => {
+                        this.plugin.settings.defaultImageAlignment = value;
+                        await this.plugin.saveSettings();
+                        // 立即刷新所有图片
+                        if (this.plugin.ImageAlignmentManager) {
+                            this.plugin.ImageAlignmentManager.refreshAllImages();
+                        }
+                    })
+                );
+
+            // --- 编辑模式启用文字环绕设置 ---
+            new Setting(imageAlignmentSection)
+                .setName(t("SETTING_ENABLE_WRAP_IN_EDIT"))
+                .setDesc(t("SETTING_ENABLE_WRAP_IN_EDIT_DESC"))
+                .addToggle(toggle => toggle
+                    .setValue(this.plugin.settings.enableEditModeWrap)
+                    .onChange(async (value) => {
+                        this.plugin.settings.enableEditModeWrap = value;
+                        await this.plugin.saveSettings();
+                        // 立即更新 body 类
+                        if (value) {
+                            document.body.addClass('image-assistant-wrap-in-edit-mode');
+                        } else {
+                            document.body.removeClass('image-assistant-wrap-in-edit-mode');
+                        }
+                    })
+                );
+
             // --- Cache Location Setting ---
+            // 注：由于我们不再使用外部缓存，以下设置已禁用
+            /* 
             new Setting(imageAlignmentSection)
                 .setName(t("SETTING_IMG_ALIGNMENT_CACHE_LOC"))
                 .setDesc(t("SETTING_IMG_ALIGNMENT_CACHE_LOC_DESC"))
@@ -1033,6 +1099,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         this.plugin.ImageAlignmentManager?.scheduleCacheCleanup();
                     })
                 );
+            */
         }
     }
 
@@ -1042,7 +1109,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         imageDragResizeSection.addClass("image-drag-resize-settings-section");
 
         // Conditionally add 'image-drag-resize-enabled' class
-        if (this.plugin.settings.isImageResizeEnbaled) {
+        if (this.plugin.settings.isImageResizeEnabled) {
             imageDragResizeSection.addClass("image-drag-resize-enabled");
         } else {
             imageDragResizeSection.removeClass("image-drag-resize-enabled");
@@ -1068,9 +1135,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         const dragResizeToggle = new Setting(toggleDragResizeVisibilityEl)
             .addToggle((toggle) =>
                 toggle
-                    .setValue(this.plugin.settings.isImageResizeEnbaled)
+                    .setValue(this.plugin.settings.isImageResizeEnabled)
                     .onChange(async (value) => {
-                        this.plugin.settings.isImageResizeEnbaled = value;
+                        this.plugin.settings.isImageResizeEnabled = value;
                         await this.plugin.saveSettings();
                         if (!value) {
                             new Notice("图片调整大小已禁用，请重启 Obsidian 查看更改", 5000);
@@ -1101,7 +1168,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             }
         });
 
-        if (this.plugin.settings.isImageResizeEnbaled) { // Conditionally render cleanup options
+        if (this.plugin.settings.isImageResizeEnabled) { // Conditionally render cleanup options
             // --- Checkboxes for Drag and Scroll Resize ---
             new Setting(imageDragResizeSection)
                 .setName(t("SETTING_ENABLE_DRAG_RESIZE"))

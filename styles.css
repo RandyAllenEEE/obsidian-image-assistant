@@ -4293,3 +4293,79 @@ html[data-theme='dark'] {
 .referenced-files .file-list-content {
     background-color: var(--background-primary);
 }
+
+/* --- Image Alignment & Wrapping --- */
+
+/* Base Alignment (Block behavior for non-wrapped or disabled-wrapped) */
+.image-converter-aligned {
+    display: block;
+    max-width: 100%;
+}
+
+/* Left Align (No Wrap) */
+.image-position-left:not(.image-wrap) {
+    margin-left: 0;
+    margin-right: auto;
+}
+
+/* Center Align */
+.image-position-center {
+    display: block !important;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* Right Align (No Wrap) */
+.image-position-right:not(.image-wrap) {
+    margin-left: auto;
+    margin-right: 0;
+}
+
+/* --- Wrapping Logic --- */
+
+/* Reading Mode: Always Enable Wrap */
+.markdown-reading-view .image-position-left.image-wrap,
+.markdown-preview-view .image-position-left.image-wrap {
+    float: left;
+    margin-right: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.markdown-reading-view .image-position-right.image-wrap,
+.markdown-preview-view .image-position-right.image-wrap {
+    float: right;
+    margin-left: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+/* Edit Mode: Conditional Wrap via Body Class */
+.image-assistant-wrap-in-edit-mode .markdown-source-view .image-position-left.image-wrap,
+.image-assistant-wrap-in-edit-mode .cm-scroller .image-position-left.image-wrap {
+    float: left;
+    margin-right: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.image-assistant-wrap-in-edit-mode .markdown-source-view .image-position-right.image-wrap,
+.image-assistant-wrap-in-edit-mode .cm-scroller .image-position-right.image-wrap {
+    float: right;
+    margin-left: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+/* When Wrap is Disabled in Edit Mode, force block behavior for Wrapped images */
+body:not(.image-assistant-wrap-in-edit-mode) .markdown-source-view .image-position-left.image-wrap,
+body:not(.image-assistant-wrap-in-edit-mode) .cm-scroller .image-position-left.image-wrap {
+    margin-left: 0;
+    margin-right: auto;
+    float: none;
+    display: block;
+}
+
+body:not(.image-assistant-wrap-in-edit-mode) .markdown-source-view .image-position-right.image-wrap,
+body:not(.image-assistant-wrap-in-edit-mode) .cm-scroller .image-position-right.image-wrap {
+    margin-left: auto;
+    margin-right: 0;
+    float: none;
+    display: block;
+}
