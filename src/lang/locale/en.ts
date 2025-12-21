@@ -1,5 +1,9 @@
 // English
 export default {
+    "LOADING_OCR_LATEX": "Loading latex...", // New key
+    "LOADING_OCR_MARKDOWN": "Loading markdown...", // New key
+    "LOADING_UPLOAD": "Uploading", // New key
+
     // Settings
     "SETTING_PASTE_MODE_NAME": "Paste handling mode",
     "SETTING_PASTE_MODE_DESC": "Choose how to process pasted/dragged images",
@@ -605,7 +609,7 @@ export default {
     "MSG_UPLOAD_ONLY_NO_REPLACEMENT": "Upload complete (no link replacement)",
     "MSG_DELETE_FAILED": "File not found",
     "MSG_BATCH_UPLOAD_FAILED": "Batch upload failed: {0}",
-    
+
     // Folder Upload Dialog
     "DIALOG_FOLDER_UPLOAD_TITLE": "Upload Folder Images",
     "DIALOG_FOLDER_UPLOAD_DESC": "Do you want to include subfolders?",
@@ -614,7 +618,7 @@ export default {
     "DIALOG_SELECT_FOLDER_TITLE": "Select Folder to Upload",
     "DIALOG_SELECT_FOLDER_PLACEHOLDER": "Type folder name to search...",
     "DIALOG_SELECT_FOLDER_NO_FOLDER": "No folders found",
-    
+
     // Cloud Delete Messages
     "MSG_DELETE_NOT_SUPPORTED": "Current uploader does not support delete, please manually delete cloud files",
     "MSG_DELETING_CLOUD": "Deleting cloud image...",

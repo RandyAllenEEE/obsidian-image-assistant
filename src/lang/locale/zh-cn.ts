@@ -1,5 +1,9 @@
 // Simplified Chinese
 export default {
+    "LOADING_OCR_LATEX": "正在加载 LaTeX...", // New key
+    "LOADING_OCR_MARKDOWN": "正在加载 Markdown...", // New key
+    "LOADING_UPLOAD": "正在上传", // New key
+
     // Settings
     "SETTING_PASTE_MODE_NAME": "处理模式",
     "SETTING_PASTE_MODE_DESC": "选择如何处理粘贴/拖拽的图片",
@@ -606,7 +610,7 @@ export default {
     "MSG_UPLOAD_ONLY_NO_REPLACEMENT": "上传完成（未替换链接）",
     "MSG_DELETE_FAILED": "文件不存在",
     "MSG_BATCH_UPLOAD_FAILED": "批量上传失败：{0}",
-    
+
     // 文件夹上传对话框
     "DIALOG_FOLDER_UPLOAD_TITLE": "上传文件夹图片",
     "DIALOG_FOLDER_UPLOAD_DESC": "是否包含子文件夹？",
@@ -615,7 +619,7 @@ export default {
     "DIALOG_SELECT_FOLDER_TITLE": "选择要上传的文件夹",
     "DIALOG_SELECT_FOLDER_PLACEHOLDER": "输入文件夹名称搜索...",
     "DIALOG_SELECT_FOLDER_NO_FOLDER": "未找到文件夹",
-    
+
     // Cloud Delete Messages
     "MSG_DELETE_NOT_SUPPORTED": "当前上传器不支持删除，请手动删除云端文件",
     "MSG_DELETING_CLOUD": "正在删除云端图片...",

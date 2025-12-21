@@ -73,7 +73,7 @@ import { PasteModeConfigModal } from "./ui/modals/PasteModeConfigModal";
 import { NotificationManager } from "./utils/NotificationManager";
 
 // OCR imports
-import EditorInteract from "./ocr/EditorInteract";
+import { EditorContentInserter } from "./utils/EditorContentInserter";
 import { getLatexProvider, getMarkdownProvider } from "./ocr/providers/index";
 
 /**
@@ -215,6 +215,8 @@ export default class ImageConverterPlugin extends Plugin {
             });
         }
 
+        // Initialize history manager
+        this.historyManager = new UploadHistoryManager(this.app, this);
 
         // Initialize ImageAlignment early since it's time-sensitive
         if (this.settings.isImageAlignmentEnabled) {
@@ -757,7 +759,7 @@ export default class ImageConverterPlugin extends Plugin {
      * 处理 OCR 转 LaTeX
      */
     private async handleOCRLatex(isMultiline: boolean) {
-        let editorInteract: EditorInteract | null = null;
+        let editorInteract: EditorContentInserter | null = null;
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
@@ -768,8 +770,8 @@ export default class ImageConverterPlugin extends Plugin {
             const image = this.getClipboardImage();
             if (!image) return;
 
-            editorInteract = new EditorInteract(view);
-            editorInteract.insertLoadingText();
+            editorInteract = new EditorContentInserter(view);
+            editorInteract.insertLoadingText(t("LOADING_OCR_LATEX") || "Loading latex...");
 
             const provider = getLatexProvider(isMultiline, this.settings.ocrSettings);
             const parsedLatex = await provider.sendRequest(image);
@@ -789,7 +791,7 @@ export default class ImageConverterPlugin extends Plugin {
      * 处理 OCR 转 Markdown
      */
     private async handleOCRMarkdown() {
-        let editorInteract: EditorInteract | null = null;
+        let editorInteract: EditorContentInserter | null = null;
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
@@ -800,8 +802,8 @@ export default class ImageConverterPlugin extends Plugin {
             const image = this.getClipboardImage();
             if (!image) return;
 
-            editorInteract = new EditorInteract(view);
-            editorInteract.insertLoadingText();
+            editorInteract = new EditorContentInserter(view);
+            editorInteract.insertLoadingText(t("LOADING_OCR_MARKDOWN") || "Loading markdown...");
 
             const provider = getMarkdownProvider(this.settings.ocrSettings);
             const result = await provider.sendRequest(image);
@@ -951,8 +953,338 @@ export default class ImageConverterPlugin extends Plugin {
         // Step 3: Map Files to Processing Promises
         // - Create an array of promises, each responsible for processing one file.
         // - This allows for sequential processing, avoiding concurrency issues.
-        const filePromises = supportedFiles.map((file) => async () => {
-            try {
+        const filePromises = supportedFiles.map((file) => {
+            // Create inserter and placeholder immediately for EACH file
+            // This ensures sequential cursor placement: [Loading 1][Loading 2]...
+            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
+            inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
+
+            return async () => {
+                try {
+                    // Check modal behavior setting
+                    const { modalBehavior } = this.settings;
+                    let showModal = modalBehavior === "always";
+
+                    if (modalBehavior === "ask") {
+                        showModal = await new Promise<boolean>((resolve) => {
+                            new ConfirmDialog(
+                                this.app,
+                                "Show Preset Selection Modal?",
+                                "Do you want to select presets for this image?",
+                                "Yes",
+                                () => resolve(true)
+                            ).open();
+                        });
+                    }
+
+                    let selectedConversionPreset: ConversionPreset;
+                    let selectedFilenamePreset: FilenamePreset;
+                    let selectedFolderPreset: FolderPreset;
+                    let selectedLinkFormatPreset: LinkFormatPreset;
+                    let selectedResizePreset: NonDestructiveResizePreset;
+
+                    if (showModal) {
+                        // Show the modal and wait for user selection
+                        ({
+                            selectedConversionPreset,
+                            selectedFilenamePreset,
+                            selectedFolderPreset,
+                            selectedLinkFormatPreset,
+                            selectedResizePreset
+                        } = await new Promise<{
+                            selectedConversionPreset: ConversionPreset;
+                            selectedFilenamePreset: FilenamePreset;
+                            selectedFolderPreset: FolderPreset;
+                            selectedLinkFormatPreset: LinkFormatPreset;
+                            selectedResizePreset: NonDestructiveResizePreset;
+                        }>((resolve) => {
+                            new PresetSelectionModal(
+                                this.app,
+                                this.settings,
+                                (conversionPreset, filenamePreset, folderPreset, linkFormatPreset, resizePreset) => {
+                                    resolve({
+                                        selectedConversionPreset: conversionPreset,
+                                        selectedFilenamePreset: filenamePreset,
+                                        selectedFolderPreset: folderPreset,
+                                        selectedLinkFormatPreset: linkFormatPreset,
+                                        selectedResizePreset: resizePreset,
+                                    });
+                                },
+                                this,
+                                this.variableProcessor
+                            ).open();
+                        }));
+                    } else {
+                        // Use default presets from settings using the generic getter
+                        selectedConversionPreset = this.getPresetByName(
+                            this.settings.selectedConversionPreset,
+                            this.settings.conversionPresets,
+                            'Conversion'
+                        );
+
+                        selectedFilenamePreset = this.getPresetByName(
+                            this.settings.selectedFilenamePreset,
+                            this.settings.filenamePresets,
+                            'Filename'
+                        );
+
+                        selectedFolderPreset = this.getPresetByName(
+                            this.settings.selectedFolderPreset,
+                            this.settings.folderPresets,
+                            'Folder'
+                        );
+
+                        selectedLinkFormatPreset = this.getPresetByName(
+                            this.settings.linkFormatSettings.selectedLinkFormatPreset,
+                            this.settings.linkFormatSettings.linkFormatPresets,
+                            'Link Format'
+                        );
+
+                        selectedResizePreset = this.getPresetByName(
+                            this.settings.nonDestructiveResizeSettings.selectedResizePreset,
+                            this.settings.nonDestructiveResizeSettings.resizePresets,
+                            'Resize'
+                        );
+                    }
+
+                    // Step 3.2: Determine Destination and Filename
+                    // - Use the `determineDestination` function to calculate the destination path and new filename for the current file.
+                    let destinationPath: string;
+                    let newFilename: string;
+
+                    try {
+                        ({ destinationPath, newFilename } = await this.folderAndFilenameManagement.determineDestination(
+                            file,
+                            activeFile,
+                            selectedConversionPreset,
+                            selectedFilenamePreset,
+                            selectedFolderPreset
+                        ));
+                    } catch (error) {
+                        console.error("Error determining destination and filename:", error);
+                        new Notice(`Failed to determine destination or filename for "${file.name}". Check console for details.`);
+                        return; // Resolve this promise (no further processing for this file)
+                    }
+
+                    // Rest of the steps (3.3 to 3.7) remain the same,
+                    // using selectedConversionPreset and selectedFilenamePreset
+                    // ...
+                    // Step 3.3: Create Destination Folder
+                    // - Create the destination folder if it doesn't exist.
+                    try {
+                        await this.folderAndFilenameManagement.ensureFolderExists(destinationPath);
+                    } catch (error) {
+                        // Ignore "Folder already exists" error, but handle other errors.
+                        if (!error.message.startsWith('Folder already exists')) {
+                            console.error("Error creating folder:", error);
+                            new Notice(`Failed to create folder "${destinationPath}". Check console for details.`);
+                            return; // Resolve this promise
+                        }
+                    }
+
+                    // Step 3.4: Handle Filename Conflicts
+                    // - Check if a file with the same name already exists at the destination.
+                    // - Apply conflict resolution rules based on the selected filename preset (e.g., increment, reuse, or skip).
+                    const fullPath = `${destinationPath}/${newFilename}`;
+                    let existingFile = this.app.vault.getAbstractFileByPath(fullPath);
+                    let skipFurtherProcessing = false;
+
+                    if (selectedFilenamePreset && this.folderAndFilenameManagement.shouldSkipRename(file.name, selectedFilenamePreset)) {
+                        new Notice(
+                            `Skipped renaming/conversion of image "${file.name}" due to skip pattern match.`
+                        );
+                        skipFurtherProcessing = true;
+                    } else if (selectedFilenamePreset && selectedFilenamePreset.conflictResolution === "increment") {
+                        try {
+                            newFilename = await this.folderAndFilenameManagement.handleNameConflicts(
+                                destinationPath,
+                                newFilename,
+                                "increment"
+                            );
+                            existingFile = this.app.vault.getAbstractFileByPath(
+                                `${destinationPath}/${newFilename}`
+                            );
+                        } catch (error) {
+                            console.error("Error handling filename conflicts:", error);
+                            new Notice(`Error incrementing filename for "${file.name}". Check console for details.`);
+                            return; // Resolve this promise
+                        }
+                    }
+
+                    const newFullPath = this.folderAndFilenameManagement.combinePath(destinationPath, newFilename);
+
+                    // Step 3.5: Process, Reuse, or Skip
+                    if (!skipFurtherProcessing) {
+
+                        // Step 3.5.1: Reuse Existing File (if applicable)
+                        // - If a file exists and the preset is set to "reuse," insert a link to the existing file and skip processing.
+                        if (existingFile && selectedFilenamePreset && selectedFilenamePreset.conflictResolution === "reuse") {
+                            await this.insertLinkWithInserter(inserter, editor, existingFile.path, selectedLinkFormatPreset, selectedResizePreset);
+                            return; // Resolve this promise
+                        }
+
+
+                        // Step 3.5.2: Check for Skipped Conversion BEFORE Processing
+                        // - Check if the current file matches a skip pattern defined in the selected conversion preset.
+                        // - If it matches, skip the image processing step entirely.
+                        if (selectedConversionPreset && this.folderAndFilenameManagement.shouldSkipConversion(file.name, selectedConversionPreset)) {
+                            new Notice(`Skipped conversion of image "${file.name}" due to skip pattern match in the conversion preset.`);
+
+
+                            // Save the original file directly to the vault without any processing.
+                            // const originalSize = file.size;
+                            const fileBuffer = await file.arrayBuffer();
+                            const tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
+
+                            if (!tfile) {
+                                new Notice(`Failed to create file "${newFilename}". Check console for details.`);
+                                return; // Resolve this promise
+                            }
+
+                            // Insert a link to the newly created (but unprocessed) file.
+                            await this.insertLinkWithInserter(inserter, editor, tfile.path, selectedLinkFormatPreset, selectedResizePreset);
+
+                        } else {
+                            // Step 3.5.3: Process the Image (ONLY if not skipped)
+                            // - Call the `processImage` function to perform image conversion based on the selected preset or default settings.
+                            try {
+                                const originalSize = file.size;  // Store original size
+                                this.processedImage = await this.imageProcessor.processImage(
+                                    file,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.outputFormat
+                                        : this.settings.outputFormat,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.quality / 100
+                                        : this.settings.quality / 100,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.colorDepth
+                                        : this.settings.colorDepth,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.resizeMode
+                                        : this.settings.resizeMode,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.desiredWidth
+                                        : this.settings.desiredWidth,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.desiredHeight
+                                        : this.settings.desiredHeight,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.desiredLongestEdge
+                                        : this.settings.desiredLongestEdge,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.enlargeOrReduce
+                                        : this.settings.enlargeOrReduce,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.allowLargerFiles
+                                        : this.settings.allowLargerFiles,
+                                    selectedConversionPreset, // Pass preset to ImageProcessor
+                                    this.settings
+                                );
+
+
+                                let tfile: TFile;
+
+                                // Step 3.5.4: Create the Image File in Vault
+                                // - Create the new image file in the Obsidian vault using `createBinary`.
+                                // Show space savings notification
+                                // Check if processed image is larger than original
+                                if (this.settings.revertToOriginalIfLarger && this.processedImage.byteLength > originalSize) {
+                                    // User wants to revert AND processed image is larger
+                                    this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
+                                    new Notice(`Using original image for "${file.name}" as processed image is larger.`);
+
+                                    const fileBuffer = await file.arrayBuffer();
+                                    tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
+                                } else {
+                                    // Processed image is smaller OR user doesn't want to revert
+                                    this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
+                                    tfile = await this.app.vault.createBinary(newFullPath, this.processedImage) as TFile;
+                                }
+
+                                // Step 3.5.5: Insert Link into Editor
+                                // - Insert the Markdown link to the newly created image file into the editor at the current cursor position.
+                                await this.insertLinkWithInserter(inserter, editor, tfile.path, selectedLinkFormatPreset, selectedResizePreset);
+                            } catch (error) {
+                                // Step 3.5.6: Handle Image Processing Errors
+                                // - Catch and display errors that occur during image processing.
+                                console.error("Image processing failed:", error);
+                                if (error instanceof Error) {
+                                    if (error.message.includes("File already exists")) {
+                                        new Notice(`Failed to process image: File "${newFilename}" already exists.`);
+                                    } else if (error.message.includes("Invalid input file type")) {
+                                        new Notice(`Failed to process image: Invalid input file type for "${file.name}".`);
+                                    } else {
+                                        new Notice(`Failed to process image "${file.name}": ${error.message}. Check console for details.`);
+                                    }
+                                } else {
+                                    new Notice(`Failed to process image "${file.name}". Check console for details.`);
+                                }
+                                inserter.removeLoadingText(); // Remove placeholder on error
+                                return; // Resolve this promise
+                            } finally {
+                                // Clear memory after processing
+                                this.clearMemory();
+                            }
+                        }
+                    } else {
+                        // Step 3.6: Handle Skipped Processing
+                        // - If further processing is skipped due to filename conflict resolution, insert a link to an existing file (if applicable).
+                        if (existingFile) {
+                            await this.insertLinkWithInserter(inserter, editor, existingFile.path, selectedLinkFormatPreset, selectedResizePreset);
+                        } else {
+                            inserter.removeLoadingText(); // Remove placeholder if skipped and no existing file
+                        }
+                    }
+                } catch (error) {
+                    // Step 3.7: Handle Unexpected Errors
+                    // - Catch and display any other unexpected errors that might occur.
+                    console.error("An unexpected error occurred:", error);
+                    new Notice('An unexpected error occurred. Check console for details.');
+                    inserter.removeLoadingText(); // Clean up
+                }
+            };
+        });
+
+        // Step 4: Execute Tasks with Concurrent Queue
+        // - Use `ConcurrentQueue` to process images with limited concurrency (e.g., 3 at a time)
+        // - This prevents UI freezing when dropping many images
+        if (!this.concurrentQueue) {
+            this.concurrentQueue = new ConcurrentQueue(3);
+        }
+        await this.concurrentQueue.run(filePromises);
+
+        if (this.settings.enableImageCaptions) {
+            this.captionManager.refresh();
+        }
+    }
+
+    private async handlePaste(itemData: { kind: string; type: string; file: File | null }[], editor: Editor, cursor: EditorPosition) {
+        // Step 1: Filter Supported Image Files
+        // - Filter the pasted `itemData` to keep only supported image files.
+        const supportedFiles = itemData
+            .filter(data => data.kind === "file" && data.file &&
+                this.supportedImageFormats.isSupported(data.type, data.file.name))
+            .map(data => data.file!)
+            .filter((file): file is File => file !== null);
+
+        // Step 2: Check for Active File
+        // - Return early if no supported files are found or if there's no active file.
+        if (supportedFiles.length === 0) return;
+
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile) {
+            new Notice('No active file found!');
+            return;
+        }
+
+        // Step 3: Map Files to Processing Promises
+        // - Create an array of promises, each responsible for processing one pasted file.
+        const filePromises = supportedFiles.map((file) => {
+            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
+            inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
+
+            return async () => {
                 // Check modal behavior setting
                 const { modalBehavior } = this.settings;
                 let showModal = modalBehavior === "always";
@@ -1038,517 +1370,206 @@ export default class ImageConverterPlugin extends Plugin {
                         'Resize'
                     );
                 }
-
                 // Step 3.2: Determine Destination and Filename
-                // - Use the `determineDestination` function to calculate the destination path and new filename for the current file.
-                let destinationPath: string;
-                let newFilename: string;
-
+                // - Calculate the destination path and new filename for the current file.
                 try {
-                    ({ destinationPath, newFilename } = await this.folderAndFilenameManagement.determineDestination(
-                        file,
-                        activeFile,
-                        selectedConversionPreset,
-                        selectedFilenamePreset,
-                        selectedFolderPreset
-                    ));
-                } catch (error) {
-                    console.error("Error determining destination and filename:", error);
-                    new Notice(`Failed to determine destination or filename for "${file.name}". Check console for details.`);
-                    return; // Resolve this promise (no further processing for this file)
-                }
+                    let destinationPath: string;
+                    let newFilename: string;
 
-                // Rest of the steps (3.3 to 3.7) remain the same,
-                // using selectedConversionPreset and selectedFilenamePreset
-                // ...
-                // Step 3.3: Create Destination Folder
-                // - Create the destination folder if it doesn't exist.
-                try {
-                    await this.folderAndFilenameManagement.ensureFolderExists(destinationPath);
-                } catch (error) {
-                    // Ignore "Folder already exists" error, but handle other errors.
-                    if (!error.message.startsWith('Folder already exists')) {
-                        console.error("Error creating folder:", error);
-                        new Notice(`Failed to create folder "${destinationPath}". Check console for details.`);
-                        return; // Resolve this promise
-                    }
-                }
-
-                // Step 3.4: Handle Filename Conflicts
-                // - Check if a file with the same name already exists at the destination.
-                // - Apply conflict resolution rules based on the selected filename preset (e.g., increment, reuse, or skip).
-                const fullPath = `${destinationPath}/${newFilename}`;
-                let existingFile = this.app.vault.getAbstractFileByPath(fullPath);
-                let skipFurtherProcessing = false;
-
-                if (selectedFilenamePreset && this.folderAndFilenameManagement.shouldSkipRename(file.name, selectedFilenamePreset)) {
-                    new Notice(
-                        `Skipped renaming/conversion of image "${file.name}" due to skip pattern match.`
-                    );
-                    skipFurtherProcessing = true;
-                } else if (selectedFilenamePreset && selectedFilenamePreset.conflictResolution === "increment") {
                     try {
-                        newFilename = await this.folderAndFilenameManagement.handleNameConflicts(
-                            destinationPath,
-                            newFilename,
-                            "increment"
-                        );
-                        existingFile = this.app.vault.getAbstractFileByPath(
-                            `${destinationPath}/${newFilename}`
-                        );
+                        ({ destinationPath, newFilename } = await this.folderAndFilenameManagement.determineDestination(
+                            file,
+                            activeFile,
+                            selectedConversionPreset,
+                            selectedFilenamePreset,
+                            selectedFolderPreset
+                        ));
                     } catch (error) {
-                        console.error("Error handling filename conflicts:", error);
-                        new Notice(`Error incrementing filename for "${file.name}". Check console for details.`);
-                        return; // Resolve this promise
-                    }
-                }
-
-                const newFullPath = this.folderAndFilenameManagement.combinePath(destinationPath, newFilename);
-
-                // Step 3.5: Process, Reuse, or Skip
-                if (!skipFurtherProcessing) {
-
-                    // Step 3.5.1: Reuse Existing File (if applicable)
-                    // - If a file exists and the preset is set to "reuse," insert a link to the existing file and skip processing.
-                    if (existingFile && selectedFilenamePreset && selectedFilenamePreset.conflictResolution === "reuse") {
-                        this.insertLinkAtCursorPosition(editor, existingFile.path, cursor, selectedLinkFormatPreset, selectedResizePreset);
+                        console.error("Error determining destination and filename:", error);
+                        new Notice(`Failed to determine destination or filename for "${file.name}". Check console for details.`);
                         return; // Resolve this promise
                     }
 
-
-                    // Step 3.5.2: Check for Skipped Conversion BEFORE Processing
-                    // - Check if the current file matches a skip pattern defined in the selected conversion preset.
-                    // - If it matches, skip the image processing step entirely.
-                    if (selectedConversionPreset && this.folderAndFilenameManagement.shouldSkipConversion(file.name, selectedConversionPreset)) {
-                        new Notice(`Skipped conversion of image "${file.name}" due to skip pattern match in the conversion preset.`);
-
-
-                        // Save the original file directly to the vault without any processing.
-                        // const originalSize = file.size;
-                        const fileBuffer = await file.arrayBuffer();
-                        const tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
-
-                        if (!tfile) {
-                            new Notice(`Failed to create file "${newFilename}". Check console for details.`);
+                    // Step 3.3: Create Destination Folder
+                    // - Create the destination folder if it doesn't exist.
+                    try {
+                        await this.folderAndFilenameManagement.ensureFolderExists(destinationPath);
+                    } catch (error) {
+                        if (!error.message.startsWith('Folder already exists')) {
+                            console.error("Error creating folder:", error);
+                            new Notice(`Failed to create folder: ${destinationPath}`);
                             return; // Resolve this promise
                         }
+                    }
 
-                        // Insert a link to the newly created (but unprocessed) file.
-                        this.insertLinkAtCursorPosition(editor, tfile.path, cursor, selectedLinkFormatPreset, selectedResizePreset);
+                    // Step 3.4: Handle Filename Conflicts
+                    // - Check for filename conflicts and apply conflict resolution rules.
+                    const fullPath = `${destinationPath}/${newFilename}`;
+                    let existingFile = this.app.vault.getAbstractFileByPath(fullPath);
+                    let skipFurtherProcessing = false;
 
-                    } else {
-                        // Step 3.5.3: Process the Image (ONLY if not skipped)
-                        // - Call the `processImage` function to perform image conversion based on the selected preset or default settings.
+                    if (
+                        selectedFilenamePreset &&
+                        this.folderAndFilenameManagement.shouldSkipRename(
+                            file.name,
+                            selectedFilenamePreset
+                        )
+                    ) {
+                        new Notice(
+                            `Skipped renaming/conversion of image "${file.name}" due to skip pattern match.`
+                        );
+                        skipFurtherProcessing = true;
+                    } else if (
+                        selectedFilenamePreset &&
+                        selectedFilenamePreset.conflictResolution === "increment"
+                    ) {
                         try {
-                            const originalSize = file.size;  // Store original size
-                            this.processedImage = await this.imageProcessor.processImage(
-                                file,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.outputFormat
-                                    : this.settings.outputFormat,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.quality / 100
-                                    : this.settings.quality / 100,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.colorDepth
-                                    : this.settings.colorDepth,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.resizeMode
-                                    : this.settings.resizeMode,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.desiredWidth
-                                    : this.settings.desiredWidth,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.desiredHeight
-                                    : this.settings.desiredHeight,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.desiredLongestEdge
-                                    : this.settings.desiredLongestEdge,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.enlargeOrReduce
-                                    : this.settings.enlargeOrReduce,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.allowLargerFiles
-                                    : this.settings.allowLargerFiles,
-                                selectedConversionPreset, // Pass preset to ImageProcessor
-                                this.settings
+                            newFilename = await this.folderAndFilenameManagement.handleNameConflicts(
+                                destinationPath,
+                                newFilename,
+                                "increment"
                             );
-
-
-                            let tfile: TFile;
-
-                            // Step 3.5.4: Create the Image File in Vault
-                            // - Create the new image file in the Obsidian vault using `createBinary`.
-                            // Show space savings notification
-                            // Check if processed image is larger than original
-                            if (this.settings.revertToOriginalIfLarger && this.processedImage.byteLength > originalSize) {
-                                // User wants to revert AND processed image is larger
-                                this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
-                                new Notice(`Using original image for "${file.name}" as processed image is larger.`);
-
-                                const fileBuffer = await file.arrayBuffer();
-                                tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
-                            } else {
-                                // Processed image is smaller OR user doesn't want to revert
-                                this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
-                                tfile = await this.app.vault.createBinary(newFullPath, this.processedImage) as TFile;
-                            }
-
-                            // Step 3.5.5: Insert Link into Editor
-                            // - Insert the Markdown link to the newly created image file into the editor at the current cursor position.
-                            await this.insertLinkAtCursorPosition(editor, tfile.path, cursor, selectedLinkFormatPreset, selectedResizePreset);
+                            existingFile = this.app.vault.getAbstractFileByPath(
+                                `${destinationPath}/${newFilename}`
+                            );
                         } catch (error) {
-                            // Step 3.5.6: Handle Image Processing Errors
-                            // - Catch and display errors that occur during image processing.
-                            console.error("Image processing failed:", error);
-                            if (error instanceof Error) {
-                                if (error.message.includes("File already exists")) {
-                                    new Notice(`Failed to process image: File "${newFilename}" already exists.`);
-                                } else if (error.message.includes("Invalid input file type")) {
-                                    new Notice(`Failed to process image: Invalid input file type for "${file.name}".`);
-                                } else {
-                                    new Notice(`Failed to process image "${file.name}": ${error.message}. Check console for details.`);
-                                }
-                            } else {
-                                new Notice(`Failed to process image "${file.name}". Check console for details.`);
-                            }
-                            return; // Resolve this promise
-                        } finally {
-                            // Clear memory after processing
-                            this.clearMemory();
-                        }
-                    }
-                } else {
-                    // Step 3.6: Handle Skipped Processing
-                    // - If further processing is skipped due to filename conflict resolution, insert a link to an existing file (if applicable).
-                    if (existingFile) {
-                        this.insertLinkAtCursorPosition(editor, existingFile.path, cursor, selectedLinkFormatPreset, selectedResizePreset);
-                    }
-                }
-            } catch (error) {
-                // Step 3.7: Handle Unexpected Errors
-                // - Catch and display any other unexpected errors that might occur.
-                console.error("An unexpected error occurred:", error);
-                new Notice('An unexpected error occurred. Check console for details.');
-            }
-        });
-
-        // Step 4: Execute Tasks with Concurrent Queue
-        // - Use `ConcurrentQueue` to process images with limited concurrency (e.g., 3 at a time)
-        // - This prevents UI freezing when dropping many images
-        if (!this.concurrentQueue) {
-            this.concurrentQueue = new ConcurrentQueue(3);
-        }
-        await this.concurrentQueue.run(filePromises);
-
-        if (this.settings.enableImageCaptions) {
-            this.captionManager.refresh();
-        }
-    }
-
-    private async handlePaste(itemData: { kind: string; type: string; file: File | null }[], editor: Editor, cursor: EditorPosition) {
-        // Step 1: Filter Supported Image Files
-        // - Filter the pasted `itemData` to keep only supported image files.
-        const supportedFiles = itemData
-            .filter(data => data.kind === "file" && data.file &&
-                this.supportedImageFormats.isSupported(data.type, data.file.name))
-            .map(data => data.file!)
-            .filter((file): file is File => file !== null);
-
-        // Step 2: Check for Active File
-        // - Return early if no supported files are found or if there's no active file.
-        if (supportedFiles.length === 0) return;
-
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) {
-            new Notice('No active file found!');
-            return;
-        }
-
-        // Step 3: Map Files to Processing Promises
-        // - Create an array of promises, each responsible for processing one pasted file.
-        const filePromises = supportedFiles.map((file) => async () => {
-            // Check modal behavior setting
-            const { modalBehavior } = this.settings;
-            let showModal = modalBehavior === "always";
-
-            if (modalBehavior === "ask") {
-                showModal = await new Promise<boolean>((resolve) => {
-                    new ConfirmDialog(
-                        this.app,
-                        "Show Preset Selection Modal?",
-                        "Do you want to select presets for this image?",
-                        "Yes",
-                        () => resolve(true)
-                    ).open();
-                });
-            }
-
-            let selectedConversionPreset: ConversionPreset;
-            let selectedFilenamePreset: FilenamePreset;
-            let selectedFolderPreset: FolderPreset;
-            let selectedLinkFormatPreset: LinkFormatPreset;
-            let selectedResizePreset: NonDestructiveResizePreset;
-
-            if (showModal) {
-                // Show the modal and wait for user selection
-                ({
-                    selectedConversionPreset,
-                    selectedFilenamePreset,
-                    selectedFolderPreset,
-                    selectedLinkFormatPreset,
-                    selectedResizePreset
-                } = await new Promise<{
-                    selectedConversionPreset: ConversionPreset;
-                    selectedFilenamePreset: FilenamePreset;
-                    selectedFolderPreset: FolderPreset;
-                    selectedLinkFormatPreset: LinkFormatPreset;
-                    selectedResizePreset: NonDestructiveResizePreset;
-                }>((resolve) => {
-                    new PresetSelectionModal(
-                        this.app,
-                        this.settings,
-                        (conversionPreset, filenamePreset, folderPreset, linkFormatPreset, resizePreset) => {
-                            resolve({
-                                selectedConversionPreset: conversionPreset,
-                                selectedFilenamePreset: filenamePreset,
-                                selectedFolderPreset: folderPreset,
-                                selectedLinkFormatPreset: linkFormatPreset,
-                                selectedResizePreset: resizePreset,
-                            });
-                        },
-                        this,
-                        this.variableProcessor
-                    ).open();
-                }));
-            } else {
-                // Use default presets from settings using the generic getter
-                selectedConversionPreset = this.getPresetByName(
-                    this.settings.selectedConversionPreset,
-                    this.settings.conversionPresets,
-                    'Conversion'
-                );
-
-                selectedFilenamePreset = this.getPresetByName(
-                    this.settings.selectedFilenamePreset,
-                    this.settings.filenamePresets,
-                    'Filename'
-                );
-
-                selectedFolderPreset = this.getPresetByName(
-                    this.settings.selectedFolderPreset,
-                    this.settings.folderPresets,
-                    'Folder'
-                );
-
-                selectedLinkFormatPreset = this.getPresetByName(
-                    this.settings.linkFormatSettings.selectedLinkFormatPreset,
-                    this.settings.linkFormatSettings.linkFormatPresets,
-                    'Link Format'
-                );
-
-                selectedResizePreset = this.getPresetByName(
-                    this.settings.nonDestructiveResizeSettings.selectedResizePreset,
-                    this.settings.nonDestructiveResizeSettings.resizePresets,
-                    'Resize'
-                );
-            }
-            // Step 3.2: Determine Destination and Filename
-            // - Calculate the destination path and new filename for the current file.
-            try {
-                let destinationPath: string;
-                let newFilename: string;
-
-                try {
-                    ({ destinationPath, newFilename } = await this.folderAndFilenameManagement.determineDestination(
-                        file,
-                        activeFile,
-                        selectedConversionPreset,
-                        selectedFilenamePreset,
-                        selectedFolderPreset
-                    ));
-                } catch (error) {
-                    console.error("Error determining destination and filename:", error);
-                    new Notice(`Failed to determine destination or filename for "${file.name}". Check console for details.`);
-                    return; // Resolve this promise
-                }
-
-                // Step 3.3: Create Destination Folder
-                // - Create the destination folder if it doesn't exist.
-                try {
-                    await this.folderAndFilenameManagement.ensureFolderExists(destinationPath);
-                } catch (error) {
-                    if (!error.message.startsWith('Folder already exists')) {
-                        console.error("Error creating folder:", error);
-                        new Notice(`Failed to create folder: ${destinationPath}`);
-                        return; // Resolve this promise
-                    }
-                }
-
-                // Step 3.4: Handle Filename Conflicts
-                // - Check for filename conflicts and apply conflict resolution rules.
-                const fullPath = `${destinationPath}/${newFilename}`;
-                let existingFile = this.app.vault.getAbstractFileByPath(fullPath);
-                let skipFurtherProcessing = false;
-
-                if (
-                    selectedFilenamePreset &&
-                    this.folderAndFilenameManagement.shouldSkipRename(
-                        file.name,
-                        selectedFilenamePreset
-                    )
-                ) {
-                    new Notice(
-                        `Skipped renaming/conversion of image "${file.name}" due to skip pattern match.`
-                    );
-                    skipFurtherProcessing = true;
-                } else if (
-                    selectedFilenamePreset &&
-                    selectedFilenamePreset.conflictResolution === "increment"
-                ) {
-                    try {
-                        newFilename = await this.folderAndFilenameManagement.handleNameConflicts(
-                            destinationPath,
-                            newFilename,
-                            "increment"
-                        );
-                        existingFile = this.app.vault.getAbstractFileByPath(
-                            `${destinationPath}/${newFilename}`
-                        );
-                    } catch (error) {
-                        console.error("Error handling filename conflicts:", error);
-                        new Notice(`Error incrementing filename for "${file.name}". Check console for details.`);
-                        return; // Resolve this promise
-                    }
-                }
-
-                const newFullPath = this.folderAndFilenameManagement.combinePath(destinationPath, newFilename);
-
-                // Step 3.5: Process, Reuse, or Skip
-                if (!skipFurtherProcessing) {
-                    // Step 3.5.1: Reuse Existing File (if applicable)
-                    // - If the file exists and the preset is set to "reuse," insert a link to the existing file.
-                    if (existingFile && selectedFilenamePreset && selectedFilenamePreset.conflictResolution === "reuse") {
-                        this.insertLinkAtCursorPosition(editor, existingFile.path, cursor, selectedLinkFormatPreset, selectedResizePreset);
-                        return;
-                    }
-
-                    // Step 3.5.2: Check for Skipped Conversion BEFORE Processing
-                    // - Check if the current file matches a skip pattern in the conversion preset.
-                    // - If it matches, skip image processing entirely.
-                    if (selectedConversionPreset && this.folderAndFilenameManagement.shouldSkipConversion(file.name, selectedConversionPreset)) {
-                        new Notice(`Skipped conversion of image "${file.name}" due to skip pattern match in the conversion preset.`);
-
-                        // Save the original file directly to the vault without any processing.
-                        // const originalSize = file.size;
-                        const fileBuffer = await file.arrayBuffer();
-                        const tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
-
-                        if (!tfile) {
-                            new Notice(`Failed to create file: ${newFilename}`);
+                            console.error("Error handling filename conflicts:", error);
+                            new Notice(`Error incrementing filename for "${file.name}". Check console for details.`);
                             return; // Resolve this promise
                         }
+                    }
 
-                        // Insert a link to the newly created (unprocessed) file.
-                        this.insertLinkAtCursorPosition(editor, tfile.path, cursor, selectedLinkFormatPreset, selectedResizePreset);
-                    } else {
-                        // Step 3.5.3: Process the Image (ONLY if not skipped)
-                        // - Process the image using the selected or default settings.
-                        try {
-                            const originalSize = file.size;
-                            this.processedImage = await this.imageProcessor.processImage(
-                                file,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.outputFormat
-                                    : this.settings.outputFormat,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.quality / 100
-                                    : this.settings.quality / 100,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.colorDepth
-                                    : this.settings.colorDepth,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.resizeMode
-                                    : this.settings.resizeMode,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.desiredWidth
-                                    : this.settings.desiredWidth,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.desiredHeight
-                                    : this.settings.desiredHeight,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.desiredLongestEdge
-                                    : this.settings.desiredLongestEdge,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.enlargeOrReduce
-                                    : this.settings.enlargeOrReduce,
-                                selectedConversionPreset
-                                    ? selectedConversionPreset.allowLargerFiles
-                                    : this.settings.allowLargerFiles,
-                                selectedConversionPreset, // Pass preset to ImageProcessor
-                                this.settings
-                            );
+                    const newFullPath = this.folderAndFilenameManagement.combinePath(destinationPath, newFilename);
 
-                            let tfile: TFile;
-                            // Step 3.5.4: Create the Image File in Vault
-                            // - Create the new image file in the Obsidian vault using `createBinary`.
-                            // - Show space savings notification
-                            // Check if processed image is larger than original
-                            if (this.settings.revertToOriginalIfLarger && this.processedImage.byteLength > originalSize) {
-                                // User wants to revert AND processed image is larger
-                                this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
-                                new Notice(`Using original image for "${file.name}" as processed image is larger.`);
+                    // Step 3.5: Process, Reuse, or Skip
+                    if (!skipFurtherProcessing) {
+                        // Step 3.5.1: Reuse Existing File (if applicable)
+                        // - If the file exists and the preset is set to "reuse," insert a link to the existing file.
+                        if (existingFile && selectedFilenamePreset && selectedFilenamePreset.conflictResolution === "reuse") {
+                            await this.insertLinkWithInserter(inserter, editor, existingFile.path, selectedLinkFormatPreset, selectedResizePreset);
+                            return;
+                        }
 
-                                const fileBuffer = await file.arrayBuffer();
-                                tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
-                            } else {
-                                // Processed image is smaller OR user doesn't want to revert
-                                this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
-                                tfile = await this.app.vault.createBinary(newFullPath, this.processedImage) as TFile;
-                            }
+                        // Step 3.5.2: Check for Skipped Conversion BEFORE Processing
+                        // - Check if the current file matches a skip pattern in the conversion preset.
+                        // - If it matches, skip image processing entirely.
+                        if (selectedConversionPreset && this.folderAndFilenameManagement.shouldSkipConversion(file.name, selectedConversionPreset)) {
+                            new Notice(`Skipped conversion of image "${file.name}" due to skip pattern match in the conversion preset.`);
 
+                            // Save the original file directly to the vault without any processing.
+                            // const originalSize = file.size;
+                            const fileBuffer = await file.arrayBuffer();
+                            const tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
 
                             if (!tfile) {
-                                new Notice(`Failed to create file "${newFilename}". Check console for details.`);
+                                new Notice(`Failed to create file: ${newFilename}`);
                                 return; // Resolve this promise
                             }
 
-                            // Step 3.5.5: Insert Link into Editor
-                            // - Insert the link to the new image into the editor.
-                            this.insertLinkAtCursorPosition(editor, tfile.path, cursor, selectedLinkFormatPreset, selectedResizePreset);
-                        } catch (error) {
-                            // Step 3.5.6: Handle Image Processing Errors
-                            // - Handle errors during image processing.
-                            console.error("Image processing failed:", error);
-                            if (error instanceof Error) {
-                                if (error.message.includes("File already exists")) {
-                                    new Notice(`Failed to process image: File "${newFilename}" already exists.`);
-                                } else if (error.message.includes("Invalid input file type")) {
-                                    new Notice(`Failed to process image: Invalid input file type for "${file.name}".`);
+                            // Insert a link to the newly created (unprocessed) file.
+                            await this.insertLinkWithInserter(inserter, editor, tfile.path, selectedLinkFormatPreset, selectedResizePreset);
+                        } else {
+                            // Step 3.5.3: Process the Image (ONLY if not skipped)
+                            // - Process the image using the selected or default settings.
+                            try {
+                                const originalSize = file.size;
+                                this.processedImage = await this.imageProcessor.processImage(
+                                    file,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.outputFormat
+                                        : this.settings.outputFormat,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.quality / 100
+                                        : this.settings.quality / 100,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.colorDepth
+                                        : this.settings.colorDepth,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.resizeMode
+                                        : this.settings.resizeMode,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.desiredWidth
+                                        : this.settings.desiredWidth,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.desiredHeight
+                                        : this.settings.desiredHeight,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.desiredLongestEdge
+                                        : this.settings.desiredLongestEdge,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.enlargeOrReduce
+                                        : this.settings.enlargeOrReduce,
+                                    selectedConversionPreset
+                                        ? selectedConversionPreset.allowLargerFiles
+                                        : this.settings.allowLargerFiles,
+                                    selectedConversionPreset, // Pass preset to ImageProcessor
+                                    this.settings
+                                );
+
+                                let tfile: TFile;
+                                // Step 3.5.4: Create the Image File in Vault
+                                // - Create the new image file in the Obsidian vault using `createBinary`.
+                                // - Show space savings notification
+                                // Check if processed image is larger than original
+                                if (this.settings.revertToOriginalIfLarger && this.processedImage.byteLength > originalSize) {
+                                    // User wants to revert AND processed image is larger
+                                    this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
+                                    new Notice(`Using original image for "${file.name}" as processed image is larger.`);
+
+                                    const fileBuffer = await file.arrayBuffer();
+                                    tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
                                 } else {
-                                    new Notice(`Failed to process image "${file.name}": ${error.message}. Check console for details.`);
+                                    // Processed image is smaller OR user doesn't want to revert
+                                    this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
+                                    tfile = await this.app.vault.createBinary(newFullPath, this.processedImage) as TFile;
                                 }
-                            } else {
-                                new Notice(`Failed to process image "${file.name}". Check console for details.`);
+
+
+                                if (!tfile) {
+                                    new Notice(`Failed to create file "${newFilename}". Check console for details.`);
+                                    return; // Resolve this promise
+                                }
+
+                                // Step 3.5.5: Insert Link into Editor
+                                // - Insert the link to the new image into the editor.
+                                await this.insertLinkWithInserter(inserter, editor, tfile.path, selectedLinkFormatPreset, selectedResizePreset);
+                            } catch (error) {
+                                // Step 3.5.6: Handle Image Processing Errors
+                                // - Handle errors during image processing.
+                                console.error("Image processing failed:", error);
+                                if (error instanceof Error) {
+                                    if (error.message.includes("File already exists")) {
+                                        new Notice(`Failed to process image: File "${newFilename}" already exists.`);
+                                    } else if (error.message.includes("Invalid input file type")) {
+                                        new Notice(`Failed to process image: Invalid input file type for "${file.name}".`);
+                                    } else {
+                                        new Notice(`Failed to process image "${file.name}": ${error.message}. Check console for details.`);
+                                    }
+                                } else {
+                                    new Notice(`Failed to process image "${file.name}". Check console for details.`);
+                                }
+                                return; // Resolve this promise
                             }
-                            return; // Resolve this promise
+                        }
+                    } else {
+                        // Step 3.6: Handle Skipped Processing
+                        // - If skipping, insert a link to an existing file or do nothing.
+                        if (existingFile) {
+                            await this.insertLinkWithInserter(inserter, editor, existingFile.path, selectedLinkFormatPreset, selectedResizePreset);
+                        } else {
+                            inserter.removeLoadingText();
                         }
                     }
-                } else {
-                    // Step 3.6: Handle Skipped Processing
-                    // - If skipping, insert a link to an existing file or do nothing.
-                    if (existingFile) {
-                        this.insertLinkAtCursorPosition(editor, existingFile.path, cursor, selectedLinkFormatPreset, selectedResizePreset);
-                    }
+                } catch (error) {
+                    // Step 3.7: Handle Unexpected Errors
+                    console.error("An unexpected error occurred:", error);
+                    new Notice('An unexpected error occurred. Check console for details.');
+                    inserter.removeLoadingText();
+                } finally {
+                    // Clear memory after processing
+                    this.clearMemory();
                 }
-            } catch (error) {
-                // Step 3.7: Handle Unexpected Errors
-                console.error("An unexpected error occurred:", error);
-                new Notice('An unexpected error occurred. Check console for details.');
-            } finally {
-                // Clear memory after processing
-                this.clearMemory();
-            }
+            };
         });
 
         // Step 4: Execute Tasks with Concurrent Queue
@@ -1607,6 +1628,37 @@ export default class ImageConverterPlugin extends Plugin {
             });
         }
 
+    }
+
+    // Helper function to insert link using EditorContentInserter (for placeholders)
+    private async insertLinkWithInserter(
+        inserter: EditorContentInserter,
+        editor: Editor,
+        linkPath: string,
+        selectedLinkFormatPreset?: LinkFormatPreset,
+        selectedResizePreset?: NonDestructiveResizePreset
+    ) {
+        const activeFile = this.app.workspace.getActiveFile();
+
+        // Use the passed presets or fall back to the plugin settings
+        const linkFormatPresetToUse = selectedLinkFormatPreset || this.settings.linkFormatSettings.linkFormatPresets.find(
+            (preset) => preset.name === this.settings.linkFormatSettings.selectedLinkFormatPreset
+        );
+
+        const resizePresetToUse = selectedResizePreset || this.settings.nonDestructiveResizeSettings.resizePresets.find(
+            (preset) => preset.name === this.settings.nonDestructiveResizeSettings.selectedResizePreset
+        );
+
+        // Await the result of formatLink
+        const formattedLink = await this.linkFormatter.formatLink(
+            linkPath,
+            linkFormatPresetToUse?.linkFormat || "wikilink",
+            linkFormatPresetToUse?.pathFormat || "shortest",
+            activeFile,
+            resizePresetToUse
+        );
+
+        inserter.insertResponseToEditor(formattedLink);
     }
 
     private formatFileSize(bytes: number): string {
@@ -1724,14 +1776,11 @@ export default class ImageConverterPlugin extends Plugin {
         for (const file of supportedFiles) {
             console.log('[Cloud Upload] Processing file:', file.name, 'size:', file.size, 'type:', file.type);
 
-            // Insert uploading placeholder
-            const timestamp = Date.now();
-            const placeholder = `![Uploading file...${timestamp}]()`;
+            // Insert uploading placeholder using EditorContentInserter
+            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
+            inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
 
             try {
-                editor.replaceRange(placeholder, cursor);
-                console.log('[Cloud Upload] Inserted placeholder:', placeholder);
-
                 // Create uploader manager
                 const uploaderManager = new UploaderManager(
                     this.settings.cloudUploadSettings.uploader,
@@ -1761,10 +1810,8 @@ export default class ImageConverterPlugin extends Plugin {
                 );
                 console.log('[Cloud Upload] Formatted cloud link:', cloudLink);
 
-                // Replace placeholder with actual link
-                const content = editor.getValue();
-                const newContent = content.replace(placeholder, cloudLink);
-                editor.setValue(newContent);
+                // Replace placeholder with final link
+                inserter.insertResponseToEditor(cloudLink);
 
                 new Notice('Image uploaded successfully!');
                 console.log('[Cloud Upload] Upload completed successfully');
@@ -1774,9 +1821,7 @@ export default class ImageConverterPlugin extends Plugin {
                 new Notice(`Upload failed: ${error.message}`);
 
                 // Remove placeholder on failure
-                const content = editor.getValue();
-                const cleanedContent = content.replace(placeholder, '');
-                editor.setValue(cleanedContent);
+                inserter.removeLoadingText();
                 console.log('[Cloud Upload] Placeholder removed due to upload failure');
             } finally {
                 // Clear memory after processing
@@ -2883,14 +2928,11 @@ export default class ImageConverterPlugin extends Plugin {
         for (const file of supportedFiles) {
             console.log('[Cloud Upload] Processing file:', file.name, 'size:', file.size, 'type:', file.type);
 
-            // Insert uploading placeholder
-            const timestamp = Date.now();
-            const placeholder = `![Uploading file...${timestamp}]()`;
+            // Insert uploading placeholder using EditorContentInserter
+            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
+            inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
 
             try {
-                editor.replaceRange(placeholder, cursor);
-                console.log('[Cloud Upload] Inserted placeholder:', placeholder);
-
                 // Create uploader manager
                 const uploaderManager = new UploaderManager(
                     this.settings.cloudUploadSettings.uploader,
@@ -2904,7 +2946,7 @@ export default class ImageConverterPlugin extends Plugin {
                 const fileList = dataTransfer.files;
                 console.log('[Cloud Upload] Prepared FileList with', fileList.length, 'file(s)');
 
-                // Upload directly from clipboard without saving to vault
+                // Upload directly from drop without saving to vault
                 console.log('[Cloud Upload] Starting clipboard upload for:', file.name);
                 const uploadResult = await uploaderManager.uploadByClipboard(fileList);
                 console.log('[Cloud Upload] Upload result:', uploadResult);
@@ -2916,14 +2958,12 @@ export default class ImageConverterPlugin extends Plugin {
                 const cloudLink = CloudLinkFormatter.formatCloudLink(
                     cloudUrl,
                     this.settings.cloudUploadSettings
-                    // Clipboard upload - no original link
+                    // Clipboard upload - no original link to preserve
                 );
                 console.log('[Cloud Upload] Formatted cloud link:', cloudLink);
 
-                // Replace placeholder with actual link
-                const content = editor.getValue();
-                const newContent = content.replace(placeholder, cloudLink);
-                editor.setValue(newContent);
+                // Replace placeholder with final link
+                inserter.insertResponseToEditor(cloudLink);
 
                 new Notice('Image uploaded successfully!');
                 console.log('[Cloud Upload] Upload completed successfully');
@@ -2933,9 +2973,7 @@ export default class ImageConverterPlugin extends Plugin {
                 new Notice(`Upload failed: ${error.message}`);
 
                 // Remove placeholder on failure
-                const content = editor.getValue();
-                const cleanedContent = content.replace(placeholder, '');
-                editor.setValue(cleanedContent);
+                inserter.removeLoadingText();
                 console.log('[Cloud Upload] Placeholder removed due to upload failure');
             } finally {
                 // Clear memory after processing
