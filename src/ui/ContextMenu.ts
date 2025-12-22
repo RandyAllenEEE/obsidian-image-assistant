@@ -1780,14 +1780,17 @@ export class ContextMenu extends Component {
 				// Try to delete from cloud storage (PicList only)
 				const cloudDeleteSuccess = await this.cloudDeleter.deleteImage({ url: cloudUrl });
 
+				// Force remove from history to avoid bloat (even if cloud delete failed or not supported)
+				await this.plugin.historyManager.removeRecord(cloudUrl);
+
 				if (cloudDeleteSuccess) {
 					new Notice('Cloud image deleted successfully!');
 				} else {
 					const uploader = this.plugin.settings.cloudUploadSettings.uploader;
 					if (uploader === 'PicList') {
-						new Notice('Cloud image link removed, but failed to delete from cloud storage. Image may not be in upload history.');
+						new Notice('Cloud image link removed, but failed to delete from cloud storage. History record removed.');
 					} else {
-						new Notice(`Cloud image link removed. (${uploader} does not support automatic deletion)`);
+						new Notice(`Cloud image link removed. (${uploader} does not support automatic deletion). History record removed.`);
 					}
 				}
 			};
@@ -1806,6 +1809,9 @@ export class ContextMenu extends Component {
 
 				// Try to delete from cloud storage (PicList only)
 				const cloudDeleteSuccess = await this.cloudDeleter.deleteImage({ url: cloudUrl });
+
+				// Force remove from history to avoid bloat
+				await this.plugin.historyManager.removeRecord(cloudUrl);
 
 				if (cloudDeleteSuccess) {
 					new Notice(t("MSG_CLOUD_DELETED"));

@@ -305,6 +305,10 @@ export default class ImageConverterPlugin extends Plugin {
         this.imageProcessor = new ImageProcessor(this.supportedImageFormats);
         this.vaultReferenceManager = new VaultReferenceManager(this.app);
 
+        // Initialize History Manager
+        this.historyManager = new UploadHistoryManager(this.app, this);
+        await this.historyManager.init();
+
         if (this.settings.isImageResizeEnabled) {
             // Resizer initialized above/together with StateManager now
             // kept here for layout ready logic
