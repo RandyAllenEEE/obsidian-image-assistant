@@ -11,6 +11,13 @@
  * - alt: any text (caption)
  */
 
+import {
+    PIPE_SIZE_PATTERN,
+    PIPE_ALIGN_PATTERN,
+    REGEX_WIKI_LINK_VALIDATE,
+    REGEX_MD_LINK_VALIDATE
+} from './RegexPatterns';
+
 export type AlignType = 'left' | 'center' | 'right' | 'left-wrap' | 'right-wrap' | null;
 
 export interface SizeData {
@@ -31,19 +38,19 @@ export interface PipeSyntaxData {
  * Pipe Syntax 解析器
  */
 export class PipeSyntaxParser {
-    // 对齐关键字集合
-    private static readonly ALIGN_KEYWORDS = new Set([
-        'left', 'center', 'right', 'left-wrap', 'right-wrap'
-    ]);
+    // // 对齐关键字集合 -> Now using Regex Test or we can keep set if faster, but let's use regex to be strict to patterns file
+    // private static readonly ALIGN_KEYWORDS = new Set([
+    //     'left', 'center', 'right', 'left-wrap', 'right-wrap'
+    // ]);
 
-    // 尺寸格式正则：300x200, 300, 300x, x200
-    private static readonly SIZE_PATTERN = /^(\d+)(x(\d+)?)?$|^x(\d+)$/i;
+    // 尺寸格式正则
+    private static readonly SIZE_PATTERN = PIPE_SIZE_PATTERN;
 
-    // Wiki 链接正则：![[path|...]]
-    private static readonly WIKI_LINK_PATTERN = /^!\[\[([^\]]+?)\]\]$/;
+    // Wiki 链接正则
+    private static readonly WIKI_LINK_PATTERN = REGEX_WIKI_LINK_VALIDATE;
 
-    // Markdown 链接正则：![...](path)
-    private static readonly MARKDOWN_LINK_PATTERN = /^!\[([^\]]*)\]\(([^)]+)\)$/;
+    // Markdown 链接正则
+    private static readonly MARKDOWN_LINK_PATTERN = REGEX_MD_LINK_VALIDATE;
 
     /**
      * 解析图片链接的 Pipe Syntax
@@ -253,6 +260,32 @@ export class PipeSyntaxParser {
     }
 
     /**
+     * Parse the alt text content to strip size and align attributes.
+     * Effectively treats the input as the content inside ![...].
+     * @param altText The raw alt text (e.g. "Title|100")
+     */
+    public parseAltText(altText: string): PipeSyntaxData {
+        if (!altText || altText.trim() === '') {
+            return { path: '', alt: ' ', linkType: 'markdown' };
+        }
+
+        // Truncate at the first pipe |
+        const pipeIndex = altText.indexOf('|');
+        let cleanAlt = (pipeIndex !== -1 ? altText.substring(0, pipeIndex) : altText).trim();
+
+        // Robustness fallback: if empty/missing (e.g. "![|100]"), use a space
+        if (cleanAlt === '') {
+            cleanAlt = ' ';
+        }
+
+        return {
+            path: '',
+            alt: cleanAlt,
+            linkType: 'markdown' // arbitrary
+        };
+    }
+
+    /**
      * 更新图片链接中的特定属性
      * @param linkText 原始链接字符串
      * @param updates 要更新的属性对象
@@ -287,7 +320,7 @@ export class PipeSyntaxParser {
      * 判断是否为对齐属性
      */
     private isAlignAttribute(segment: string): boolean {
-        return PipeSyntaxParser.ALIGN_KEYWORDS.has(segment);
+        return PIPE_ALIGN_PATTERN.test(segment);
     }
 
     /**
@@ -369,9 +402,8 @@ export class PipeSyntaxParser {
 
         // 2. 匹配 Markdown 链接
         // 匹配 ![...](...)
-        // 注意：这里需要处理嵌套括号的可能性，但简单的正则通常足够处理大多数情况
-        // 对于嵌套括号，可能需要更复杂的解析，这里使用基础的平衡括号匹配
-        const mdRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+        // 支持一层嵌套括号，例如 ![alt](url(1).png)
+        const mdRegex = /!\[([^\]]*)\]\(((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*)\)/g;
         let mdMatch;
         while ((mdMatch = mdRegex.exec(text)) !== null) {
             const parsed = this.parseMarkdownLink(mdMatch[0]);

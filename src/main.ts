@@ -10,7 +10,8 @@ import {
     FileSystemAdapter,
     requestUrl,
     Modal,
-    FuzzySuggestModal
+    FuzzySuggestModal,
+    normalizePath
 } from "obsidian";
 import { SupportedImageFormats } from "./local/SupportedImageFormats";
 import { FolderAndFilenameManagement } from "./local/FolderAndFilenameManagement";
@@ -21,9 +22,9 @@ import { LinkFormatter } from "./utils/LinkFormatter";
 import { NonDestructiveResizePreset } from "./settings/NonDestructiveResizeSettings";
 import { ContextMenu } from "./ui/ContextMenu";
 import { ConcurrentQueue } from "./utils/AsyncLock";
-// import { ImageAlignment } from './ui/ImageAlignment';
-import { ImageAlignmentManager } from './ui/ImageAlignmentManager';
-import { normalizePath } from "obsidian";
+import { ImageAlignment } from './ui/ImageAlignment'; // Import class directly
+import { ImageStateManager } from './ui/ImageStateManager';
+import { ImageCaption } from './ui/ImageCaption';
 import { ImageResizer } from "./ui/ImageResizer";
 import { t } from './lang/helpers';
 import { BatchImageProcessor } from "./local/BatchImageProcessor";
@@ -31,7 +32,8 @@ import { ProcessSingleImageModal } from "./ui/modals/ProcessSingleImageModal";
 import { ProcessFolderModal } from "./ui/modals/ProcessFolderModal";
 import { ProcessCurrentNote } from "./ui/modals/ProcessCurrentNote";
 import { ProcessAllVaultModal } from "./ui/modals/ProcessAllVaultModal"
-import { ImageCaptionManager } from "./ui/ImageCaptionManager"
+
+
 import { UploaderManager } from "./cloud/uploader/index";
 import { CloudLinkFormatter } from "./cloud/CloudLinkFormatter";
 import { UploadHelper, ImageLink } from "./utils/UploadHelper";
@@ -128,10 +130,13 @@ export default class ImageConverterPlugin extends Plugin {
     // Context menu
     contextMenu: ContextMenu;
     // Alignment
-    // imageAlignment: ImageAlignment | null = null;
-    ImageAlignmentManager: ImageAlignmentManager | null = null;
-    // drag-resize
+    imageAlignment: ImageAlignment | null = null;
+    imageStateManager: ImageStateManager | null = null;
+    imageCaption: ImageCaption | null = null;
+
+    // drag-resize (Managed by StateManager but kept for reference if needed)
     imageResizer: ImageResizer | null = null;
+
     // batch processing
     batchImageProcessor: BatchImageProcessor;
     // Single Image Modal
@@ -143,7 +148,7 @@ export default class ImageConverterPlugin extends Plugin {
     // ProcessAllVault
     processAllVaultModal: ProcessAllVaultModal
     // captions
-    captionManager: ImageCaptionManager;
+    // captionManager: ImageCaptionManager; // Deprecated
     // upload history
     historyManager: UploadHistoryManager;
     // upload helper for batch upload and download
@@ -205,43 +210,24 @@ export default class ImageConverterPlugin extends Plugin {
         // 这确保命令可以在 Obsidian 设置界面中绑定快捷键
         this.registerAllCommands();
 
-        // Captions are time-sensitive
-        if (this.settings.enableImageCaptions) {
-            this.captionManager = new ImageCaptionManager(this);
-            this.register(() => this.captionManager.cleanup());
-            // Delay refresh to avoid startup issues
-            this.app.workspace.onLayoutReady(() => {
-                this.captionManager.refresh();
-            });
-        }
+        // Initialize Image State Manager (Coordinator)
+        this.imageStateManager = new ImageStateManager(this.app, this);
+        this.imageAlignment = new ImageAlignment(this.app, this);
+        this.imageCaption = new ImageCaption(this);
 
-        // Initialize history manager
-        this.historyManager = new UploadHistoryManager(this.app, this);
-
-        // Initialize ImageAlignment early since it's time-sensitive
-        if (this.settings.isImageAlignmentEnabled) {
-            this.ImageAlignmentManager = new ImageAlignmentManager(
-                this.app,
-                this,
-                this.supportedImageFormats,
-            );
-            // 同步等待初始化完成,确保缓存加载和事件注册完成
-            await this.ImageAlignmentManager.initialize();
-
-            // ✅ 提前在 onload 中注册 file-open 事件
-            // 参考 image-converter 的成功模式,确保事件优先级
+        // Register StateManager refresh events
+        if (this.settings.isImageAlignmentEnabled || this.settings.enableImageCaptions) {
             this.registerEvent(
                 this.app.workspace.on('file-open', (file) => {
                     if (file) {
-                        this.ImageAlignmentManager?.refreshAllImages();
-
-                        if (this.settings.enableImageCaptions) {
-                            this.captionManager.refresh();
-                        }
+                        this.imageStateManager?.refreshAllImages();
+                        // this.imageCaption?.refresh(); // StateManager handles this now via processImage
                     }
                 })
             );
         }
+
+        /* Deprecated Managers (Removed) */
 
         // // REDUNDANT - Below already initializes on layout change and for applying alignemnt "file-open" is much better option as it fires much less often
         // // NOTE: For alignment to be set this must be outside `this.app.workspace.onLayoutReady(() => {`
@@ -271,15 +257,10 @@ export default class ImageConverterPlugin extends Plugin {
             this.initializeComponents();
 
             // Apply Image Alignment and Resizing when switching Live to Reading mode etc.
-            if (this.settings.isImageAlignmentEnabled || this.settings.isImageResizeEnabled) {
+            if (this.settings.isImageAlignmentEnabled || this.settings.isImageResizeEnabled || this.settings.enableImageCaptions) {
                 this.registerEvent(
                     this.app.workspace.on('layout-change', () => {
-                        if (this.settings.isImageAlignmentEnabled) {
-                            const currentFile = this.app.workspace.getActiveFile();
-                            if (currentFile) {
-                                void this.ImageAlignmentManager?.refreshAllImages();
-                            }
-                        }
+                        this.imageStateManager?.refreshAllImages();
 
                         if (this.settings.isImageResizeEnabled) {
                             const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -287,11 +268,6 @@ export default class ImageConverterPlugin extends Plugin {
                                 this.imageResizer?.onLayoutChange(activeView);
                             }
                         }
-
-                        if (this.settings.enableImageCaptions) {
-                            this.captionManager.refresh();
-                        }
-
                     })
                 );
             }
@@ -309,6 +285,16 @@ export default class ImageConverterPlugin extends Plugin {
             // }, true);
 
         });
+
+        // Register MarkdownPostProcessor for Reading Mode Image Handling
+        this.registerMarkdownPostProcessor((element, context) => {
+            const images = element.querySelectorAll('img');
+            images.forEach((img) => {
+                if (img instanceof HTMLImageElement && this.imageStateManager) {
+                    this.imageStateManager.processReadingModeImage(img);
+                }
+            });
+        });
     }
 
     async initializeComponents() {
@@ -320,7 +306,9 @@ export default class ImageConverterPlugin extends Plugin {
         this.vaultReferenceManager = new VaultReferenceManager(this.app);
 
         if (this.settings.isImageResizeEnabled) {
-            this.imageResizer = new ImageResizer(this);
+            // Resizer initialized above/together with StateManager now
+            // kept here for layout ready logic
+            // this.imageResizer = new ImageResizer(this);
             // Delay initialization to avoid startup issues
             this.app.workspace.onLayoutReady(() => {
                 const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -340,6 +328,15 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Initialize upload helper
         this.uploadHelper = new UploadHelper(this.app);
+
+        // Finalize StateManager Initialization
+        if (this.imageStateManager && this.imageAlignment && this.imageCaption) {
+            this.imageStateManager.initialize(
+                this.imageAlignment,
+                this.imageResizer!, // Can be null if disabled
+                this.imageCaption
+            );
+        }
 
         // Initialize network image downloader
         this.networkDownloader = new NetworkImageDownloader(
@@ -564,10 +561,7 @@ export default class ImageConverterPlugin extends Plugin {
 
     async onunload() {
         // Clean up alignment related components first
-        if (this.ImageAlignmentManager) {
-            this.ImageAlignmentManager.onunload();
-            this.ImageAlignmentManager = null;
-        }
+
 
         // Clean up resizer next since other components might depend on it
         if (this.imageResizer) {
@@ -957,7 +951,7 @@ export default class ImageConverterPlugin extends Plugin {
             // Create inserter and placeholder immediately for EACH file
             // This ensures sequential cursor placement: [Loading 1][Loading 2]...
             const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
-            inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
+            inserter.insertLoadingText(`${t("LOADING_PROCESS") || "Processing"} ${file.name}...`);
 
             return async () => {
                 try {
@@ -985,19 +979,13 @@ export default class ImageConverterPlugin extends Plugin {
 
                     if (showModal) {
                         // Show the modal and wait for user selection
-                        ({
-                            selectedConversionPreset,
-                            selectedFilenamePreset,
-                            selectedFolderPreset,
-                            selectedLinkFormatPreset,
-                            selectedResizePreset
-                        } = await new Promise<{
+                        const result = await new Promise<{
                             selectedConversionPreset: ConversionPreset;
                             selectedFilenamePreset: FilenamePreset;
                             selectedFolderPreset: FolderPreset;
                             selectedLinkFormatPreset: LinkFormatPreset;
                             selectedResizePreset: NonDestructiveResizePreset;
-                        }>((resolve) => {
+                        } | null>((resolve) => {
                             new PresetSelectionModal(
                                 this.app,
                                 this.settings,
@@ -1010,10 +998,25 @@ export default class ImageConverterPlugin extends Plugin {
                                         selectedResizePreset: resizePreset,
                                     });
                                 },
+                                () => resolve(null), // onCancel
                                 this,
                                 this.variableProcessor
                             ).open();
-                        }));
+                        });
+
+                        if (!result) {
+                            new Notice(t("MSG_PROCESSING_CANCELLED") || "Processing cancelled.");
+                            inserter.removeLoadingText();
+                            return;
+                        }
+
+                        ({
+                            selectedConversionPreset,
+                            selectedFilenamePreset,
+                            selectedFolderPreset,
+                            selectedLinkFormatPreset,
+                            selectedResizePreset
+                        } = result);
                     } else {
                         // Use default presets from settings using the generic getter
                         selectedConversionPreset = this.getPresetByName(
@@ -1255,7 +1258,7 @@ export default class ImageConverterPlugin extends Plugin {
         await this.concurrentQueue.run(filePromises);
 
         if (this.settings.enableImageCaptions) {
-            this.captionManager.refresh();
+            this.imageStateManager?.refreshAllImages();
         }
     }
 
@@ -1282,7 +1285,7 @@ export default class ImageConverterPlugin extends Plugin {
         // - Create an array of promises, each responsible for processing one pasted file.
         const filePromises = supportedFiles.map((file) => {
             const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
-            inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
+            inserter.insertLoadingText(`${t("LOADING_PROCESS") || "Processing"} ${file.name}...`);
 
             return async () => {
                 // Check modal behavior setting
@@ -1309,19 +1312,13 @@ export default class ImageConverterPlugin extends Plugin {
 
                 if (showModal) {
                     // Show the modal and wait for user selection
-                    ({
-                        selectedConversionPreset,
-                        selectedFilenamePreset,
-                        selectedFolderPreset,
-                        selectedLinkFormatPreset,
-                        selectedResizePreset
-                    } = await new Promise<{
+                    const result = await new Promise<{
                         selectedConversionPreset: ConversionPreset;
                         selectedFilenamePreset: FilenamePreset;
                         selectedFolderPreset: FolderPreset;
                         selectedLinkFormatPreset: LinkFormatPreset;
                         selectedResizePreset: NonDestructiveResizePreset;
-                    }>((resolve) => {
+                    } | null>((resolve) => {
                         new PresetSelectionModal(
                             this.app,
                             this.settings,
@@ -1334,10 +1331,25 @@ export default class ImageConverterPlugin extends Plugin {
                                     selectedResizePreset: resizePreset,
                                 });
                             },
+                            () => resolve(null), // onCancel
                             this,
                             this.variableProcessor
                         ).open();
-                    }));
+                    });
+
+                    if (!result) {
+                        new Notice(t("MSG_PROCESSING_CANCELLED") || "Processing cancelled.");
+                        inserter.removeLoadingText();
+                        return;
+                    }
+
+                    ({
+                        selectedConversionPreset,
+                        selectedFilenamePreset,
+                        selectedFolderPreset,
+                        selectedLinkFormatPreset,
+                        selectedResizePreset
+                    } = result);
                 } else {
                     // Use default presets from settings using the generic getter
                     selectedConversionPreset = this.getPresetByName(
@@ -1580,7 +1592,7 @@ export default class ImageConverterPlugin extends Plugin {
         await this.concurrentQueue.run(filePromises);
 
         if (this.settings.enableImageCaptions) {
-            this.captionManager.refresh();
+            this.imageStateManager?.refreshAllImages();
         }
     }
 
@@ -1831,7 +1843,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Refresh captions if enabled
         if (this.settings.enableImageCaptions) {
-            this.captionManager.refresh();
+            this.imageStateManager?.refreshAllImages();
         }
     }
 
@@ -2237,7 +2249,7 @@ export default class ImageConverterPlugin extends Plugin {
 
             // 刷新图片题注（如果启用）
             if (this.settings.enableImageCaptions) {
-                this.captionManager.refresh();
+                this.imageStateManager?.refreshAllImages();
             }
 
         } catch (error) {
@@ -2537,7 +2549,7 @@ export default class ImageConverterPlugin extends Plugin {
 
             // Refresh image captions (if enabled)
             if (this.settings.enableImageCaptions) {
-                this.captionManager.refresh();
+                this.imageStateManager?.refreshAllImages();
             }
 
             // Show batch summary if there were errors
@@ -2829,7 +2841,7 @@ export default class ImageConverterPlugin extends Plugin {
 
             // Refresh image captions (if enabled)
             if (this.settings.enableImageCaptions) {
-                this.captionManager.refresh();
+                this.imageStateManager?.refreshAllImages();
             }
 
         } catch (error) {
@@ -2983,7 +2995,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Refresh captions if enabled
         if (this.settings.enableImageCaptions) {
-            this.captionManager.refresh();
+            this.imageStateManager?.refreshAllImages();
         }
     }
 
@@ -3147,7 +3159,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Refresh captions if enabled
         if (this.settings.enableImageCaptions) {
-            this.captionManager.refresh();
+            this.imageStateManager?.refreshAllImages();
         }
     }
 
@@ -3577,7 +3589,7 @@ export default class ImageConverterPlugin extends Plugin {
         });
 
         if (this.settings.enableImageCaptions) {
-            this.captionManager.refresh();
+            this.imageStateManager?.refreshAllImages();
         }
 
         return count;

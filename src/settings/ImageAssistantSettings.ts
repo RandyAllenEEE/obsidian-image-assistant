@@ -1037,8 +1037,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         this.plugin.settings.defaultImageAlignment = value;
                         await this.plugin.saveSettings();
                         // 立即刷新所有图片
-                        if (this.plugin.ImageAlignmentManager) {
-                            this.plugin.ImageAlignmentManager.refreshAllImages();
+                        if (this.plugin.imageStateManager) {
+                            this.plugin.imageStateManager.refreshAllImages();
                         }
                     })
                 );
@@ -1080,8 +1080,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                     .onChange(async (value: ".obsidian" | "plugin") => {
                         this.plugin.settings.imageAlignment_cacheLocation = value;
                         await this.plugin.saveSettings();
-                        this.plugin.ImageAlignmentManager?.updateCacheFilePath();
-                        this.plugin.ImageAlignmentManager?.loadCache();
+                        // Cache logic deprecated
+                        // this.plugin.ImageAlignmentManager?.updateCacheFilePath();
+                        // this.plugin.ImageAlignmentManager?.loadCache();
                     })
                 );
 
@@ -1096,7 +1097,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         const minutes = value;
                         this.plugin.settings.imageAlignment_cacheCleanupInterval = minutes * 60 * 1000;
                         await this.plugin.saveSettings();
-                        this.plugin.ImageAlignmentManager?.scheduleCacheCleanup();
+                        // Cache logic deprecated
+                        // this.plugin.ImageAlignmentManager?.scheduleCacheCleanup();
                     })
                 );
             */
@@ -1359,7 +1361,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionAlignment = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 
@@ -1377,7 +1379,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionTextTransform = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 
@@ -1389,7 +1391,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionFontSize = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 
@@ -1410,7 +1412,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionFontWeight = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 
@@ -1422,7 +1424,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionColor = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 
@@ -1437,7 +1439,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionFontStyle = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 
@@ -1449,7 +1451,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionBackgroundColor = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 
@@ -1462,7 +1464,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionBorder = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
             new Setting(imageCaptionSection)
@@ -1473,7 +1475,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionBorderRadius = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 
@@ -1485,7 +1487,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionMarginTop = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 
@@ -1497,7 +1499,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
                         .onChange(async (value) => {
                             this.plugin.settings.captionPadding = value;
                             await this.plugin.saveSettings();
-                            this.plugin.captionManager.applyCaptionStyles();
+                            this.plugin.imageStateManager?.refreshAllImages();
                         })
                 );
 

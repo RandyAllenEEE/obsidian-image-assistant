@@ -1,6 +1,7 @@
 // ProcessSingleImageModal.ts
 import { App, Modal, Notice, TFile, Setting, MarkdownView } from "obsidian";
 import ImageConverterPlugin from "../../main";
+import { createAnyLinkRegex } from "../../utils/RegexPatterns";
 import { OutputFormat, ResizeMode, EnlargeReduce } from "../../settings/ImageAssistantSettings";
 import { t } from "../../lang/helpers";
 
@@ -578,8 +579,11 @@ export class ProcessSingleImageModal extends Modal {
                 const { editor } = activeView;
                 const fileContent = editor.getValue();
 
-                const escapedOriginalName = this.imageFile.name.replace(/[[\]]/g, '\\$&');
-                const linkRegex = new RegExp(`!\\[\\[${escapedOriginalName}(?:\\|[^\\]]+)?\\]\\[\\]|!\\[.*?\\]\\((${escapedOriginalName})(?:\\?[^)]*)?\\)`, 'g');
+                // const escapedOriginalName = this.imageFile.name.replace(/[[\]]/g, '\\$&');
+                // const linkRegex = new RegExp(`!\\[\\[${escapedOriginalName}(?:\\|[^\\]]+)?\\]\\[\\]|!\\[.*?\\]\\((${escapedOriginalName})(?:\\?[^)]*)?\\)`, 'g');
+
+                // Use centralized factory
+                const linkRegex = createAnyLinkRegex(this.imageFile.name);
 
                 // Use the new filename for the link
                 const newLinkText = `![[${newFilename}]]`;

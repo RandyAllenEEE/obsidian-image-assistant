@@ -53,6 +53,8 @@ export class PresetSelectionModal extends Modal {
     private temporaryCustomFolderOverride = "";      // Custom folder path typed by user this session
     private temporaryCustomFilenameOverride = "";    // Custom filename template typed by user this session
 
+    private isApplied = false; // Flag to track if changes were applied
+
     constructor(
         app: App,
         private settings: ImageAssistantSettings,
@@ -63,6 +65,7 @@ export class PresetSelectionModal extends Modal {
             linkFormatPreset: LinkFormatPreset,
             resizePreset: NonDestructiveResizePreset
         ) => void,
+        private onCancel: () => void,
         private plugin: ImageConverterPlugin,
         variableProcessor: VariableProcessor
     ) {
@@ -526,6 +529,7 @@ export class PresetSelectionModal extends Modal {
                             folderPresetCopy.type = "CUSTOM";
                         }
 
+                        this.isApplied = true; // Set flag to true
                         this.onApply(
                             this.selectedConversionPreset,
                             filenamePresetCopy,
@@ -743,6 +747,9 @@ export class PresetSelectionModal extends Modal {
     }
 
     onClose() {
+        if (!this.isApplied) {
+            this.onCancel();
+        }
         if (this.updateTimeout) {
             window.clearTimeout(this.updateTimeout);
             this.updateTimeout = null;

@@ -7,9 +7,9 @@ export default {
     // Settings
     "SETTING_PASTE_MODE_NAME": "处理模式",
     "SETTING_PASTE_MODE_DESC": "选择如何处理粘贴/拖拽的图片",
-    "SETTING_PASTE_MODE_LOCAL": "本地模式 - Process and save locally",
-    "SETTING_PASTE_MODE_CLOUD": "图床模式 - Upload to cloud",
-    "SETTING_PASTE_MODE_DISABLED": "关闭 - No processing",
+    "SETTING_PASTE_MODE_LOCAL": "本地模式 - 仅在本地处理并保存",
+    "SETTING_PASTE_MODE_CLOUD": "图床模式 - 上传至云端",
+    "SETTING_PASTE_MODE_DISABLED": "关闭 - 不进行处理",
 
     "SETTING_UPLOADER_NAME": "上传工具",
     "SETTING_UPLOADER_DESC": "选择上传工具类型",
@@ -403,6 +403,7 @@ export default {
     "MSG_NO_MATCHING_FILES": "无法找到图片: {0}",
     "MSG_NOT_IMAGE_FILE": "错误: 不是有效的图片文件。",
     "MSG_PROCESS_ERROR": "处理图片时出错",
+    "MSG_PROCESSING_CANCELLED": "已取消处理",
 
     "MENU_CROP_FLIP": "裁剪/旋转/翻转",
     "MSG_VISUAL_LOCATE_ERROR": "无法定位图片文件",

@@ -97,3 +97,33 @@ export function getAllImageLinks(text: string): ImageLink[] {
 
     return fileArray;
 }
+
+// ==== Anchored Validators for Parser ====
+export const REGEX_WIKI_LINK_VALIDATE = /^!\[\[([^\]]+?)\]\]$/;
+export const REGEX_MD_LINK_VALIDATE = /^!\[([^\]]*)\]\(([^)]+)\)$/;
+
+// ==== Dynamic Regex Factories ====
+
+export function createWikiLinkRegex(filename: string): RegExp {
+    // ![[ ... filename ... ]]
+    // Captures path
+    return new RegExp(`!\\[\\[([^\\]]*${filename}[^\\]]*)\\]\\]`, 'g');
+}
+
+export function createMarkdownLinkRegex(filename: string): RegExp {
+    // ![ ... ]( ... filename ... )
+    // Captures alt, path
+    return new RegExp(`!\\[([^\\]]*)\\]\\(([^)]*${filename}[^)]*)\\)`, 'g');
+}
+
+export function createUrlLinkRegex(escapedUrl: string, escapedDecodedUrl: string): RegExp {
+    // ![...](...url...)
+    return new RegExp(`!\\[([^\\]]*)\\]\\(([^)]*(${escapedUrl}|${escapedDecodedUrl})[^)]*)\\)`, 'g');
+}
+
+export function createAnyLinkRegex(filename: string): RegExp {
+    // Matches both Wiki and Markdown links for a given filename
+    // Used for global search/replace operations
+    const escapedName = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`!\\[\\[${escapedName}(?:\\|[^\\]]+)?\\]\\]|!\\[.*?\\]\\((${escapedName})(?:\\?[^)]*)?\\)`, 'g');
+}

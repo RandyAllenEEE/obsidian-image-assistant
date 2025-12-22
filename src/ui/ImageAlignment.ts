@@ -1,6 +1,5 @@
 import { App, Component, Menu, TFile, MarkdownView } from 'obsidian';
 import ImageConverterPlugin from '../main';
-import { ImageAlignmentManager, ImagePositionData } from './ImageAlignmentManager';
 import { t } from '../lang/helpers';
 import { pipeSyntaxParser, AlignType } from '../utils/PipeSyntaxParser';
 import { RefinedImageUtils } from '../utils/RefinedImageUtils';
@@ -10,80 +9,25 @@ export interface ImageAlignmentOptions {
     wrap: boolean;
 }
 
+export interface ImagePositionData {
+    position: 'left' | 'center' | 'right' | 'none';
+    wrap: boolean;
+    width?: string;
+    height?: string;
+}
+
 export class ImageAlignment extends Component {
     private refinedImageUtils: RefinedImageUtils;
 
     constructor(
         private app: App,
         private plugin: ImageConverterPlugin,
-        private imageAlignmentManager: ImageAlignmentManager
     ) {
         super();
         this.refinedImageUtils = new RefinedImageUtils(this.app);
     }
 
-    /**
-     * Adds image alignment options to the context menu.
-     * @param menu - The context menu instance.
-     * @param img - The target image element.
-     * @param activeFile - The currently active file.
-     */
-    addAlignmentOptionsToContextMenu(menu: Menu, img: HTMLImageElement, activeFile: TFile) {
-        menu.addItem((item) => {
-            item
-                .setTitle(t("MENU_ALIGN_IMAGE"))
-                .setIcon('align-justify')
-                .setSubmenu()
-                .addItem((subItem) => {
-                    const currentAlignment = this.getCurrentImageAlignment(img);
-                    subItem
-                        .setTitle(t("ALIGN_LEFT"))
-                        .setIcon('align-left')
-                        .setChecked(currentAlignment.align === 'left')
-                        .onClick(async () => {
-                            await this.updateImageAlignment(img, { align: currentAlignment.align === 'left' ? 'none' : 'left', wrap: currentAlignment.wrap });
-                        });
-                })
-                .addItem((subItem) => {
-                    const currentAlignment = this.getCurrentImageAlignment(img);
-                    subItem
-                        .setTitle(t("ALIGN_CENTER"))
-                        .setIcon('align-center')
-                        .setChecked(currentAlignment.align === 'center')
-                        .onClick(async () => {
-                            await this.updateImageAlignment(img, { align: currentAlignment.align === 'center' ? 'none' : 'center', wrap: currentAlignment.wrap });
-                        });
-                })
-                .addItem((subItem) => {
-                    const currentAlignment = this.getCurrentImageAlignment(img);
-                    subItem
-                        .setTitle(t("ALIGN_RIGHT"))
-                        .setIcon('align-right')
-                        .setChecked(currentAlignment.align === 'right')
-                        .onClick(async () => {
-                            await this.updateImageAlignment(img, { align: currentAlignment.align === 'right' ? 'none' : 'right', wrap: currentAlignment.wrap });
-                        });
-                });
-
-            // 仅在左/右对齐时显示文字环绕选项
-            const currentAlignment = this.getCurrentImageAlignment(img);
-            if (currentAlignment.align === 'left' || currentAlignment.align === 'right') {
-                item
-                    .addSeparator()
-                    .addItem((subItem) => {
-                        subItem
-                            .setTitle(t("ALIGN_WRAP"))
-                            .setChecked(currentAlignment.wrap)
-                            .onClick(async () => {
-                                await this.updateImageAlignment(img, {
-                                    align: currentAlignment.align,
-                                    wrap: !currentAlignment.wrap
-                                });
-                            });
-                    });
-            }
-        });
-    }
+    // Context menu registration moved to ContextMenu.ts
 
     /**
      * Applies alignment styles to an image based on cached data. THIS is called from ImageAlignmentManager!
@@ -115,6 +59,30 @@ export class ImageAlignment extends Component {
             }
         }
 
+        // Idempotency check: Check if image already has the correct classes
+        const currentAlignClass = Array.from(img.classList).find(c => c.startsWith('image-position-'));
+        const currentAlign = currentAlignClass ? currentAlignClass.replace('image-position-', '') : 'none';
+        const currentWrap = img.hasClass('image-wrap');
+        const hasAlignedClass = img.hasClass('image-converter-aligned');
+
+        // Check if width/height styles match (if provided)
+        const currentWidth = img.style.width;
+        const currentHeight = img.style.height;
+
+        // helper to normalize (strip px)
+        const normalize = (val: string | undefined | null) => val ? val.replace('px', '') : '';
+
+        const widthMatch = !positionData.width || normalize(currentWidth) === normalize(positionData.width);
+        const heightMatch = !positionData.height || normalize(currentHeight) === normalize(positionData.height);
+
+        if (currentAlign === positionData.position &&
+            currentWrap === positionData.wrap &&
+            hasAlignedClass === (positionData.position !== 'none') &&
+            widthMatch &&
+            heightMatch) {
+            return; // No changes needed
+        }
+
         // Remove existing alignment classes first
         img.removeClass('image-position-left');
         img.removeClass('image-position-center');
@@ -131,10 +99,16 @@ export class ImageAlignment extends Component {
 
             // Ensure width is applied
             if (positionData.width) {
-                img.setCssStyles({ width: positionData.width });
+                // Ensure we set with px if missing, or however browser prefers.
+                // Ideally StateManager sends numbers or string with unit.
+                // If string has no unit, browser might ignore it if we don't add px.
+                // Best practice: if it looks like a number, add px.
+                const w = positionData.width;
+                img.style.width = /^\d+$/.test(w) ? `${w}px` : w;
             }
             if (positionData.height) {
-                img.setCssStyles({ height: positionData.height });
+                const h = positionData.height;
+                img.style.height = /^\d+$/.test(h) ? `${h}px` : h;
             }
 
             // console.log("Alignment applied. New classes:", img.className);
@@ -142,72 +116,28 @@ export class ImageAlignment extends Component {
 
     }
 
+
+
     /**
-     * Updates the alignment of an image via contextmenu
-     * @param img - The target image element.
-     * @param options - The alignment options.
+     * Ensures proper layout for Reading Mode images (specifically Local Markdown links).
+     * Prevents them from rendering as block elements if alignment is requested.
      */
-    async updateImageAlignment(img: HTMLImageElement, options: ImageAlignmentOptions) {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) return;
+    public ensureReadingModeLayout(img: HTMLImageElement, position: string) {
+        // Only target images that are NOT internal embeds (Obsidian handles those well)
+        if (img.closest('.internal-embed')) return;
 
-        const src = img.getAttribute('src');
-        if (!src) return;
+        // If alignment is requested, force inline-block to allow side-by-side
+        if (position !== 'none') {
+            img.style.display = 'inline-block';
 
-        // 获取当前编辑器视图
-        const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!markdownView) {
-            // 如果无法获取编辑器，仅更新 DOM
-            this.applyAlignmentVisualChanges(img, options);
-            return;
+            // Check parent: if it's a P or DIV with only this image, we might need to adjust it
+            // ensuring it doesn't force a break. But often inline-block on img is enough 
+            // if the parent P allows flow. 
+            // For now, minimal intervention: just fix the img.
         }
-
-        const editor = markdownView.editor;
-        if (!editor) {
-            this.applyAlignmentVisualChanges(img, options);
-            return;
-        }
-
-        // 尝试获取图片链接文本
-        const linkText = this.refinedImageUtils.getImageLinkTextFromEditor(img, editor);
-        if (!linkText) {
-            // 如果无法获取链接文本，仅更新 DOM
-            this.applyAlignmentVisualChanges(img, options);
-            return;
-        }
-
-        // 使用 PipeSyntaxParser 解析链接
-        const parsed = pipeSyntaxParser.parsePipeSyntax(linkText);
-        if (!parsed) {
-            // 解析失败，仅更新 DOM
-            this.applyAlignmentVisualChanges(img, options);
-            return;
-        }
-
-        // 更新 align 属性
-        let newAlign: AlignType = null;
-        if (options.align !== 'none') {
-            newAlign = options.wrap ? `${options.align}-wrap` as AlignType : options.align as AlignType;
-        }
-        parsed.align = newAlign;
-
-        // 构建新链接
-        const newLinkText = pipeSyntaxParser.buildPipeSyntax(parsed);
-
-        // 在编辑器中查找并替换链接
-        const lineNumber = this.refinedImageUtils.findLinkLineNumber(editor, linkText);
-        if (lineNumber !== -1) {
-            const line = editor.getLine(lineNumber);
-            const newLine = line.replace(linkText, newLinkText);
-            editor.setLine(lineNumber, newLine);
-        }
-
-        // 立即更新 DOM（不等待 MutationObserver）
-        this.applyAlignmentVisualChanges(img, options);
-
-        // 标记为已处理，避免 MutationObserver 重复处理
-        img.setAttribute('data-alignment-processed', 'true');
     }
+
+    // updateImageAlignment removed - handled by ImageStateManager
 
     /**
      * 应用对齐的视觉变化到 DOM
@@ -265,7 +195,7 @@ export class ImageAlignment extends Component {
             activeFile.path,
             src
         );
-
+    
         if (cachedAlignment) {
             return {
                 align: cachedAlignment.position,

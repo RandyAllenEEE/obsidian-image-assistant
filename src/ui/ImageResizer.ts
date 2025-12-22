@@ -1,6 +1,5 @@
 import { Editor, MarkdownView, EditorPosition, EditorChange, Debouncer, debounce, Component } from "obsidian";
 import ImageConverterPlugin from "../main";
-import { ImagePositionData } from './ImageAlignmentManager';
 import { LinkFormatter } from '../utils/LinkFormatter';
 import { pipeSyntaxParser } from '../utils/PipeSyntaxParser';
 
@@ -76,7 +75,11 @@ export class ImageResizer {
                 newHeight: number,
                 currentHandle: string | null
             ) => {
-                this.updateMarkdownLink(image, newWidth, newHeight, currentHandle);
+                // Delegate to StateManager for updates
+                // this.updateMarkdownLink(image, newWidth, newHeight, currentHandle);
+                if (this.plugin.imageStateManager) {
+                    this.plugin.imageStateManager.updateState(image, { width: newWidth, height: newHeight });
+                }
             },
             100
 
@@ -92,6 +95,18 @@ export class ImageResizer {
             true
         );
 
+    }
+
+    /**
+     * Applies size to the image element. Called by ImageStateManager.
+     */
+    public applySize(img: HTMLImageElement, width?: number, height?: number) {
+        if (width && img.style.width !== `${width}px`) {
+            img.style.width = `${width}px`;
+        }
+        if (height && img.style.height !== `${height}px`) {
+            img.style.height = `${height}px`;
+        }
     }
 
     onload(markdownView: MarkdownView) { // Accept MarkdownView
@@ -495,6 +510,8 @@ export class ImageResizer {
                     container.addClass("resizing");
                 }
             }
+            // Add global lock class to prevent StateManager from overwriting
+            this.activeImage.addClass("is-resizing");
         } else {
             // If no active image after attempted set, cancel resize and exit early
             this.resizeState.isResizing = false;
@@ -688,6 +705,9 @@ export class ImageResizer {
             }
         }
 
+        // Remove global lock class
+        this.activeImage.removeClass("is-resizing");
+
         // Reset the current handle
         this.currentHandle = null;
 
@@ -697,7 +717,7 @@ export class ImageResizer {
         const finalWidth = Number.isFinite(widthStyle) && widthStyle > 0 ? widthStyle : Math.round(this.initialWidth);
         const finalHeight = Number.isFinite(heightStyle) && heightStyle > 0 ? heightStyle : Math.round(this.initialHeight);
 
-        // Update the markdown link with the final dimensions
+        // Update the markdown link with the final dimensions VIA MANAGER
         this.updateMarkdownLink(this.activeImage, finalWidth, finalHeight, this.currentHandle);
 
         // Mark flags
@@ -995,9 +1015,16 @@ export class ImageResizer {
      *                        or null if the resize was not initiated from a handle.
      */
     private async updateMarkdownLink(image: HTMLImageElement, newWidth: number, newHeight: number, currentHandle: string | null) {
-        if (!this.editor || !this.markdownView) return;
+        if (this.plugin.imageStateManager) {
+            // For consistency, we pass width/height. Handlers are abstracted away by StateManager which just takes final W/H.
+            this.plugin.imageStateManager.updateState(image, { width: newWidth, height: newHeight });
+            return;
+        }
+
 
         // Check if we're in reading mode
+        // Check if we're in reading mode
+        if (!this.markdownView) return;
         const state = this.markdownView.getState();
         const isReadingMode = state.mode === "preview";
 
@@ -1032,6 +1059,7 @@ export class ImageResizer {
         }
 
         const { editor } = this;
+        if (!editor) return;
         const normalizedTargetName = this.isBase64Image(imageName) ? imageName : this.getFilenameFromPath(imageName);
 
         const activeFile = this.plugin.app.workspace.getActiveFile();
@@ -1358,7 +1386,7 @@ export class ImageResizer {
             imageName
         );
         const bufferedDimensions = this.resizeBuffer[imageHash];
-
+    
         if (bufferedDimensions && this.plugin.settings.isImageAlignmentEnabled && this.plugin.ImageAlignmentManager) {
             const cachedAlignment = this.plugin.ImageAlignmentManager.getImageAlignment(notePath, imageName);
             if (cachedAlignment) {
@@ -1371,7 +1399,7 @@ export class ImageResizer {
                     cachedAlignment.wrap
                 );
             }
-
+    
             // Remove the dimensions from the buffer after saving
             delete this.resizeBuffer[imageHash];
         }

@@ -1,4 +1,9 @@
 import { App, MarkdownView, Editor, TFile } from 'obsidian';
+import {
+    createWikiLinkRegex,
+    createMarkdownLinkRegex,
+    createUrlLinkRegex
+} from './RegexPatterns';
 
 export class RefinedImageUtils {
     constructor(private app: App) { }
@@ -33,64 +38,82 @@ export class RefinedImageUtils {
      */
     public getImageLinkTextFromEditor(img: HTMLImageElement, editor: Editor): string | null {
         try {
-            const content = editor.getValue();
             const src = img.getAttribute('src');
             if (!src) return null;
 
-            // Handle Online Images (http/https)
+            let searchTerms: string[] = [];
+            let isNetwork = false;
+            let encodedSrc = "";
+            let decodedSrc = "";
+
             if (src.startsWith('http')) {
-                // For online images, the Markdown source usually contains the full URL.
-                // We should try to find the URL exactly as it appears (or URI decoded).
-                // Common formats: ![alt](url) or ![alt|size](url)
-
-                // Strategy 1: Look for the exact src in a Markdown link structure
-                // Use a simplified check first
-                const encodedSrc = src;
-                const decodedSrc = decodeURIComponent(src);
-
-                // Escape for Regex
-                const escapedEncoded = this.escapeRegexCharacters(encodedSrc);
-                const escapedDecoded = this.escapeRegexCharacters(decodedSrc); // Handle cases where source text is decoded
-
-                // Match: ![...]( ... url ... )
-                // Note: We match the URL being present in the parentheses.
-                // We construct a regex that looks for the URL ending a sequence or being the sequence.
-                const onlineRegex = new RegExp(`!\\[([^\\]]*)\\]\\(([^)]*(${escapedEncoded}|${escapedDecoded})[^)]*)\\)`, 'g');
-
-                let match = onlineRegex.exec(content);
-                if (match) {
-                    return `![${match[1]}](${match[2]})`;
+                isNetwork = true;
+                encodedSrc = src;
+                try {
+                    decodedSrc = decodeURIComponent(src);
+                } catch (e) {
+                    decodedSrc = src;
                 }
+                searchTerms.push(encodedSrc);
+                if (encodedSrc !== decodedSrc) searchTerms.push(decodedSrc);
+            } else {
+                // Local/Internal
+                const [cleanSrc] = src.split('?');
+                try {
+                    decodedSrc = decodeURIComponent(cleanSrc);
+                } catch (e) {
+                    decodedSrc = cleanSrc;
+                }
+                const imageName = decodedSrc.split(/[/\\]/).pop();
+                if (imageName) searchTerms.push(imageName);
             }
 
-            // Handle Local/Internal Images
-            // Extract image path (remove query params)
-            const [cleanSrc] = src.split('?');
-            // Decode URI component to handle spaces and special chars correctly
-            const decodedSrc = decodeURIComponent(cleanSrc);
-            const imageName = decodedSrc.split(/[/\\]/).pop();
+            if (searchTerms.length === 0) return null;
 
-            if (!imageName) return null;
+            const lineCount = editor.lineCount();
 
-            const escapedImageName = this.escapeRegexCharacters(imageName);
+            // Iterate lines to find the link - much safer than regex on full content
+            for (let i = 0; i < lineCount; i++) {
+                const line = editor.getLine(i);
 
-            // Regex for Wiki links: ![[ ... imageName ... ]]
-            // Allow for optional pipe params after filename
-            const wikiRegex = new RegExp(`!\\[\\[([^\\]]*${escapedImageName}[^\\]]*)\\]\\]`, 'g');
+                // Fast pre-flight check
+                if (!searchTerms.some(term => line.includes(term))) continue;
 
-            // Regex for Markdown links: ![ ... ]( ... imageName ... )
-            const markdownRegex = new RegExp(`!\\[([^\\]]*)\\]\\(([^)]*${escapedImageName}[^)]*)\\)`, 'g');
+                // If line contains the term, perform precise extraction
+                if (isNetwork) {
+                    const escapedEncoded = this.escapeRegexCharacters(encodedSrc);
+                    const escapedDecoded = this.escapeRegexCharacters(decodedSrc);
+                    const onlineRegex = createUrlLinkRegex(escapedEncoded, escapedDecoded);
+                    const match = onlineRegex.exec(line);
+                    if (match) {
+                        // match[0] is the full match, e.g. ![alt](url)
+                        return match[0];
+                    }
 
-            let match;
+                    // Fallback for Wiki-style network images
+                    const wikiRegex = createWikiLinkRegex(escapedDecoded);
+                    const wikiMatch = wikiRegex.exec(line);
+                    if (wikiMatch) {
+                        // regex captures inner content, need to reconstruct or capture full?
+                        // createWikiLinkRegex captures full group 0 as entire match? 
+                        // Check RegexPatterns.ts: It returns `RegExp('![[...]]', 'g')`
+                        // So exec returns match[0] as the full string.
+                        return wikiMatch[0];
+                    }
 
-            // Try Wiki links
-            while ((match = wikiRegex.exec(content)) !== null) {
-                return `![[${match[1]}]]`;
-            }
+                } else {
+                    // Local Image
+                    const imageName = searchTerms[0];
+                    const escapedImageName = this.escapeRegexCharacters(imageName);
 
-            // Try Markdown links
-            while ((match = markdownRegex.exec(content)) !== null) {
-                return `![${match[1]}](${match[2]})`;
+                    const wikiRegex = createWikiLinkRegex(escapedImageName);
+                    let match = wikiRegex.exec(line);
+                    if (match) return match[0];
+
+                    const markdownRegex = createMarkdownLinkRegex(escapedImageName);
+                    match = markdownRegex.exec(line);
+                    if (match) return match[0];
+                }
             }
 
             return null;

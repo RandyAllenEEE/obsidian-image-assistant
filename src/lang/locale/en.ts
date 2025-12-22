@@ -3,6 +3,7 @@ export default {
     "LOADING_OCR_LATEX": "Loading latex...", // New key
     "LOADING_OCR_MARKDOWN": "Loading markdown...", // New key
     "LOADING_UPLOAD": "Uploading", // New key
+    "LOADING_PROCESS": "Processing", // New key
 
     // Settings
     "SETTING_PASTE_MODE_NAME": "Paste handling mode",
@@ -407,6 +408,7 @@ export default {
     "MSG_NO_MATCHING_FILES": "Unable to find image: {0}",
     "MSG_NOT_IMAGE_FILE": "Error: Not a valid image file.",
     "MSG_PROCESS_ERROR": "Error processing image",
+    "MSG_PROCESSING_CANCELLED": "Processing cancelled",
 
     "MENU_CROP_FLIP": "Crop/Rotate/Flip",
     "MSG_VISUAL_LOCATE_ERROR": "Unable to locate image file",

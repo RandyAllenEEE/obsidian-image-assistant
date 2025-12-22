@@ -98,7 +98,7 @@ export class ImageProcessor {
         }
 
         return processedImage
-    }    
+    }
 
     /**
      * Helper method to process an image file.
@@ -134,7 +134,7 @@ export class ImageProcessor {
 
         try {
             // --- Handle NONE format ---
-if (format === 'NONE' && resizeMode !== 'None') {
+            if (format === 'NONE' && resizeMode !== 'None') {
                 // No conversion, but resizing is needed
                 return await this.resizeImage(
                     file,
@@ -152,7 +152,7 @@ if (format === 'NONE' && resizeMode !== 'None') {
             }
 
             // --- Handle ORIGINAL format ---
-if (format === 'ORIGINAL') {
+            if (format === 'ORIGINAL') {
                 // Compress using original format
                 return await this.compressOriginalImage(
                     file,
@@ -165,7 +165,7 @@ if (format === 'ORIGINAL') {
                 );
             }
 
-// Prefer magic bytes (header) over file.type per contract
+            // Prefer magic bytes (header) over file.type per contract
             const filename = (file instanceof File) ? file.name : 'image';
             const detected = await this.supportedImageFormats.getMimeTypeFromFile(file);
             if (!detected || detected === 'unknown') {
@@ -251,6 +251,39 @@ if (format === 'ORIGINAL') {
             new Notice(`Failed to process image: ${error.message}`);
             return file.arrayBuffer(); // Fallback to original
         }
+    }
+
+    /**
+     * Checks if a command-line tool is available by checking the file path or running 'version'.
+     * @param executablePath - The path to the executable.
+     * @returns A Promise that resolves to true if available, false otherwise.
+     */
+    private async checkCommandAvailability(executablePath: string): Promise<boolean> {
+        if (!executablePath) return false;
+
+        // First check if file exists (if it's an absolute path)
+        try {
+            // Basic check: if it looks like a path, try to stats it
+            // Simple logic: if it contains a separator, treat as path
+            if (executablePath.includes(path.sep) || executablePath.includes('/')) {
+                await fs.access(executablePath);
+                return true;
+            }
+        } catch {
+            // If access fails, it might not be a file path but a global command, fall through to spawn check
+        }
+
+        // Secondary check: try to spawn with --version or -version
+        return new Promise((resolve) => {
+            const process = spawn(executablePath, ['-version']);
+            process.on('error', () => resolve(false));
+            process.on('close', (code) => resolve(code === 0));
+            // Add timeout in case it hangs
+            setTimeout(() => {
+                process.kill();
+                resolve(false);
+            }, 2000);
+        });
     }
 
     /**
@@ -398,6 +431,13 @@ if (format === 'ORIGINAL') {
                     return file.arrayBuffer(); // Return original
                 }
 
+                // Check availability
+                const isAvailable = await this.checkCommandAvailability(pngquantExecutablePath);
+                if (!isAvailable) {
+                    new Notice(`PNGQUANT executable not found or invalid at: ${pngquantExecutablePath}`);
+                    return file.arrayBuffer();
+                }
+
                 return this.processWithPngquant(
                     file,
                     pngquantExecutablePath,
@@ -419,6 +459,13 @@ if (format === 'ORIGINAL') {
                 if (!ffmpegExecutablePath) {
                     new Notice("FFmpeg executable path is not set. Please configure it in the plugin settings.");
                     return file.arrayBuffer();  // Return original
+                }
+
+                // Check availability
+                const isAvailable = await this.checkCommandAvailability(ffmpegExecutablePath);
+                if (!isAvailable) {
+                    new Notice(`FFmpeg executable not found or invalid at: ${ffmpegExecutablePath}`);
+                    return file.arrayBuffer();
                 }
 
                 return this.processWithFFmpeg(
@@ -550,7 +597,7 @@ if (format === 'ORIGINAL') {
                     const errorMessage = `FFmpeg failed with code ${code}: ${errorData}`;
                     console.error(errorMessage);
                     // Clean up temp file on error
-                    try { fs.unlink(tempFilePath); } catch {}
+                    try { fs.unlink(tempFilePath); } catch { }
                     reject(new Error(errorMessage));
                 }
             };
@@ -603,7 +650,7 @@ if (format === 'ORIGINAL') {
                 }
             });
 
-ffmpeg.on('error', (err: Error) => {
+            ffmpeg.on('error', (err: Error) => {
                 const errorMessage = `Error with FFmpeg process: ${err.message}`;
                 console.error(errorMessage);
                 // Clean up temp file on error (if it exists)
@@ -613,7 +660,7 @@ ffmpeg.on('error', (err: Error) => {
 
             // Safety timeout to avoid hanging tests in case mocks fail to emit expected events
             const safetyTimeout = setTimeout(() => {
-                try { ffmpeg?.kill?.('SIGKILL'); } catch {}
+                try { ffmpeg?.kill?.('SIGKILL'); } catch { }
                 reject(new Error('FFmpeg process timed out'));
             }, 5000);
 
@@ -795,60 +842,61 @@ ffmpeg.on('error', (err: Error) => {
         }> => {
             return new Promise((resolve, reject) => {
                 const image = new Image();
-image.onload = () => { try {
-                    const { imageWidth, imageHeight } = this.calculateDesiredDimensions(
-                        image,
-                        resizeMode,
-                        desiredWidth,
-                        desiredHeight,
-                        desiredLongestEdge,
-                        enlargeOrReduce
-                    );
+                image.onload = () => {
+                    try {
+                        const { imageWidth, imageHeight } = this.calculateDesiredDimensions(
+                            image,
+                            resizeMode,
+                            desiredWidth,
+                            desiredHeight,
+                            desiredLongestEdge,
+                            enlargeOrReduce
+                        );
 
-                    // Enforce Reduce semantics: do not upscale beyond original dimensions
-                    let outWidth = imageWidth;
-                    let outHeight = imageHeight;
-                    if (enlargeOrReduce === 'Reduce' && (image.naturalWidth < imageWidth || image.naturalHeight < imageHeight)) {
-                        outWidth = image.naturalWidth;
-                        outHeight = image.naturalHeight;
-                    }
+                        // Enforce Reduce semantics: do not upscale beyond original dimensions
+                        let outWidth = imageWidth;
+                        let outHeight = imageHeight;
+                        if (enlargeOrReduce === 'Reduce' && (image.naturalWidth < imageWidth || image.naturalHeight < imageHeight)) {
+                            outWidth = image.naturalWidth;
+                            outHeight = image.naturalHeight;
+                        }
 
-                    const canvas = document.createElement('canvas');
-                    const context = canvas.getContext('2d', {
-                        willReadFrequently: false
-                    });
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d', {
+                            willReadFrequently: false
+                        });
 
-                    if (!context) {
-                        reject(new Error('Failed to get canvas context'));
-                        return;
-                    }
+                        if (!context) {
+                            reject(new Error('Failed to get canvas context'));
+                            return;
+                        }
 
-                    canvas.width = outWidth;
-                    canvas.height = outHeight;
+                        canvas.width = outWidth;
+                        canvas.height = outHeight;
 
-                    // Calculate the source rectangle for cropping
-                    let sx = 0;
-                    let sy = 0;
-                    let sWidth = image.naturalWidth;
-                    let sHeight = image.naturalHeight;
+                        // Calculate the source rectangle for cropping
+                        let sx = 0;
+                        let sy = 0;
+                        let sWidth = image.naturalWidth;
+                        let sHeight = image.naturalHeight;
 
-                    if (resizeMode === 'Fill') {
-                        const scale = Math.max(outWidth / image.naturalWidth, outHeight / image.naturalHeight);
-                        sWidth = outWidth / scale;
-                        sHeight = outHeight / scale;
-                        sx = Math.floor((image.naturalWidth - sWidth) / 2);
-                        sy = Math.floor((image.naturalHeight - sHeight) / 2);
-                    }
+                        if (resizeMode === 'Fill') {
+                            const scale = Math.max(outWidth / image.naturalWidth, outHeight / image.naturalHeight);
+                            sWidth = outWidth / scale;
+                            sHeight = outHeight / scale;
+                            sx = Math.floor((image.naturalWidth - sWidth) / 2);
+                            sy = Math.floor((image.naturalHeight - sHeight) / 2);
+                        }
 
-                    // Draw the image, optionally with cropping
-                    context.drawImage(
-                        image,
-                        sx, sy, sWidth, sHeight,
-                        0, 0, outWidth, outHeight
-                    );
+                        // Draw the image, optionally with cropping
+                        context.drawImage(
+                            image,
+                            sx, sy, sWidth, sHeight,
+                            0, 0, outWidth, outHeight
+                        );
 
-                    resolve({ canvas, context });
-                } catch (e) { reject(e instanceof Error ? e : new Error(String(e))); }
+                        resolve({ canvas, context });
+                    } catch (e) { reject(e instanceof Error ? e : new Error(String(e))); }
                 };
                 image.onerror = (event) => {
                     console.error("WebP conversion error:", event);
@@ -973,62 +1021,63 @@ image.onload = () => { try {
         }> => {
             return new Promise((resolve, reject) => {
                 const image = new Image();
-image.onload = () => { try {
-                    const { imageWidth, imageHeight } = this.calculateDesiredDimensions(
-                        image,
-                        resizeMode,
-                        desiredWidth,
-                        desiredHeight,
-                        desiredLongestEdge,
-                        enlargeOrReduce
-                    );
+                image.onload = () => {
+                    try {
+                        const { imageWidth, imageHeight } = this.calculateDesiredDimensions(
+                            image,
+                            resizeMode,
+                            desiredWidth,
+                            desiredHeight,
+                            desiredLongestEdge,
+                            enlargeOrReduce
+                        );
 
-                    // Enforce Reduce semantics: do not upscale beyond original dimensions
-                    let outWidth = imageWidth;
-                    let outHeight = imageHeight;
-                    if (enlargeOrReduce === 'Reduce' && (image.naturalWidth < imageWidth || image.naturalHeight < imageHeight)) {
-                        outWidth = image.naturalWidth;
-                        outHeight = image.naturalHeight;
-                    }
+                        // Enforce Reduce semantics: do not upscale beyond original dimensions
+                        let outWidth = imageWidth;
+                        let outHeight = imageHeight;
+                        if (enlargeOrReduce === 'Reduce' && (image.naturalWidth < imageWidth || image.naturalHeight < imageHeight)) {
+                            outWidth = image.naturalWidth;
+                            outHeight = image.naturalHeight;
+                        }
 
-                    const canvas = document.createElement('canvas');
-                    // For JPG, we definitely want to disable alpha
-                    const context = canvas.getContext('2d', {
-                        willReadFrequently: false,
-                        alpha: false // JPG doesn't support alpha, so we can disable it
-                    });
+                        const canvas = document.createElement('canvas');
+                        // For JPG, we definitely want to disable alpha
+                        const context = canvas.getContext('2d', {
+                            willReadFrequently: false,
+                            alpha: false // JPG doesn't support alpha, so we can disable it
+                        });
 
-                    if (!context) {
-                        reject(new Error('Failed to get canvas context'));
-                        return;
-                    }
+                        if (!context) {
+                            reject(new Error('Failed to get canvas context'));
+                            return;
+                        }
 
-                    canvas.width = outWidth;
-                    canvas.height = outHeight;
+                        canvas.width = outWidth;
+                        canvas.height = outHeight;
 
-                    // Calculate the source rectangle for cropping
-                    let sx = 0;
-                    let sy = 0;
-                    let sWidth = image.naturalWidth;
-                    let sHeight = image.naturalHeight;
+                        // Calculate the source rectangle for cropping
+                        let sx = 0;
+                        let sy = 0;
+                        let sWidth = image.naturalWidth;
+                        let sHeight = image.naturalHeight;
 
-                    if (resizeMode === 'Fill') {
-                        const scale = Math.max(outWidth / image.naturalWidth, outHeight / image.naturalHeight);
-                        sWidth = outWidth / scale;
-                        sHeight = outHeight / scale;
-                        sx = Math.floor((image.naturalWidth - sWidth) / 2);
-                        sy = Math.floor((image.naturalHeight - sHeight) / 2);
-                    }
+                        if (resizeMode === 'Fill') {
+                            const scale = Math.max(outWidth / image.naturalWidth, outHeight / image.naturalHeight);
+                            sWidth = outWidth / scale;
+                            sHeight = outHeight / scale;
+                            sx = Math.floor((image.naturalWidth - sWidth) / 2);
+                            sy = Math.floor((image.naturalHeight - sHeight) / 2);
+                        }
 
-                    // Draw the image, optionally with cropping
-                    context.drawImage(
-                        image,
-                        sx, sy, sWidth, sHeight,
-                        0, 0, outWidth, outHeight
-                    );
+                        // Draw the image, optionally with cropping
+                        context.drawImage(
+                            image,
+                            sx, sy, sWidth, sHeight,
+                            0, 0, outWidth, outHeight
+                        );
 
-                    resolve({ canvas, context });
-                } catch (e) { reject(e instanceof Error ? e : new Error(String(e))); }
+                        resolve({ canvas, context });
+                    } catch (e) { reject(e instanceof Error ? e : new Error(String(e))); }
                 };
                 image.onerror = (event) => {
                     console.error("JPEG conversion error:", event);
@@ -1074,7 +1123,7 @@ image.onload = () => { try {
                 })
             ]);
 
-// Compare all results and choose the smallest one
+            // Compare all results and choose the smallest one
             const results: { type: string; data: ArrayBuffer; size: number }[] = [
                 { type: 'blob', data: blobResult, size: blobResult.byteLength },
                 { type: 'dataUrl', data: dataUrlResult, size: dataUrlResult.byteLength }
@@ -1095,7 +1144,7 @@ image.onload = () => { try {
 
             const filtered = results.filter(result => result.size > 0);
 
-// Sort by size
+            // Sort by size
             filtered.sort((left, right) => left.size - right.size);
 
             // If we don't allow larger files, filter out results larger than original
@@ -1152,69 +1201,70 @@ image.onload = () => { try {
         }> => {
             return new Promise((resolve, reject) => {
                 const image = new Image();
-image.onload = () => { try {
-                    const { imageWidth, imageHeight } = this.calculateDesiredDimensions(
-                        image,
-                        resizeMode,
-                        desiredWidth,
-                        desiredHeight,
-                        desiredLongestEdge,
-                        enlargeOrReduce
-                    );
+                image.onload = () => {
+                    try {
+                        const { imageWidth, imageHeight } = this.calculateDesiredDimensions(
+                            image,
+                            resizeMode,
+                            desiredWidth,
+                            desiredHeight,
+                            desiredLongestEdge,
+                            enlargeOrReduce
+                        );
 
-                    // Enforce Reduce semantics: do not upscale beyond original dimensions
-                    let outWidth = imageWidth;
-                    let outHeight = imageHeight;
-                    if (enlargeOrReduce === 'Reduce' && (image.naturalWidth < imageWidth || image.naturalHeight < imageHeight)) {
-                        outWidth = image.naturalWidth;
-                        outHeight = image.naturalHeight;
-                    }
+                        // Enforce Reduce semantics: do not upscale beyond original dimensions
+                        let outWidth = imageWidth;
+                        let outHeight = imageHeight;
+                        if (enlargeOrReduce === 'Reduce' && (image.naturalWidth < imageWidth || image.naturalHeight < imageHeight)) {
+                            outWidth = image.naturalWidth;
+                            outHeight = image.naturalHeight;
+                        }
 
-                    const canvas = document.createElement('canvas');
-                    // For PNG, we want to keep alpha channel
-                    const context = canvas.getContext('2d', {
-                        willReadFrequently: colorDepth < 1, // Only if we need color reduction
-                        alpha: true
-                    });
+                        const canvas = document.createElement('canvas');
+                        // For PNG, we want to keep alpha channel
+                        const context = canvas.getContext('2d', {
+                            willReadFrequently: colorDepth < 1, // Only if we need color reduction
+                            alpha: true
+                        });
 
-                    if (!context) {
-                        reject(new Error('Failed to get canvas context'));
-                        return;
-                    }
+                        if (!context) {
+                            reject(new Error('Failed to get canvas context'));
+                            return;
+                        }
 
-                    canvas.width = outWidth;
-                    canvas.height = outHeight;
+                        canvas.width = outWidth;
+                        canvas.height = outHeight;
 
-                    // Calculate the source rectangle for cropping
-                    let sx = 0;
-                    let sy = 0;
-                    let sWidth = image.naturalWidth;
-                    let sHeight = image.naturalHeight;
+                        // Calculate the source rectangle for cropping
+                        let sx = 0;
+                        let sy = 0;
+                        let sWidth = image.naturalWidth;
+                        let sHeight = image.naturalHeight;
 
-                    if (resizeMode === 'Fill') {
-                        const scale = Math.max(outWidth / image.naturalWidth, outHeight / image.naturalHeight);
-                        sWidth = outWidth / scale;
-                        sHeight = outHeight / scale;
-                        sx = (image.naturalWidth - sWidth) / 2;
-                        sy = (image.naturalHeight - sHeight) / 2;
-                    }
+                        if (resizeMode === 'Fill') {
+                            const scale = Math.max(outWidth / image.naturalWidth, outHeight / image.naturalHeight);
+                            sWidth = outWidth / scale;
+                            sHeight = outHeight / scale;
+                            sx = (image.naturalWidth - sWidth) / 2;
+                            sy = (image.naturalHeight - sHeight) / 2;
+                        }
 
-                    // Draw the image, optionally with cropping
-                    context.drawImage(
-                        image,
-                        sx, sy, sWidth, sHeight,
-                        0, 0, outWidth, outHeight
-                    );
+                        // Draw the image, optionally with cropping
+                        context.drawImage(
+                            image,
+                            sx, sy, sWidth, sHeight,
+                            0, 0, outWidth, outHeight
+                        );
 
-                    // Apply color depth reduction if needed
-                    if (colorDepth < 1) {
-                        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-                        const reducedImageData = this.reduceColorDepth(imageData, colorDepth);
-                        context.putImageData(reducedImageData, 0, 0);
-                    }
+                        // Apply color depth reduction if needed
+                        if (colorDepth < 1) {
+                            const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+                            const reducedImageData = this.reduceColorDepth(imageData, colorDepth);
+                            context.putImageData(reducedImageData, 0, 0);
+                        }
 
-                    resolve({ canvas, context });
-                } catch (e) { reject(e instanceof Error ? e : new Error(String(e))); }
+                        resolve({ canvas, context });
+                    } catch (e) { reject(e instanceof Error ? e : new Error(String(e))); }
                 };
                 image.onerror = (event) => {
                     console.error("PNG conversion error:", event);
@@ -1524,7 +1574,7 @@ image.onload = () => { try {
      * @param enlargeOrReduce - Whether to enlarge or reduce the image.
      * @returns A Promise that resolves to the resized image as an ArrayBuffer.
      */
-async resizeImage(
+    async resizeImage(
         file: Blob,
         resizeMode: ResizeMode,
         desiredWidth: number,
@@ -1561,7 +1611,7 @@ async resizeImage(
                     // Draw the image onto the canvas with the new dimensions
                     ctx.drawImage(img, 0, 0, imageWidth, imageHeight);
 
-canvas.toBlob(
+                    canvas.toBlob(
                         (blob) => {
                             if (!blob) {
                                 reject(new Error('Failed to create blob'));
@@ -1773,10 +1823,10 @@ canvas.toBlob(
                 );
             }
             const base64Data = `data:image/jpeg;base64,${btoa(binaryString)}`;
-    
+
             // Insert EXIF metadata using piexif
             const updatedBase64 = piexif.insert(metadata, base64Data);
-    
+
             // Convert the updated Base64 string back to an ArrayBuffer
             const updatedBinaryString = atob(updatedBase64.split(',')[1]);
             const updatedBuffer = new ArrayBuffer(updatedBinaryString.length);
@@ -1784,7 +1834,7 @@ canvas.toBlob(
             for (let i = 0; i < updatedBinaryString.length; i++) {
                 updatedUint8Array[i] = updatedBinaryString.charCodeAt(i);
             }
-    
+
             return updatedBuffer;
         } catch (error) {
             console.error("Error applying metadata:", error);
