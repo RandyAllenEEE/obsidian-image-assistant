@@ -13,6 +13,11 @@
 
 ### 1. 自动化粘贴处理 (Auto Paste Handling)
 当您在笔记中粘贴或拖入图片时，插件会根据设置自动执行处理。
+> **🔥 v3.1.1 Patch Update**:
+> 1. **Fixed**: Layout leakage issues where image alignment affected surrounding text.
+> 2. **Refined**: Robust caption extraction (truncates at first `|` pipe, handles empty captions with space fallback).
+> 3. **Improved**: Dedicated rendering for URL image captions.
+>
 > **🚀 v3.0.0 Major Update**: 
 > 1. **Internationalization (i18n)**: Now fully supports **English** and **Simplified Chinese** (UI strings no longer hardcoded).
 > 2. **Performance**: New concurrent queue system, batch processing hundreds of images without freezing.
