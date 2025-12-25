@@ -101,12 +101,58 @@ export class UploadHistoryManager {
 
     async removeRecord(url: string) {
         if (!this.loaded) await this.loadHistory();
-        this.history = this.history.filter(r => r.url !== url && r.imgUrl !== url);
+        this.history = this.history.filter(r => !this.isMatch(url, r));
         await this.saveHistory();
     }
 
     getRecord(url: string): UploadRecord | undefined {
-        return this.history.find(r => r.url === url || r.imgUrl === url);
+        return this.history.find(r => this.isMatch(url, r));
+    }
+
+    /**
+     * Check if a given URL matches a history record, supporting PicList placeholders.
+     */
+    private isMatch(url: string, record: UploadRecord): boolean {
+        if (record.url === url || record.imgUrl === url) return true;
+
+        // Pattern matching for PicList placeholders
+        if (record.url && record.url.includes('{')) {
+            if (this.matchUrlWithPattern(url, record.url)) return true;
+        }
+        if (record.imgUrl && record.imgUrl.includes('{')) {
+            if (this.matchUrlWithPattern(url, record.imgUrl)) return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Converts a URL pattern with placeholders like {MD5}, {year} into a Regex and matches against target URL.
+     */
+    private matchUrlWithPattern(url: string, pattern: string): boolean {
+        try {
+            // Escape special regex characters except for our placeholders
+            let regexStr = pattern.replace(/[.*+?^${}()|[\]\\]/g, (match) => {
+                if (match === '{' || match === '}') return match; // Keep curly braces for placeholders
+                return "\\" + match;
+            });
+
+            // Replace placeholders with regex groups
+            // {year}, {month}, {day}, {hour}, {minute}, {second} -> \d+
+            regexStr = regexStr.replace(/{year}|{month}|{day}|{hour}|{minute}|{second}/g, '\\d+');
+
+            // {MD5}, {uuid}, {fileName}, {extName} -> [a-zA-Z0-9\-_]+
+            regexStr = regexStr.replace(/{MD5}|{uuid}|{fileName}|{extName}/g, '[a-zA-Z0-9\\-_]+');
+
+            // Handle custom {MD5:type:length} or similar if they exist in PicList (simplified here)
+            regexStr = regexStr.replace(/{[\w:]+}/g, '.*?');
+
+            const regex = new RegExp(`^${regexStr}$`);
+            return regex.test(url);
+        } catch (e) {
+            console.error('[UploadHistoryManager] Pattern match error:', e);
+            return false;
+        }
     }
 
     getHistory(): UploadRecord[] {
@@ -114,7 +160,7 @@ export class UploadHistoryManager {
     }
 
     isUrlUploaded(url: string): boolean {
-        return this.history.some(r => r.url === url || r.imgUrl === url);
+        return this.history.some(r => this.isMatch(url, r));
     }
 
     isLocalPathUploaded(path: string): boolean {
