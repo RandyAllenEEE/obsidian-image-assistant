@@ -111,12 +111,125 @@ export class VaultReferenceManager {
      * @param imagePath The old image path (to find references)
      * @param replacementGenerator A function that takes the original link and returns the NEW full link string.
      */
+    /**
+     * Update references in the vault to a new value.
+     * @param imagePath The old image path (to find references)
+     * @param replacementGenerator A function that takes the original link and returns the NEW full link string.
+     */
     async updateReferences(
         imagePath: string,
         replacementGenerator: (location: ReferenceLocation) => string
     ): Promise<number> {
-        const locations = await this.getFilesReferencingImage(imagePath);
+        // Detect if imagePath is a URL
+        const isUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
+        let locations: ReferenceLocation[] = [];
+
+        if (isUrl) {
+            locations = await this.getFilesReferencingUrl(imagePath);
+        } else {
+            locations = await this.getFilesReferencingImage(imagePath);
+        }
+
         return this.processUpdates(locations, replacementGenerator);
+    }
+
+    /**
+     * Efficiently find files referencing ANY of the provided URLs.
+     * Scans the vault once.
+     */
+    async getFilesReferencingUrls(urls: string[]): Promise<Map<string, ReferenceLocation[]>> {
+        const results = new Map<string, ReferenceLocation[]>();
+        const urlSet = new Set(urls);
+        const files = this.app.vault.getMarkdownFiles();
+
+        for (const file of files) {
+            const cache = this.app.metadataCache.getFileCache(file);
+            if (!cache) continue;
+
+            const foundInFile = new Set<string>();
+
+            // Check embeds
+            if (cache.embeds) {
+                for (const embed of cache.embeds) {
+                    for (const url of urlSet) {
+                        if (this.isUrlMatch(embed.link, url)) {
+                            // Match found
+                            if (!results.has(url)) results.set(url, []);
+                            results.get(url)?.push(...this.getReferencesInFile(file, url));
+                            foundInFile.add(url);
+                        }
+                    }
+                }
+            }
+
+            // Check links
+            if (cache.links) {
+                for (const link of cache.links) {
+                    for (const url of urlSet) {
+                        if (foundInFile.has(url)) continue; // Already found in this file via embed
+
+                        if (this.isUrlMatch(link.link, url)) {
+                            if (!results.has(url)) results.set(url, []);
+                            results.get(url)?.push(...this.getReferencesInFile(file, url));
+                            foundInFile.add(url);
+                        }
+                    }
+                }
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Find all files that reference a specific URL.
+     * Since Obsidian doesn't index external links in resolvedLinks, we must iterate the file cache.
+     * Optimization: We only check files that have 'links' or 'embeds' in their cache.
+     */
+    async getFilesReferencingUrl(url: string): Promise<ReferenceLocation[]> {
+        const locations: ReferenceLocation[] = [];
+        const files = this.app.vault.getMarkdownFiles();
+
+        for (const file of files) {
+            const cache = this.app.metadataCache.getFileCache(file);
+            if (!cache) continue;
+
+            // Check embeds
+            if (cache.embeds) {
+                for (const embed of cache.embeds) {
+                    if (this.isUrlMatch(embed.link, url)) {
+                        locations.push(...this.getReferencesInFile(file, url));
+                        break; // optimization: just need to know if file has ANY ref to do full scan later? 
+                        // No, getReferencesInFile returns all locations.
+                        // But we should verify efficiency.
+                        // Actually getReferencesInFile parses the cache again. 
+                        // Let's just push and continue to next file to avoid duplicates if multiple refs exist?
+                        // getReferencesInFile returns ALL refs in that file. So we push and move to next file.
+                    }
+                }
+            }
+
+            // Check links (if image is linked as standard link [text](url))
+            // Usually we only care about embeds ![], but for completeness...
+            if (cache.links) {
+                for (const link of cache.links) {
+                    if (this.isUrlMatch(link.link, url)) {
+                        // Avoid adding same file twice if it was already caught by embeds
+                        const existing = locations.find(l => l.file === file);
+                        if (!existing) {
+                            locations.push(...this.getReferencesInFile(file, url));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        return locations;
+    }
+
+    private isUrlMatch(link: string, targetUrl: string): boolean {
+        // Simple match or more complex (ignoring params)?
+        // For now exact match is safest for replacement
+        return link === targetUrl;
     }
 
     /**

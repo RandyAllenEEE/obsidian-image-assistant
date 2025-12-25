@@ -69,12 +69,10 @@ export function arrayToObject<T extends AnyObj>(
 }
 
 export function bufferToArrayBuffer(buffer: Buffer) {
-  const arrayBuffer = new ArrayBuffer(buffer.length);
-  const view = new Uint8Array(arrayBuffer);
-  for (let i = 0; i < buffer.length; i++) {
-    view[i] = buffer[i];
+  if (buffer.byteLength === buffer.buffer.byteLength && buffer.byteOffset === 0) {
+    return buffer.buffer as ArrayBuffer;
   }
-  return arrayBuffer;
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
 }
 
 export function arrayBufferToBuffer(arrayBuffer: ArrayBuffer) {

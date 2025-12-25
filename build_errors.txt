@@ -1,0 +1,11 @@
+src/cloud/CloudImageHandler.ts(68,24): error TS2551: Property 'handlePasteTextCloud' does not exist on type 'CloudImageHandler'. Did you mean 'handlePasteText'?
+src/cloud/NetworkImageDownloader.ts(653,17): error TS2345: Argument of type '"reuse" | "increment" | "skip" | "overwrite"' is not assignable to parameter of type '"reuse" | "increment" | undefined'.
+  Type '"skip"' is not assignable to type '"reuse" | "increment" | undefined'.
+src/local/FolderAndFilenameManagement.ts(105,17): error TS2345: Argument of type '"reuse" | "increment" | "skip" | "overwrite"' is not assignable to parameter of type '"reuse" | "increment" | undefined'.
+  Type '"skip"' is not assignable to type '"reuse" | "increment" | undefined'.
+src/local/LocalImageHandler.ts(233,139): error TS2345: Argument of type 'FilenamePreset' is not assignable to parameter of type '"reuse" | "increment" | undefined'.
+src/main.ts(153,12): error TS2687: All declarations of 'concurrentQueue' must have identical modifiers.
+src/main.ts(173,13): error TS2300: Duplicate identifier 'concurrentQueue'.
+src/main.ts(173,13): error TS2687: All declarations of 'concurrentQueue' must have identical modifiers.
+src/settings/ImageAssistantSettings.ts(21,10): error TS1205: Re-exporting a type when 'isolatedModules' is enabled requires using 'export type'.
+src/settings/ImageAssistantSettings.ts(21,28): error TS1205: Re-exporting a type when 'isolatedModules' is enabled requires using 'export type'.

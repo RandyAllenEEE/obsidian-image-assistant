@@ -20,15 +20,15 @@ export class CloudImageDeleter {
      * @returns Success status
      */
     async deleteImage(imageInfo: CloudImageInfo): Promise<boolean> {
-        const settings = this.plugin.settings.cloudUploadSettings;
+        const cloudSettings = this.plugin.settings.pasteHandling.cloud;
 
         // Only PicList supports deletion
-        if (settings.uploader !== 'PicList') {
+        if (cloudSettings.uploader !== 'PicList') {
             console.warn('[Cloud Delete] Uploader is not PicList, skipping cloud deletion');
             return false;
         }
 
-        if (!settings.deleteServer) {
+        if (!cloudSettings.deleteServer) {
             console.warn('[Cloud Delete] Delete server not configured');
             return false;
         }
@@ -45,7 +45,7 @@ export class CloudImageDeleter {
             console.log('[Cloud Delete] Deleting image from cloud:', matchingImage);
 
             const response = await requestUrl({
-                url: settings.deleteServer,
+                url: cloudSettings.deleteServer,
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({

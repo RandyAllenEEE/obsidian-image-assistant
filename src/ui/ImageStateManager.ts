@@ -127,7 +127,7 @@ export class ImageStateManager {
             if (!state) return;
 
             // 3. Delegate: Alignment
-            const alignPosition = state.align === 'none' ? this.plugin.settings.defaultImageAlignment : state.align;
+            const alignPosition = state.align === 'none' ? this.plugin.settings.alignment.default : state.align;
             const positionData: any = {
                 position: alignPosition,
                 wrap: state.wrap,

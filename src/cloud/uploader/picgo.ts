@@ -7,7 +7,7 @@ import { payloadGenerator } from "../../payloadGenerator";
 import type ImageConverterPlugin from "../../main";
 import type { Image } from "./types";
 import type { Response, Uploader } from "./types";
-import type { CloudUploadSettings } from "../../settings/ImageAssistantSettings";
+import type { CloudUploadSettings } from "../../settings/types";
 
 interface PicGoResponse {
   success?: boolean;
@@ -22,8 +22,8 @@ export default class PicGoUploader implements Uploader {
   plugin: ImageConverterPlugin;
 
   constructor(plugin: ImageConverterPlugin) {
-    this.settings = plugin.settings.cloudUploadSettings;
     this.plugin = plugin;
+    this.settings = plugin.settings.pasteHandling.cloud;
   }
 
   private async uploadFiles(fileList: Array<Image | string>) {

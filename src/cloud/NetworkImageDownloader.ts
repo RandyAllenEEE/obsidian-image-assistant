@@ -1,4 +1,4 @@
-import { App, Notice, requestUrl, normalizePath, TFile } from "obsidian";
+import { App, Notice, requestUrl, normalizePath, TFile, TFolder } from "obsidian";
 import { join, parse } from "path-browserify";
 import imageType from "image-type";
 import { UploadHelper, ImageLink } from "../utils/UploadHelper";
@@ -7,6 +7,8 @@ import type ImageConverterPlugin from "../main";
 import { NetworkImageDownloadModal, DownloadTask, DownloadChoice, DownloadMode } from "./NetworkImageDownloadModal";
 import { NotificationManager } from "../utils/NotificationManager";
 import { ConcurrentQueue } from "../utils/AsyncLock";
+import { t } from "../lang/helpers";
+import { BatchResult, BatchItemResult } from "../types/BatchTypes";
 
 interface DownloadResult {
     success: boolean;
@@ -58,7 +60,7 @@ export class NetworkImageDownloader {
         }
 
         // 3. 应用域名黑名单（如果配置）
-        const blackDomains = this.plugin.settings.cloudUploadSettings?.newWorkBlackDomains || "";
+        const blackDomains = this.plugin.settings.pasteHandling.cloud.newWorkBlackDomains || "";
         const filteredImages = networkImages.filter(img => {
             if (!blackDomains.trim()) return true;
             return !this.hasBlackDomain(img.path, blackDomains);
@@ -91,6 +93,341 @@ export class NetworkImageDownloader {
         );
 
         modal.open();
+    }
+
+    /**
+     * Download all network images referenced in notes within a folder
+     * 批量下载文件夹内笔记引用的所有网络图片
+     * @param folderPath - Folder path
+     * @param recursive - Whether to include subfolders
+     */
+    async downloadFolderImages(folderPath: string, recursive: boolean = false): Promise<void> {
+        // Step 1: Validate folder
+        const folder = this.app.vault.getAbstractFileByPath(folderPath);
+        if (!(folder instanceof TFolder)) {
+            new Notice(t("MSG_INVALID_FOLDER"));
+            return;
+        }
+
+        // Step 2: Collect all markdown files in folder
+        const allFiles = this.app.vault.getMarkdownFiles();
+        const normalizedFolderPath = folderPath.replace(/\\/g, '/').replace(/\/$/, '');
+        const prefix = normalizedFolderPath === '' || normalizedFolderPath === '/' ? '' : `${normalizedFolderPath}/`;
+
+        const isImmediateChild = (filePath: string) => {
+            if (!prefix) {
+                // Root folder: immediate children have no '/'
+                return filePath.indexOf('/') === -1;
+            }
+            if (!filePath.startsWith(prefix)) return false;
+            const remainder = filePath.slice(prefix.length);
+            return remainder.indexOf('/') === -1;
+        };
+
+        const markdownFiles = allFiles.filter((file) => {
+            const normalized = file.path.replace(/\\/g, '/');
+            if (recursive) {
+                return prefix === '' ? true : normalized.startsWith(prefix);
+            }
+            return isImmediateChild(normalized);
+        });
+
+        if (markdownFiles.length === 0) {
+            new Notice(t("MSG_NO_NOTES_IN_FOLDER"));
+            return;
+        }
+
+        console.log('[Folder Download] Found', markdownFiles.length, 'markdown file(s) in folder:', folderPath);
+
+        // Step 3: Extract all network images from notes
+        const networkImageMap = new Map<string, { url: string; notes: TFile[] }>();
+
+        for (const noteFile of markdownFiles) {
+            try {
+                const content = await this.app.vault.read(noteFile);
+
+                // Extract network images using regex (Markdown format)
+                const markdownRegex = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
+                let match;
+                while ((match = markdownRegex.exec(content)) !== null) {
+                    const url = match[1];
+                    if (!networkImageMap.has(url)) {
+                        networkImageMap.set(url, { url, notes: [] });
+                    }
+                    const existing = networkImageMap.get(url)!;
+                    if (!existing.notes.includes(noteFile)) {
+                        existing.notes.push(noteFile);
+                    }
+                }
+
+                // Extract network images (Wikilink format)
+                const wikilinkRegex = /!\[\[(https?:\/\/[^\]]+)\]\]/g;
+                while ((match = wikilinkRegex.exec(content)) !== null) {
+                    const url = match[1];
+                    if (!networkImageMap.has(url)) {
+                        networkImageMap.set(url, { url, notes: [] });
+                    }
+                    const existing = networkImageMap.get(url)!;
+                    if (!existing.notes.includes(noteFile)) {
+                        existing.notes.push(noteFile);
+                    }
+                }
+            } catch (error) {
+                console.error('[Folder Download] Failed to read note:', noteFile.path, error);
+            }
+        }
+
+        const networkImages = Array.from(networkImageMap.values());
+
+        if (networkImages.length === 0) {
+            new Notice(t("MSG_NO_NETWORK_IMAGES_IN_FOLDER"));
+            return;
+        }
+
+        console.log('[Folder Download] Found', networkImages.length, 'unique network image(s)');
+
+        // Step 4: Apply blacklist filter
+        const blackDomains = this.plugin.settings.pasteHandling.cloud.newWorkBlackDomains || "";
+        const filteredImages = networkImages.filter(img => {
+            if (!blackDomains.trim()) return true;
+            return !this.hasBlackDomain(img.url, blackDomains);
+        });
+
+        if (filteredImages.length < networkImages.length) {
+            new Notice(t("MSG_FILTERED_BLACKLISTED").replace("{0}", (networkImages.length - filteredImages.length).toString()));
+        }
+
+        if (filteredImages.length === 0) {
+            new Notice(t("MSG_ALL_IMAGES_BLACKLISTED"));
+            return;
+        }
+
+        // Step 5: Build download tasks with reference information
+        const tasks: any[] = filteredImages.map(img => {
+            const filename = this.extractFilenameFromUrl(img.url);
+            return {
+                url: img.url,
+                originalSource: img.url,
+                suggestedName: filename,
+                selected: true
+            };
+        });
+
+        // Step 6: Show download modal
+        const { NetworkImageDownloadModal } = await import('./NetworkImageDownloadModal');
+
+        const modal = new NetworkImageDownloadModal(
+            this.app,
+            tasks,
+            async (choice) => {
+                await this.executeFolderDownload(choice, filteredImages, folderPath);
+            }
+        );
+
+        modal.open();
+    }
+
+    /**
+     * Headless batch download method.
+     * Downloads a list of images to specified folders.
+     */
+    async batchDownload(
+        tasks: { url: string; targetFolder: string; suggestedName: string; activeFile: TFile }[]
+    ): Promise<BatchResult> {
+        const result: BatchResult = {
+            successful: [],
+            failed: [],
+            cancelled: false
+        };
+
+        if (tasks.length === 0) return result;
+
+        const concurrency = this.plugin.settings.pasteHandling.cloud.uploadConcurrency || 3;
+        const queue = new ConcurrentQueue(concurrency);
+
+        const downloadTasks = tasks.map(task => async () => {
+            const res = await this.downloadSingleImageInternal(
+                task.url,
+                task.targetFolder,
+                task.suggestedName,
+                task.activeFile
+            );
+
+            if (res.success && res.localPath) {
+                return {
+                    success: true,
+                    url: task.url,
+                    localPath: res.localPath,
+                    fileName: res.fileName
+                };
+            } else {
+                throw new Error(res.error || "Download failed");
+            }
+        });
+
+        const results = await queue.runSettled(downloadTasks);
+
+        results.forEach((res, index) => {
+            const task = tasks[index];
+            if (res.status === 'fulfilled') {
+                result.successful.push({
+                    success: true,
+                    item: task.url,
+                    output: res.value // Contains localPath
+                });
+            } else {
+                result.failed.push({
+                    success: false,
+                    item: task.url,
+                    error: res.reason?.message || "Unknown error"
+                });
+            }
+        });
+
+        return result;
+    }
+
+    /**
+     * Execute folder download operation
+     */
+    private async executeFolderDownload(
+        choice: { mode: string; selectedTasks: any[] },
+        imageData: Array<{ url: string; notes: TFile[] }>,
+        folderPath: string
+    ): Promise<void> {
+        const { mode, selectedTasks } = choice;
+        const notificationManager = new NotificationManager();
+
+        try {
+            let successCount = 0;
+
+            // Use concurrent queue for download
+            const concurrency = this.plugin.settings.pasteHandling.cloud.uploadConcurrency || 3;
+            const queue = new ConcurrentQueue(concurrency);
+
+            const downloadTasks = selectedTasks.map(task => async () => {
+                const imageInfo = imageData.find(img => img.url === task.url);
+                if (!imageInfo) return;
+
+                try {
+                    // Get attachment folder for the first note that references this image
+                    const firstNote = imageInfo.notes[0];
+                    const attachmentPath = await this.app.fileManager.getAvailablePathForAttachment(
+                        "",
+                        firstNote.path
+                    );
+
+                    // Download image using NetworkImageDownloader
+                    // Use `downloadSingleImageInternal` which is already defined in this class
+                    const result = await this.downloadSingleImageInternal(
+                        task.url,
+                        attachmentPath,
+                        task.suggestedName,
+                        firstNote
+                    );
+
+                    if (result.success && result.localPath) {
+                        successCount++;
+
+                        // Replace links in all notes that reference this image (if mode is download-and-replace)
+                        if (mode === "download-and-replace") {
+                            for (const noteFile of imageInfo.notes) {
+                                try {
+                                    await this.plugin.vaultReferenceManager.updateReferencesInFile(
+                                        noteFile,
+                                        task.url,
+                                        (location) => {
+                                            // Extract original alt text and size params
+                                            let altText = "";
+                                            let sizeParams = "";
+                                            const markdownMatch = location.original.match(/!\[([^\]]*)\]/);
+                                            if (markdownMatch) {
+                                                const fullAlt = markdownMatch[1];
+                                                const sizeMatch = fullAlt.match(/^(.*?)\|(\d+x\d*|\d*x\d+|\d+)$/);
+                                                if (sizeMatch) {
+                                                    altText = sizeMatch[1];
+                                                    sizeParams = `|${sizeMatch[2]}`;
+                                                } else {
+                                                    altText = fullAlt;
+                                                }
+                                            }
+
+                                            // Generate new link with relative path
+                                            const relativePath = this.app.metadataCache.fileToLinktext(
+                                                this.app.vault.getAbstractFileByPath(result.localPath!) as TFile,
+                                                noteFile.path
+                                            );
+                                            return `![${altText}${sizeParams}](${encodeURI(relativePath)})`;
+                                        }
+                                    );
+                                    console.log('[Folder Download] Replaced links in:', noteFile.path);
+                                } catch (error) {
+                                    console.error('[Folder Download] Failed to replace links in:', noteFile.path, error);
+                                    notificationManager.collectError(
+                                        noteFile.name,
+                                        t("MSG_REPLACE_FAILED").replace("{0}", error.message)
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        notificationManager.collectError(
+                            task.suggestedName,
+                            result.error || t("MSG_UNKNOWN_ERROR"),
+                            task.url
+                        );
+                        console.error('[Folder Download] Failed:', task.url, '-', result.error);
+                    }
+                } catch (error) {
+                    notificationManager.collectError(
+                        task.suggestedName,
+                        error.message || t("MSG_PROCESSING_FAILED"),
+                        task.url
+                    );
+                    console.error('[Folder Download] Error processing', task.url, ':', error);
+                }
+            });
+
+            // Execute download tasks with concurrency control
+            await queue.run(downloadTasks);
+
+            // Show completion notice
+            const totalSelected = selectedTasks.length;
+            if (mode === "download-and-replace") {
+                new Notice(
+                    t("MSG_DOWNLOAD_REPLACE_COMPLETE")
+                        .replace("{0}", successCount.toString())
+                        .replace("{1}", totalSelected.toString())
+                );
+            } else if (mode === "download-only") {
+                new Notice(
+                    t("MSG_DOWNLOAD_COMPLETE")
+                        .replace("{0}", successCount.toString())
+                        .replace("{1}", totalSelected.toString())
+                );
+            }
+
+            // Show batch summary if there were errors
+            const totalErrors = notificationManager.getErrorCount();
+            if (totalErrors > 0) {
+                notificationManager.showBatchSummary(
+                    totalSelected,
+                    successCount,
+                    t("MSG_FOLDER_DOWNLOAD")
+                );
+            }
+
+            // Refresh image captions (if enabled)
+            if (this.plugin.settings.captions.enabled) {
+                this.plugin.imageStateManager?.refreshAllImages();
+            }
+
+        } catch (error) {
+            console.error('[Folder Download] Download failed:', error);
+            new Notice(t("MSG_BATCH_DOWNLOAD_FAILED").replace("{0}", error.message));
+        } finally {
+            // this.plugin.clearMemory();
+        }
     }
 
     /**
@@ -173,9 +510,9 @@ export class NetworkImageDownloader {
         new Notice(`🚀 开始处理 ${selectedTasks.length} 张图片...`);
 
         // Use uploadConcurrency setting for batch download
-        const concurrency = this.plugin.settings.cloudUploadSettings.uploadConcurrency || 3;
+        const concurrency = this.plugin.settings.pasteHandling.cloud.uploadConcurrency || 3;
         const queue = new ConcurrentQueue(concurrency);
-        
+
         let processedCount = 0;
         const tasks = selectedTasks.map(task => async () => {
             processedCount++;
@@ -255,7 +592,7 @@ export class NetworkImageDownloader {
         if (skippedCount > 0) {
             extraInfo += `跳过: ${skippedCount} 张\n`;
         }
-        
+
         // 根据模式显示不同的成功消息
         if (mode === "download-only") {
             extraInfo += `📦 图片已下载，链接未更改`;
@@ -269,9 +606,9 @@ export class NetworkImageDownloader {
         const operationType = mode === "download-only"
             ? "图片下载"
             : mode === "download-and-replace"
-            ? "下载并替换"
-            : "链接替换";
-        
+                ? "下载并替换"
+                : "链接替换";
+
         notificationManager.showBatchSummary(
             selectedTasks.length,
             successCount,
@@ -533,7 +870,7 @@ export class NetworkImageDownloader {
 
             // 2. 验证域名：不允许内网地址
             const hostname = urlObj.hostname.toLowerCase();
-            
+
             // 检查 localhost
             if (hostname === 'localhost' || hostname === '127.0.0.1') {
                 return 'Security: Internal network addresses are not allowed (localhost/127.0.0.1).';

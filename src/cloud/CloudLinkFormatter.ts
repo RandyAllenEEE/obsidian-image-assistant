@@ -1,4 +1,4 @@
-import type { CloudUploadSettings } from "../settings/ImageAssistantSettings";
+import type { CloudUploadSettings } from "../settings/types";
 
 /**
  * CloudLinkFormatter - 处理图床链接的格式化
@@ -23,7 +23,7 @@ export class CloudLinkFormatter {
 
         // 2. 提取原始链接的题注和尺寸信息
         const metadata = originalLink ? this.parseOriginalLink(originalLink) : null;
-        
+
         let alt = "";
         let sizeParam = "";
 
@@ -51,9 +51,31 @@ export class CloudLinkFormatter {
         if (sizeParam) {
             finalAlt += sizeParam;
         }
-        
-        // 6. 生成 Markdown 格式链接: ![alt](url)
-        return `![${finalAlt}](${rawUrl})`;
+
+        // 6. 生成链接
+        if (settings.cloudLinkFormat === 'wikilink') {
+            // WikiLink format: ![[url|alt]] or ![[url|width]] or ![[url]]
+
+            // Clean up finalAlt for WikiLinks
+            let wikiAlt = finalAlt;
+
+            // 如果 wikiAlt 以 | 开头（说明没有 alt 只有 sizeParam），移除开头的 |
+            // 因为 ![[url|...]] 已经在 url 后面加了 |
+            if (wikiAlt.startsWith('|')) {
+                wikiAlt = wikiAlt.substring(1);
+            }
+
+            // 只要 wikiAlt 有内容（即使是空格），也添加到链接中
+            // 这样可以满足用户"填充一个空格"的需求，生成 ![[url| ]]
+            if (wikiAlt && wikiAlt.length > 0) {
+                return `![[${rawUrl}|${wikiAlt}]]`;
+            } else {
+                return `![[${rawUrl}]]`;
+            }
+        } else {
+            // Markdown format: ![alt](url)
+            return `![${finalAlt}](${rawUrl})`;
+        }
     }
 
     /**
@@ -99,10 +121,10 @@ export class CloudLinkFormatter {
                     // 这种简单的分割可能不够，通常 Wiki 链接是 path|alt text
                     // 而 alt text 内部可能包含 |size
                     // 让我们假设 | 分隔的最后一部分可能是尺寸，如果符合尺寸格式
-                    
+
                     // 重新策略: 把 | 后的所有内容当作 Alt 处理
                     const altPart = parts.slice(1).join('|');
-                     return this.parseAltText(altPart);
+                    return this.parseAltText(altPart);
                 }
                 return { alt: "", size: null };
             }
@@ -141,27 +163,27 @@ export class CloudLinkFormatter {
      */
     private static generateSizeParameter(settings: CloudUploadSettings): string {
         const { imageSizeWidth, imageSizeHeight } = settings;
-        
+
         // 检查是否有有效的宽度值
         const hasWidth = imageSizeWidth !== undefined && imageSizeWidth !== null;
         // 检查是否有有效的高度值
         const hasHeight = imageSizeHeight !== undefined && imageSizeHeight !== null;
-        
+
         // 如果两者都没有配置,返回空字符串(不添加尺寸参数)
         if (!hasWidth && !hasHeight) {
             return "";
         }
-        
+
         // 如果都配置了,返回 |WxH
         if (hasWidth && hasHeight) {
             return `|${imageSizeWidth}x${imageSizeHeight}`;
         }
-        
+
         // 只配置了宽度,返回 |W
         if (hasWidth) {
             return `|${imageSizeWidth}`;
         }
-        
+
         // 只配置了高度,返回 |xH
         return `|x${imageSizeHeight}`;
     }

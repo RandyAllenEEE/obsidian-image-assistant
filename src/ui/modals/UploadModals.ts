@@ -118,7 +118,7 @@ export class NoReferenceUploadDialog extends Modal {
         new Setting(content)
             .addButton(btn => btn
                 .setButtonText(t("MODAL_KEEP_CLOUD"))
-                .setTooltip("删除本地文件,保留云端备份")
+                .setTooltip(t("TOOLTIP_KEEP_CLOUD"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('keep-cloud');
@@ -127,7 +127,7 @@ export class NoReferenceUploadDialog extends Modal {
             .addButton(btn => btn
                 .setButtonText(t("MODAL_DELETE_ALL"))
                 .setWarning()
-                .setTooltip("撤销上传,删除所有文件")
+                .setTooltip(t("TOOLTIP_DELETE_ALL"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('delete-all');
@@ -135,7 +135,7 @@ export class NoReferenceUploadDialog extends Modal {
             )
             .addButton(btn => btn
                 .setButtonText(t("MODAL_KEEP_ALL"))
-                .setTooltip("保留云端和本地文件")
+                .setTooltip(t("TOOLTIP_KEEP_ALL"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('keep-all');
@@ -192,7 +192,7 @@ export class SingleReferenceUploadDialog extends Modal {
             .addButton(btn => btn
                 .setButtonText(t("MODAL_REPLACE_REF"))
                 .setCta()
-                .setTooltip("将引用替换为云端链接")
+                .setTooltip(t("TOOLTIP_REPLACE_REF"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace');
@@ -200,7 +200,7 @@ export class SingleReferenceUploadDialog extends Modal {
             )
             .addButton(btn => btn
                 .setButtonText(t("MODAL_REPLACE_DELETE"))
-                .setTooltip("替换引用并删除本地文件")
+                .setTooltip(t("TOOLTIP_REPLACE_DELETE"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-delete');
@@ -210,7 +210,7 @@ export class SingleReferenceUploadDialog extends Modal {
         new Setting(buttonContainer)
             .addButton(btn => btn
                 .setButtonText(t("MODAL_BUTTON_CANCEL"))
-                .setTooltip("保留上传,不替换引用")
+                .setTooltip(t("TOOLTIP_CANCEL_REPLACE"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('cancel');
@@ -219,7 +219,7 @@ export class SingleReferenceUploadDialog extends Modal {
             .addButton(btn => btn
                 .setButtonText(t("MODAL_UNDO_UPLOAD"))
                 .setWarning()
-                .setTooltip("删除云端图片")
+                .setTooltip(t("TOOLTIP_UNDO_UPLOAD_CLOUD"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('undo');
@@ -283,16 +283,16 @@ export class MultiReferenceUploadDialog extends Modal {
                 cls: "upload-stats-title"
             });
             statsDiv.createEl("p", {
-                text: `- ${t("MODAL_CURRENT_NOTE")} (${basename(this.currentNotePath)}): ${currentCount} 次`,
+                text: t("MSG_REF_COUNT_CURRENT").replace("{0}", basename(this.currentNotePath)).replace("{1}", currentCount.toString()),
                 cls: "upload-current-note-stat"
             });
             statsDiv.createEl("p", {
-                text: `- ${t("MODAL_OTHER_NOTES")}: ${otherCount} 次,涉及 ${otherFilesCount} 个文件`,
+                text: t("MSG_REF_COUNT_OTHER").replace("{0}", otherCount.toString()).replace("{1}", otherFilesCount.toString()),
                 cls: "upload-other-notes-stat"
             });
         } else {
             statsDiv.createEl("p", {
-                text: `${t("MODAL_REF_STATS")} ${this.matches.totalCount} 次,涉及 ${this.matches.files.length} 个文件`,
+                text: t("MSG_STATS_TOTAL").replace("{0}", this.matches.totalCount.toString()).replace("{1}", this.matches.files.length.toString()),
                 cls: "upload-stats-title"
             });
         }
@@ -308,7 +308,7 @@ export class MultiReferenceUploadDialog extends Modal {
         this.matches.files.slice(0, 10).forEach(file => {
             const itemEl = listEl.createEl("li");
             const isCurrent = file.path === this.currentNotePath;
-            itemEl.setText(`${isCurrent ? '✓ ' : '  '}${basename(file.path)}: ${file.matches.length} 次`);
+            itemEl.setText(`${isCurrent ? '✓ ' : '  '}${t("MSG_FILE_REFS").replace("{0}", basename(file.path)).replace("{1}", file.matches.length.toString())}`);
             if (isCurrent) {
                 itemEl.addClass("upload-current-note-item");
             }
@@ -316,7 +316,7 @@ export class MultiReferenceUploadDialog extends Modal {
 
         if (this.matches.files.length > 10) {
             listEl.createEl("li", {
-                text: `... 还有 ${this.matches.files.length - 10} 个文件`,
+                text: t("MSG_MORE_FILES").replace("{0}", (this.matches.files.length - 10).toString()),
                 cls: "upload-more-files"
             });
         }
@@ -330,8 +330,8 @@ export class MultiReferenceUploadDialog extends Modal {
             const currentCount = currentMatches?.matches.length || 0;
 
             buttonSetting.addButton(btn => btn
-                .setButtonText(`${t("MODAL_REPLACE_CURRENT")} (${currentCount}次)`)
-                .setTooltip("只替换当前笔记中的引用")
+                .setButtonText(t("MODAL_REPLACE_CURRENT_EXT").replace("{0}", currentCount.toString()))
+                .setTooltip(t("TOOLTIP_REPLACE_CURRENT"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-current');
@@ -341,9 +341,9 @@ export class MultiReferenceUploadDialog extends Modal {
 
         buttonSetting
             .addButton(btn => btn
-                .setButtonText(`${t("MODAL_REPLACE_ALL")} (共${this.matches.totalCount}次)`)
+                .setButtonText(t("MODAL_REPLACE_ALL_EXT").replace("{0}", this.matches.totalCount.toString()))
                 .setCta()
-                .setTooltip("替换所有笔记中的引用")
+                .setTooltip(t("TOOLTIP_REPLACE_ALL"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-all');
@@ -353,7 +353,7 @@ export class MultiReferenceUploadDialog extends Modal {
         new Setting(buttonContainer)
             .addButton(btn => btn
                 .setButtonText(t("MODAL_REPLACE_ALL_DELETE"))
-                .setTooltip("替换所有引用并删除本地文件")
+                .setTooltip(t("TOOLTIP_REPLACE_ALL_DELETE"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-all-delete');
@@ -361,7 +361,7 @@ export class MultiReferenceUploadDialog extends Modal {
             )
             .addButton(btn => btn
                 .setButtonText(t("MODAL_BUTTON_CANCEL"))
-                .setTooltip("保留上传,不替换引用")
+                .setTooltip(t("TOOLTIP_CANCEL_REPLACE"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('cancel');
@@ -435,13 +435,13 @@ export class BatchUploadConfirmDialog extends Modal {
             this.multiReferenceImages.slice(0, 10).forEach(info => {
                 const itemEl = listEl.createEl("li");
                 itemEl.setText(
-                    `${info.imageName}: 当前笔记 ${info.currentNoteReferences} 次, 其他笔记 ${info.otherNotesReferences} 次`
+                    t("MSG_BATCH_REF_INFO").replace("{0}", info.imageName).replace("{1}", info.currentNoteReferences.toString()).replace("{2}", info.otherNotesReferences.toString())
                 );
             });
 
             if (this.multiReferenceImages.length > 10) {
                 listEl.createEl("li", {
-                    text: `... 还有 ${this.multiReferenceImages.length - 10} 张图片`,
+                    text: t("MSG_MORE_IMAGES").replace("{0}", (this.multiReferenceImages.length - 10).toString()),
                     cls: "upload-more-files"
                 });
             }
@@ -467,7 +467,7 @@ export class BatchUploadConfirmDialog extends Modal {
             // 有多引用图片,提供三个选项
             buttonSetting.addButton(btn => btn
                 .setButtonText(t("MODAL_REPLACE_CURRENT"))
-                .setTooltip("只替换当前笔记中的图片链接,其他笔记保持不变")
+                .setTooltip(t("TOOLTIP_REPLACE_CURRENT_MULTI"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-current');
@@ -479,7 +479,7 @@ export class BatchUploadConfirmDialog extends Modal {
             .addButton(btn => btn
                 .setButtonText(t("MODAL_REPLACE_ALL"))
                 .setCta()
-                .setTooltip("替换所有笔记中的图片链接")
+                .setTooltip(t("TOOLTIP_REPLACE_ALL_MULTI"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-all');
@@ -489,7 +489,7 @@ export class BatchUploadConfirmDialog extends Modal {
         new Setting(buttonContainer)
             .addButton(btn => btn
                 .setButtonText(t("MODAL_REPLACE_ALL_DELETE"))
-                .setTooltip("替换所有引用并删除本地图片文件")
+                .setTooltip(t("TOOLTIP_REPLACE_ALL_DELETE_MULTI"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-all-delete');
@@ -497,7 +497,7 @@ export class BatchUploadConfirmDialog extends Modal {
             )
             .addButton(btn => btn
                 .setButtonText(t("MODAL_BUTTON_CANCEL"))
-                .setTooltip("取消替换操作,仅保留上传结果")
+                .setTooltip(t("TOOLTIP_CANCEL_REPLACE_BATCH"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('cancel');
@@ -579,7 +579,7 @@ export class BatchDownloadPreviewDialog extends Modal {
 
             if (this.multiReferenceTasks.length > 5) {
                 detailsList.createEl("li", {
-                    text: `... 还有 ${this.multiReferenceTasks.length - 5} 张图片`,
+                    text: t("MSG_MORE_IMAGES").replace("{0}", (this.multiReferenceTasks.length - 5).toString()),
                     cls: "upload-more-files"
                 });
             }
@@ -639,7 +639,7 @@ export class BatchDownloadPreviewDialog extends Modal {
 
         if (this.tasks.length > 10) {
             imageList.createEl("p", {
-                text: `... 还有 ${this.tasks.length - 10} 张图片`,
+                text: t("MSG_MORE_IMAGES").replace("{0}", (this.tasks.length - 10).toString()),
                 cls: "upload-more-files"
             });
         }
@@ -674,7 +674,7 @@ export class BatchDownloadPreviewDialog extends Modal {
             // 有多引用图片,提供两个选项
             buttonSetting.addButton(btn => btn
                 .setButtonText(t("MODAL_REPLACE_CURRENT"))
-                .setTooltip("只更新当前笔记中的图片链接,其他笔记保持不变")
+                .setTooltip(t("TOOLTIP_REPLACE_CURRENT_DOWNLOAD"))
                 .onClick(() => {
                     this.close();
                     const selectedTasks = this.tasks.filter(t => t.selected);
@@ -686,7 +686,7 @@ export class BatchDownloadPreviewDialog extends Modal {
         buttonSetting.addButton(btn => btn
             .setButtonText(t("MODAL_REPLACE_ALL"))
             .setCta()
-            .setTooltip("更新所有笔记中的图片链接")
+            .setTooltip(t("TOOLTIP_REPLACE_ALL_DOWNLOAD"))
             .onClick(() => {
                 this.close();
                 const selectedTasks = this.tasks.filter(t => t.selected);
@@ -697,7 +697,7 @@ export class BatchDownloadPreviewDialog extends Modal {
         new Setting(buttonContainer)
             .addButton(btn => btn
                 .setButtonText(t("MODAL_BUTTON_CANCEL"))
-                .setTooltip("取消下载操作")
+                .setTooltip(t("TOOLTIP_CANCEL_DOWNLOAD"))
                 .onClick(() => {
                     this.close();
                     this.onChoice({ action: 'cancel', selectedTasks: [] });

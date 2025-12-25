@@ -29,7 +29,7 @@ export class UploaderManager {
   }
 
   async upload(fileList: Array<string> | Array<Image>) {
-    if (Platform.isMobileApp && !this.plugin.settings.cloudUploadSettings.remoteServerMode) {
+    if (Platform.isMobileApp && !this.plugin.settings.pasteHandling.cloud.remoteServerMode) {
       new Notice("Mobile App must use remote server mode.");
       throw new Error("Mobile App must use remote server mode.");
     }
@@ -43,7 +43,7 @@ export class UploaderManager {
     return res;
   }
   async uploadByClipboard(fileList?: FileList) {
-    if (Platform.isMobileApp && !this.plugin.settings.cloudUploadSettings.remoteServerMode) {
+    if (Platform.isMobileApp && !this.plugin.settings.pasteHandling.cloud.remoteServerMode) {
       new Notice("Mobile App must use remote server mode.");
       throw new Error("Mobile App must use remote server mode.");
     }

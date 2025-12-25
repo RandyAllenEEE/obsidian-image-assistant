@@ -1,6 +1,6 @@
 // VariableProcessor.ts
 import { App, TFile } from "obsidian";
-import { ImageAssistantSettings } from "../settings/ImageAssistantSettings";
+import { ImageAssistantSettings } from "../settings/types";
 
 
 export interface VariableContext {
@@ -296,11 +296,11 @@ export class VariableProcessor {
             description: "The name of the immediate parent folder of the note.",
             example: "Project",
         },
-		{
-			name: "{grandparentfolder}",
-			description: "Parent of the parent folder of the note, but not the vault root",
-			example: "ParentOfProject"
-		},
+        {
+            name: "{grandparentfolder}",
+            description: "Parent of the parent folder of the note, but not the vault root",
+            example: "ParentOfProject"
+        },
         {
             name: "{notefolder}",
             description: "The name of the immediate parent folder of the note.",
@@ -514,7 +514,7 @@ export class VariableProcessor {
         if (template.includes("{grandparentfolder}")) {
             const parentFolder = activeFile.parent;
             const grandparentFolder = parentFolder?.parent;
-            
+
             // If there's no grandparent or the grandparent is the vault root
             if (!grandparentFolder || grandparentFolder.path === "/") {
                 errors.push("Cannot use {grandparentfolder} - the current note has no grandparent folder. Please modify your template.");
@@ -524,7 +524,7 @@ export class VariableProcessor {
         // Check for {parentfolder} usage when note is in vault root
         if (template.includes("{parentfolder}")) {
             const parentFolder = activeFile.parent;
-            
+
             // If there's no parent or the parent is the vault root
             if (!parentFolder || parentFolder.path === "/") {
                 errors.push("Cannot use {parentfolder} - the current note is in the vault root. Please modify your template.");
@@ -562,7 +562,7 @@ export class VariableProcessor {
         for (const variable of variables) {
             if (variable.name.startsWith("{date") || ["{YYYY}", "{MM}", "{DD}", "{HH}", "{mm}", "{ss}", "{weekday}", "{month}", "{calendar}", "{today}", "{YYYY-MM-DD}", "{tomorrow}", "{yesterday}", "{startofweek}", "{endofweek}", "{startofmonth}", "{endofmonth}", "{nextweek}", "{lastweek}", "{nextmonth}", "{lastmonth}", "{daysinmonth}", "{weekofyear}", "{quarterofyear}", "{week}", "{w}", "{quarter}", "{Q}", "{dayofyear}", "{DDD}", "{monthname}", "{MMMM}", "{dayname}", "{dddd}", "{dateordinal}", "{Do}", "{relativetime}", "{currentdate}", "{yyyy}", "{time}", "{timestamp}"].includes(variable.name)) {
                 categorized["Date & Time"].push(variable);
-            } else if (["{vaultname}", "{vaultpath}", "{parentfolder}", "{grandparentfolder}" ,"{notefolder}", "{notepath}"].includes(variable.name)) {
+            } else if (["{vaultname}", "{vaultpath}", "{parentfolder}", "{grandparentfolder}", "{notefolder}", "{notepath}"].includes(variable.name)) {
                 categorized["File & Vault"].push(variable);
             } else if (["{imagename}", "{filetype}", "{sizeb}", "{sizekb}", "{sizemb}", "{notename}", "{notename_nospaces}"].includes(variable.name)) {
                 categorized["Basic"].push(variable);
@@ -666,7 +666,7 @@ export class VariableProcessor {
         variables["{mm}"] = moment().format("mm");
         variables["{ss}"] = moment().format("ss");
         variables["{date}"] = moment().format("YYYY-MM-DD");
-        variables["{weekday}"] = moment().format("dddd"); 
+        variables["{weekday}"] = moment().format("dddd");
         variables["{month}"] = moment().format("MMMM");
         variables["{calendar}"] = moment().calendar();
         variables["{today}"] = moment().format('YYYY-MM-DD');
@@ -981,7 +981,7 @@ export class VariableProcessor {
                 Object.assign(metadata, {
                     // Existing properties
                     '{ratio}': aspectRatio.toFixed(2),
-                    '{quality}': this.settings.quality.toString(),
+                    '{quality}': this.settings.global.quality.toString(),
                     '{resolution}': `${img.width}x${img.height}`,
                     '{megapixels}': (pixelCount / 1000000).toFixed(2),
 
@@ -1083,7 +1083,7 @@ export class VariableProcessor {
                 Object.assign(metadata, {
                     // Existing properties
                     '{ratio}': aspectRatio.toFixed(2),
-                    '{quality}': this.settings.quality.toString(),
+                    '{quality}': this.settings.global.quality.toString(),
                     '{resolution}': `${img.width}x${img.height}`,
                     '{megapixels}': (pixelCount / 1000000).toFixed(2),
 
@@ -1407,11 +1407,11 @@ export class VariableProcessor {
         const hashHex = hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');
         return hashHex;
     }
-    
+
     private async generateFileContentSHA256(file: TFile | File): Promise<string> {
         try {
             let arrayBuffer: ArrayBuffer;
-            
+
             if (file instanceof TFile) {
                 // Handle TFile (files in the vault)
                 arrayBuffer = await this.app.vault.readBinary(file);
@@ -1419,7 +1419,7 @@ export class VariableProcessor {
                 // Handle File (dragged/pasted files)
                 arrayBuffer = await file.arrayBuffer();
             }
-            
+
             const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
             const hashArray = Array.from(new Uint8Array(hashBuffer));
             const hashHex = hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');

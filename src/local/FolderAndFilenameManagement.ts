@@ -6,7 +6,7 @@ import {
     FolderPreset,
     FilenamePreset,
     ConversionPreset,
-} from "../settings/ImageAssistantSettings";
+} from "../settings/types";
 import { VariableProcessor, VariableContext } from "./VariableProcessor";
 import { SupportedImageFormats } from "./SupportedImageFormats";
 
@@ -33,7 +33,7 @@ export class FolderAndFilenameManagement {
         selectedFolderPreset: FolderPreset
     ): void {
         const context = { file, activeFile };
-        
+
         // Validate folder template if it's a custom template
         if (selectedFolderPreset?.type === "CUSTOM" && selectedFolderPreset.customTemplate) {
             const folderValidation = this.variableProcessor.validateTemplate(selectedFolderPreset.customTemplate, context);
@@ -249,7 +249,7 @@ export class FolderAndFilenameManagement {
         }
     }
 
-    private getDefaultAttachmentFolderPath(activeFile: TFile): string {
+    public getDefaultAttachmentFolderPath(activeFile: TFile): string {
         // @ts-ignore
         const configuredPath = this.app.vault.getConfig(
             "attachmentFolderPath"
@@ -266,7 +266,7 @@ export class FolderAndFilenameManagement {
     async handleNameConflicts(
         destinationDir: string,
         baseFilename: string,
-        conflictMode: "reuse" | "increment" = "reuse"
+        conflictMode: "reuse" | "increment" | "skip" | "overwrite" = "reuse"
     ): Promise<string> {
         const normalizedDestination = normalizePath(destinationDir);
         const lastDotIndex = baseFilename.lastIndexOf('.');
@@ -371,7 +371,7 @@ export class FolderAndFilenameManagement {
         // If not skipped, proceed with normal conversion logic
         const outputFormat = selectedConversionPreset
             ? selectedConversionPreset.outputFormat
-            : this.settings.outputFormat;
+            : this.settings.global.outputFormat;
         switch (outputFormat) {
             case "WEBP":
                 return `${filename}.webp`;
@@ -604,18 +604,18 @@ export class FolderAndFilenameManagement {
                     if (process.platform !== 'win32' && !potentialOsPathWithQuery.startsWith('/')) {
                         potentialOsPathWithQuery = `/${potentialOsPathWithQuery}`;
                     }
-            
+
                     const [potentialOsPath] = potentialOsPathWithQuery.split('?'); // Remove query parameters
                     let decodedOsPath = decodeURIComponent(potentialOsPath);
                     // Standardize path separators to forward slashes
                     decodedOsPath = decodedOsPath.replace(/\\/g, '/');
-            
+
                     let basePath: string | null = null;
                     if (this.app.vault.adapter instanceof FileSystemAdapter) {
                         basePath = this.app.vault.adapter.getBasePath();
                         basePath = basePath.replace(/\\/g, '/');
                     }
-            
+
                     if (basePath && decodedOsPath.startsWith(basePath)) {
                         const vaultRelativePath = decodedOsPath.substring(basePath.length);
                         const normalizedVaultRelativePath = normalizePath(vaultRelativePath);
@@ -694,5 +694,80 @@ export class FolderAndFilenameManagement {
     }
 
 
+
+    /**
+     * Creates a binary file with atomic conflict resolution safeguards.
+     * @param folderPath Destination folder path
+     * @param filename Desired filename (basename + extension)
+     * @param data File content
+     * @param conflictResolution Resolution mode
+     * @returns The created or reused TFile, or null if skipped.
+     */
+    async createUniqueBinary(
+        folderPath: string,
+        filename: string, // basename + extension
+        data: ArrayBuffer,
+        conflictResolution: "reuse" | "increment" | "skip" | "overwrite" = "increment"
+    ): Promise<TFile | null> {
+        const folder = normalizePath(folderPath);
+        let currentFilename = filename;
+        let attempt = 0;
+        const maxAttempts = 50;
+
+        while (attempt < maxAttempts) {
+            const fullPath = this.combinePath(folder, currentFilename);
+            const existing = this.app.vault.getAbstractFileByPath(fullPath);
+
+            if (existing) {
+                if (conflictResolution === 'skip') {
+                    return null;
+                }
+                if (conflictResolution === 'reuse') {
+                    if (existing instanceof TFile) return existing;
+                    // If folder, fail over to increment logic or error? Incrementing is safer.
+                }
+                if (conflictResolution === 'overwrite') {
+                    if (existing instanceof TFile) {
+                        // Overwrite existing file
+                        await this.app.vault.modifyBinary(existing, data);
+                        return existing;
+                    }
+                    // If existing is a folder, fail over to increment
+                    conflictResolution = 'increment';
+                }
+            }
+
+            // For 'increment' mode or if we are ready to try creation
+            if (existing && conflictResolution === 'increment') {
+                const newName = await this.handleNameConflicts(folder, currentFilename, 'increment');
+                if (newName === currentFilename) {
+                    // Safety hatch: if handleNameConflicts returns same, manual increment logic needed or it means file doesn't exist anymore?
+                    // If it exists, handleNameConflicts should return different.
+                }
+                currentFilename = newName;
+                attempt++;
+                continue;
+            }
+
+            // Try to create
+            try {
+                return await this.app.vault.createBinary(fullPath, data);
+            } catch (error) {
+                // Check for "file already exists" error
+                if (error.message && error.message.toLowerCase().includes("file already exists")) {
+                    // Race condition occurred
+                    if (conflictResolution === 'increment') {
+                        attempt++;
+                        continue;
+                    }
+                    attempt++;
+                    continue;
+                }
+                throw error;
+            }
+        }
+
+        throw new Error(`Failed to create unique binary '${filename}' after ${maxAttempts} attempts.`);
+    }
 
 }

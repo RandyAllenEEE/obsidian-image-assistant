@@ -1,13 +1,11 @@
 // BatchImageProcessor.ts
 import { App, TFile, TFolder, Notice } from 'obsidian';
 import ImageConverterPlugin from '../main';
-import {
-    ResizeMode,
-    EnlargeReduce,
-    ImageProcessor,
-} from './ImageProcessor';
+import { ResizeMode, EnlargeReduce } from "../settings/types";
+import { ImageProcessor } from './ImageProcessor';
 import { ConcurrentQueue } from '../utils/AsyncLock';
 import { FolderAndFilenameManagement } from "./FolderAndFilenameManagement";
+import { BatchResult, BatchItemResult } from "../types/BatchTypes";
 
 
 export class BatchImageProcessor {
@@ -22,17 +20,18 @@ export class BatchImageProcessor {
 
         try {
             const {
-                ProcessCurrentNoteconvertTo: convertTo,
-                ProcessCurrentNotequality: quality,
-                ProcessCurrentNoteResizeModalresizeMode: resizeMode,
-                ProcessCurrentNoteresizeModaldesiredWidth: desiredWidth,
-                ProcessCurrentNoteresizeModaldesiredHeight: desiredHeight,
-                ProcessCurrentNoteresizeModaldesiredLength: desiredLength,
-                ProcessCurrentNoteEnlargeOrReduce: enlargeOrReduce,
-                allowLargerFiles,
-                ProcessCurrentNoteSkipFormats: processCurrentNoteSkipFormats,
-                ProcessCurrentNoteskipImagesInTargetFormat: processCurrentNoteSkipImagesInTargetFormat
-            } = this.plugin.settings;
+                convertTo,
+                quality,
+                resizeMode,
+                desiredWidth,
+                desiredHeight,
+                desiredLength,
+                enlargeOrReduce,
+                skipFormats: processCurrentNoteSkipFormats,
+                skipImagesInTargetFormat: processCurrentNoteSkipImagesInTargetFormat
+            } = this.plugin.settings.processCurrentNote;
+            const { revertToOriginalIfLarger } = this.plugin.settings.global;
+            const allowLargerFiles = !revertToOriginalIfLarger;
 
             const isKeepOriginalFormat = convertTo === 'disabled';
             const noCompression = quality === 1;
@@ -52,10 +51,11 @@ export class BatchImageProcessor {
             let linkedFiles: TFile[] = [];
 
             if (noteFile.extension === 'canvas') {
-                // Handle canvas file
-                linkedFiles = await this.getImageFilesFromCanvas(noteFile);
+                const canvasImagePaths = await this.getImagesFromCanvas(noteFile);
+                linkedFiles = canvasImagePaths
+                    .map(path => this.app.vault.getAbstractFileByPath(path))
+                    .filter((file): file is TFile => file instanceof TFile && this.plugin.supportedImageFormats.isSupported(undefined, file.name));
             } else {
-                // Handle markdown file
                 linkedFiles = this.getLinkedImageFiles(noteFile);
             }
 
@@ -116,71 +116,13 @@ export class BatchImageProcessor {
             const totalImages = filesToProcess.length;
 
             // Use uploadConcurrency setting for batch processing
-            const concurrency = this.plugin.settings.cloudUploadSettings.uploadConcurrency || 3;
+            const concurrency = this.plugin.settings.pasteHandling.cloud.uploadConcurrency || 3;
             const queue = new ConcurrentQueue(concurrency);
             const tasks = filesToProcess.map(linkedFile => async () => {
-                imageCount++; // Increment count when task starts or finishes (here effectively when task starts execution in our queue logic)
-
-                const imageData = await this.app.vault.readBinary(linkedFile);
-                const imageBlob = new Blob([imageData], { type: `image/${linkedFile.extension}` });
-
-                const processedImageData = await this.imageProcessor.processImage(
-                    imageBlob,
-                    outputFormat,
-                    quality,
-                    colorDepth,
-                    resizeMode as ResizeMode,
-                    desiredWidth,
-                    desiredHeight,
-                    desiredLength,
-                    enlargeOrReduce as EnlargeReduce,
-                    allowLargerFiles
-                );
-
-                // Construct the new file path based on conversion settings
-                const newFileName = `${linkedFile.basename}.${outputFormat.toLowerCase()}`;
-                const newFilePath = linkedFile.path.replace(linkedFile.name, newFileName);
-
-                // Capture old path before any rename
-                const oldPath = linkedFile.path;
-
-                // Rename the file (async operation, should be awaited)
-                if (oldPath !== newFilePath) {
-                    await this.app.fileManager.renameFile(linkedFile, newFilePath);
-                }
-
-                // Get the renamed file using the new path
-                const renamedFile = this.app.vault.getAbstractFileByPath(newFilePath) as TFile;
-
-                if (!renamedFile) {
-                    console.error('Failed to find renamed file:', newFilePath);
-                    return; // Skip if the rename failed
-                }
-
-                // Modify the file content with processed image data
-                await this.app.vault.modifyBinary(renamedFile, processedImageData);
-
-                // Update links only if the file was renamed
-                if (oldPath !== newFilePath) {
-                    await this.plugin.vaultReferenceManager.updateReferences(oldPath, (loc) => {
-                        // Simple rename logic: replace the old link path with the new filename base
-                        // If the link was "img.png", and we rename to "img.webp", it becomes "img.webp"
-                        // We rely on the fact that we are renaming in-place, so paths structure is preserved.
-                        // loc.link is the path inside the link, e.g. "img.png"
-
-                        // We need to be careful: loc.link might be "Assets/img.png".
-                        // newFileName is just "img.webp". 
-                        // We want "Assets/img.webp".
-                        // So we replace the basename+ext of loc.link with newFileName.
-
-                        // Helper to swap filename in a path string
-                        const updatedLinkPath = loc.link.replace(linkedFile.name, newFileName);
-                        return loc.original.replace(loc.link, updatedLinkPath);
-                    });
-                }
+                imageCount++;
+                await this.processSingleImage(linkedFile, outputFormat, quality, colorDepth, resizeMode, desiredWidth, desiredHeight, desiredLength, enlargeOrReduce, allowLargerFiles);
 
                 const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
-                // Update status bar safely (though text update is synchronous)
                 statusBarItemEl.setText(
                     `Processing image ${imageCount} of ${totalImages}, elapsed time: ${elapsedTime} seconds`
                 );
@@ -196,50 +138,180 @@ export class BatchImageProcessor {
 
         } catch (error) {
             console.error('Error processing images in current note:', error);
-            new Notice(`Error processing images: ${error.message}`);
+            new Notice(`Error processing images: ${error.message} `);
         }
     }
 
-
-
-    private async getImageFilesFromCanvas(canvasFile: TFile): Promise<TFile[]> {
-        const canvasContent = await this.app.vault.read(canvasFile);
-        const canvasData = JSON.parse(canvasContent);
-        const linkedFiles: TFile[] = [];
-
-        const getImagesFromNodes = (nodes: any[]): void => {
-            for (const node of nodes) {
-                if (node.type === 'file' && node.file) {
-                    const file = this.app.vault.getAbstractFileByPath(node.file);
-                    if (file instanceof TFile && this.plugin.supportedImageFormats.isSupported(undefined, file.name)) {
-                        linkedFiles.push(file);
-                    }
-                }
-                if (node.children && Array.isArray(node.children)) {
-                    getImagesFromNodes(node.children);
-                }
-            }
+    /**
+     * Headless batch processing method.
+     */
+    async batchProcess(files: TFile[]): Promise<BatchResult> {
+        const result: BatchResult = {
+            successful: [],
+            failed: [],
+            cancelled: false
         };
 
-        if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
-            getImagesFromNodes(canvasData.nodes);
-        }
+        if (files.length === 0) return result;
 
-        return linkedFiles;
+        // Use "Process Current Note" settings as default for batch operations for now.
+        // TODO: Allow overriding settings via args if needed by Modal.
+        const {
+            convertTo,
+            quality,
+            resizeMode,
+            desiredWidth,
+            desiredHeight,
+            desiredLength,
+            enlargeOrReduce
+        } = this.plugin.settings.processCurrentNote;
+        const { revertToOriginalIfLarger } = this.plugin.settings.global;
+        const allowLargerFiles = !revertToOriginalIfLarger;
+
+        const outputFormat = convertTo === 'disabled' ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
+        const colorDepth = 1;
+
+        const concurrency = this.plugin.settings.pasteHandling.cloud.uploadConcurrency || 3;
+        const queue = new ConcurrentQueue(concurrency);
+
+        const tasks = files.map(file => async () => {
+            const res = await this.processSingleImage(
+                file,
+                outputFormat,
+                quality,
+                colorDepth,
+                resizeMode,
+                desiredWidth,
+                desiredHeight,
+                desiredLength,
+                enlargeOrReduce,
+                allowLargerFiles
+            );
+            return { file, res };
+        });
+
+        const results = await queue.runSettled(tasks);
+
+        results.forEach((res, index) => {
+            const task = files[index];
+            if (res.status === 'fulfilled') {
+                const { success, error } = res.value.res;
+                if (success) {
+                    result.successful.push({
+                        success: true,
+                        item: task
+                    });
+                } else {
+                    result.failed.push({
+                        success: false,
+                        item: task,
+                        error: error || "Processing failed"
+                    });
+                }
+            } else {
+                result.failed.push({
+                    success: false,
+                    item: task,
+                    error: res.reason?.message || "Unknown error"
+                });
+            }
+        });
+
+        return result;
     }
 
-    private getLinkedImageFiles(noteFile: TFile): TFile[] {
-        const { resolvedLinks } = this.app.metadataCache;
-        const linksInCurrentNote = resolvedLinks[noteFile.path];
+    private async processSingleImage(
+        file: TFile,
+        outputFormat: 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL',
+        quality: number,
+        colorDepth: number,
+        resizeMode: string, // Using string type to match settings, recast internally
+        desiredWidth: number,
+        desiredHeight: number,
+        desiredLongestEdge: number,
+        enlargeOrReduce: string,
+        allowLargerFiles: boolean
+    ): Promise<{ success: boolean; error?: string }> {
+        try {
+            // 1. Process Image (Zero-Copy by passing TFile)
+            const processedImageData = await this.imageProcessor.processImage(
+                file, // Pass TFile directly
+                outputFormat,
+                quality,
+                colorDepth,
+                resizeMode as ResizeMode,
+                desiredWidth,
+                desiredHeight,
+                desiredLongestEdge,
+                enlargeOrReduce as EnlargeReduce,
+                allowLargerFiles
+            );
 
-        return Object.keys(linksInCurrentNote)
-            .map(link => this.app.vault.getAbstractFileByPath(link))
-            .filter((file): file is TFile => file instanceof TFile && this.plugin.supportedImageFormats.isSupported(undefined, file.name));
+            // 2. Determine New Path and Filename
+            const newFileName = `${file.basename}.${outputFormat.toLowerCase()}`;
+            // Use parent path
+            const parentPath = file.parent ? file.parent.path : "";
+
+            // Check if we are doing in-place update (same name and extension)
+            // Note: outputFormat logic above ensures extension match.
+            const isSameFile = file.name === newFileName;
+
+            if (isSameFile) {
+                // In-place update: Modify existing binary
+                // For atomicity, safer to write temp then swap, but modifyBinary is standard Obsidian API.
+                await this.app.vault.modifyBinary(file, processedImageData);
+            } else {
+                // Formatting Change: Create New -> Update Links -> Delete Old
+
+                // 3. Create New File Atomically
+                // We use 'increment' to ensure we don't overwrite unrelated files if name exists,
+                // but usually we want to replace the 'conversion target' if it exists?
+                // Batch logic usually implies specific intent. If conflicts, 'increment' is safest.
+                const newFile = await this.folderAndFilenameManagement.createUniqueBinary(
+                    parentPath,
+                    newFileName,
+                    processedImageData,
+                    'increment'
+                );
+
+                if (newFile) {
+                    // 4. Update References (Links)
+                    // Update all links in the vault to point to the new file
+                    await this.plugin.vaultReferenceManager.updateReferences(file.path, (loc) => {
+                        // loc.link is usually relative or absolute path depending on settings.
+                        // We replace the filename part.
+                        // Ideally we should just return the new path, but reference manager expects text replacement logic?
+                        // "updateReferences" callback receives the link cache object.
+                        // We assume standard updating behavior.
+                        // Simplest robust update: replace the basename+ext in the link text.
+
+                        // NOTE: If using 'increment', newFile.name might be 'image 1.webp'.
+                        // We must use newFile.name.
+                        const newName = newFile.name;
+                        const oldName = file.name;
+
+                        // Replace the old filename in the link text with the new filename
+                        // This handles paths: "Assets/img.png" -> "Assets/img.webp"
+                        return loc.original.replace(oldName, newName);
+                    });
+
+                    // 5. Delete Old File
+                    await this.app.vault.trash(file, true); // true = system trash, false = obsidian trash (.trash)
+                    // Using local trash (.trash) is safer for recovery?
+                    // Standard is app.vault.trash(file, false) usually? 
+                    // Let's use false (Obsidian trash) for safety during batch ops.
+                }
+            }
+            return { success: true };
+        } catch (error) {
+            console.error(`Failed to process image ${file.path}:`, error);
+            // Don't throw, allow batch to continue, but return failure
+            return { success: false, error: error.message };
+        }
     }
 
 
     async processImagesInFolder(folderPath: string, recursive: boolean): Promise<void> {
-        // ... (logic from old processFolderImages, updated to use imageProcessor.processImage)
         try {
             const folder = this.app.vault.getAbstractFileByPath(folderPath);
             if (!(folder instanceof TFolder)) {
@@ -249,19 +321,23 @@ export class BatchImageProcessor {
 
             // Get settings from the modal
             const {
-                ProcessCurrentNoteconvertTo: convertTo,
-                ProcessCurrentNotequality: quality,
-                ProcessCurrentNoteResizeModalresizeMode: resizeMode,
-                ProcessCurrentNoteresizeModaldesiredWidth: desiredWidth,
-                ProcessCurrentNoteresizeModaldesiredHeight: desiredHeight,
-                ProcessCurrentNoteresizeModaldesiredLength: desiredLength,
-                ProcessCurrentNoteEnlargeOrReduce: enlargeOrReduce,
-                allowLargerFiles,
-                ProcessCurrentNoteSkipFormats: processCurrentNoteSkipFormats,
-            } = this.plugin.settings;
+                convertTo,
+                quality,
+                resizeMode,
+                desiredWidth,
+                desiredHeight,
+                desiredLength,
+                enlargeOrReduce,
+                skipFormats: processCurrentNoteSkipFormats,
+            } = this.plugin.settings.processCurrentNote; // Using processCurrentNote settings for folder action?
+            // "Process Images in Folder" usually shares settings with "Process Current Note" or has its own?
+            // Looking at original code: it uses processCurrentNote settings.
+
+            const { revertToOriginalIfLarger } = this.plugin.settings.global;
+            const allowLargerFiles = !revertToOriginalIfLarger;
 
             const outputFormat = convertTo === 'disabled' ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
-            const colorDepth = 1; // Assuming full color depth for now, adjust if needed
+            const colorDepth = 1;
 
             const skipFormats = processCurrentNoteSkipFormats
                 .toLowerCase()
@@ -280,56 +356,15 @@ export class BatchImageProcessor {
             const startTime = Date.now();
             const totalImages = images.length;
 
-            // Use uploadConcurrency setting for batch processing
-            const concurrency = this.plugin.settings.cloudUploadSettings.uploadConcurrency || 3;
+            const concurrency = this.plugin.settings.pasteHandling.cloud.uploadConcurrency || 3;
             const queue = new ConcurrentQueue(concurrency);
+
             const tasks = images.map(image => async () => {
-                // Skip image if its format is in the skipFormats list
                 if (skipFormats.includes(image.extension.toLowerCase())) {
-                    console.log(`Skipping image ${image.name} (format in skip list)`);
                     return;
                 }
-
                 imageCount++;
-
-                // Construct the new file path based on conversion settings
-                const newFileName = `${image.basename}.${outputFormat.toLowerCase()}`;
-                const newFilePath = image.path.replace(image.name, newFileName);
-
-                const imageData = await this.app.vault.readBinary(image);
-                const imageBlob = new Blob([imageData], { type: `image/${image.extension}` });
-
-                const processedImageData = await this.imageProcessor.processImage(
-                    imageBlob,
-                    outputFormat,
-                    quality,
-                    colorDepth,
-                    resizeMode as ResizeMode,
-                    desiredWidth,
-                    desiredHeight,
-                    desiredLength,
-                    enlargeOrReduce as EnlargeReduce,
-                    allowLargerFiles
-                );
-
-                // Capture old path before any rename
-                const oldPath = image.path;
-
-                // Rename the file if the format has changed
-                if (oldPath !== newFilePath) {
-                    await this.app.fileManager.renameFile(image, newFilePath);
-                }
-
-                // Get the renamed file using the new path
-                const renamedFile = this.app.vault.getAbstractFileByPath(newFilePath) as TFile;
-
-                if (!renamedFile) {
-                    console.error('Failed to find renamed file:', newFilePath);
-                    return;
-                }
-
-                // Modify the file content with processed image data
-                await this.app.vault.modifyBinary(renamedFile, processedImageData);
+                await this.processSingleImage(image, outputFormat, quality, colorDepth, resizeMode, desiredWidth, desiredHeight, desiredLength, enlargeOrReduce, allowLargerFiles);
 
                 const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
                 statusBarItemEl.setText(
@@ -347,21 +382,17 @@ export class BatchImageProcessor {
 
         } catch (error) {
             console.error('Error processing images in folder:', error);
-            new Notice(`Error processing images: ${error.message}`);
+            new Notice(`Error processing images: ${error.message} `);
         }
     }
 
-    // Add helper methods like getImageFiles, shouldProcessImage, etc. (update accordingly)
     private getImageFiles(folder: TFolder, recursive: boolean): TFile[] {
-        // Derive images by path prefix rather than relying on TFolder.children,
-        // so tests using thin fakes don't need to wire children relationships.
         const allFiles = this.app.vault.getFiles();
         const folderPath = folder.path.replace(/\\/g, '/').replace(/\/$/, '');
         const prefix = folderPath === '' || folderPath === '/' ? '' : `${folderPath}/`;
 
         const isImmediateChild = (filePath: string) => {
             if (!prefix) {
-                // Root folder: immediate children have no '/'
                 return filePath.indexOf('/') === -1;
             }
             if (!filePath.startsWith(prefix)) return false;
@@ -379,28 +410,23 @@ export class BatchImageProcessor {
         });
     }
 
-
-
     async processAllVaultImages(): Promise<void> {
         try {
             const {
-                ProcessAllVaultconvertTo: convertTo,
-                ProcessAllVaultquality: quality,
-                ProcessAllVaultResizeModalresizeMode: resizeMode,
-                ProcessAllVaultResizeModaldesiredWidth: desiredWidth,
-                ProcessAllVaultResizeModaldesiredHeight: desiredHeight,
-                ProcessAllVaultResizeModaldesiredLength: desiredLength,
-                ProcessAllVaultEnlargeOrReduce: enlargeOrReduce,
-                allowLargerFiles,
-                ProcessAllVaultSkipFormats: skipFormatsSetting,
-                ProcessAllVaultskipImagesInTargetFormat: skipTargetFormat,
-            } = this.plugin.settings;
+                convertTo,
+                quality,
+                resizeMode,
+                desiredWidth,
+                desiredHeight,
+                desiredLength,
+                enlargeOrReduce,
+                skipFormats: skipFormatsSetting,
+                skipImagesInTargetFormat: skipTargetFormat,
+            } = this.plugin.settings.processAllVault;
+            const { revertToOriginalIfLarger } = this.plugin.settings.global;
+            const allowLargerFiles = !revertToOriginalIfLarger;
 
-            const isKeepOriginalFormat = convertTo === 'disabled';
-            const noCompression = quality === 1;
-            const noResize = resizeMode === 'None';
             const targetFormat = convertTo;
-
             const outputFormat =
                 convertTo === "disabled"
                     ? "ORIGINAL"
@@ -415,39 +441,17 @@ export class BatchImageProcessor {
 
             const imageFiles = await this.getAllImageFiles();
 
-            // If no images found at all
             if (imageFiles.length === 0) {
                 new Notice('No images found in the vault.');
                 return;
             }
 
-            // Check if all images are either in target format or in skip list
-            const allImagesSkippable = imageFiles.every(file =>
-                (file.extension === (isKeepOriginalFormat ? file.extension : targetFormat)) ||
-                skipFormats.includes(file.extension.toLowerCase())
-            );
-
-            // Early return with appropriate message if no processing is needed
-            if (allImagesSkippable && noCompression && noResize) {
-                if (isKeepOriginalFormat) {
-                    new Notice('No processing needed: All vault images are either in skip list or kept in original format with no compression or resizing.');
-                } else {
-                    new Notice(`No processing needed: All vault images are either in skip list or already in ${targetFormat.toUpperCase()} format with no compression or resizing.`);
-                }
-                return;
-            }
-
-            // Filter files that actually need processing
             const filesToProcess = imageFiles.filter(file =>
-                this.shouldProcessImage(file, isKeepOriginalFormat, targetFormat, skipFormats, skipTargetFormat)
+                this.shouldProcessImage(file, convertTo === 'disabled', targetFormat, skipFormats, skipTargetFormat)
             );
 
             if (filesToProcess.length === 0) {
-                if (skipTargetFormat) {
-                    new Notice(`No processing needed: All vault images are either in ${isKeepOriginalFormat ? 'their original' : targetFormat.toUpperCase()} format or in skip list.`);
-                } else {
-                    new Notice('No images found that need processing.');
-                }
+                new Notice('No images found that need processing.');
                 return;
             }
 
@@ -456,73 +460,12 @@ export class BatchImageProcessor {
             const startTime = Date.now();
             const totalImages = filesToProcess.length;
 
-            // Use uploadConcurrency setting for batch processing
-            const concurrency = this.plugin.settings.cloudUploadSettings.uploadConcurrency || 3;
+            const concurrency = this.plugin.settings.pasteHandling.cloud.uploadConcurrency || 3;
             const queue = new ConcurrentQueue(concurrency);
+
             const tasks = filesToProcess.map(image => async () => {
                 imageCount++;
-
-                const imageData = await this.app.vault.readBinary(image);
-                const imageBlob = new Blob([imageData], {
-                    type: `image/${image.extension}`,
-                });
-
-                const processedImageData = await this.imageProcessor.processImage(
-                    imageBlob,
-                    outputFormat,
-                    quality,
-                    colorDepth,
-                    resizeMode as ResizeMode,
-                    desiredWidth,
-                    desiredHeight,
-                    desiredLength,
-                    enlargeOrReduce as EnlargeReduce,
-                    allowLargerFiles
-                );
-
-                // Construct the new file path based on conversion settings
-                const newFileName = `${image.basename}.${outputFormat.toLowerCase()}`;
-                let newFilePath = image.path.replace(image.name, newFileName);
-
-                // Check for conflicts and generate unique name if necessary
-                // NOTE: Potential race condition on conflicts if multiple images map to same target?
-                // Assuming one-to-one mapping mostly.
-                if (
-                    image.path !== newFilePath &&
-                    this.app.vault.getAbstractFileByPath(newFilePath)
-                ) {
-                    newFilePath = await this.folderAndFilenameManagement.handleNameConflicts(
-                        image.parent?.path || "",
-                        newFileName
-                    );
-                }
-
-                // Capture old path before any rename
-                const oldPath = image.path;
-
-                // Rename the file if the format has changed
-                if (oldPath !== newFilePath) {
-                    await this.app.fileManager.renameFile(image, newFilePath);
-                }
-
-                // Get the renamed file using the new path
-                const renamedFile = this.app.vault.getAbstractFileByPath(newFilePath) as TFile;
-
-                if (!renamedFile) {
-                    console.error("Failed to find renamed file:", newFilePath);
-                    return;
-                }
-
-                // Modify the file content with processed image data
-                await this.app.vault.modifyBinary(renamedFile, processedImageData);
-
-                // Update links in all notes to point to the renamed file
-                if (oldPath !== newFilePath) {
-                    await this.plugin.vaultReferenceManager.updateReferences(oldPath, (loc) => {
-                        const updatedLinkPath = loc.link.replace(image.name, newFileName);
-                        return loc.original.replace(loc.link, updatedLinkPath);
-                    });
-                }
+                await this.processSingleImage(image, outputFormat, quality, colorDepth, resizeMode, desiredWidth, desiredHeight, desiredLength, enlargeOrReduce, allowLargerFiles);
 
                 const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
                 statusBarItemEl.setText(
@@ -545,20 +488,17 @@ export class BatchImageProcessor {
         }
     }
 
-    // Add helper methods like getAllImageFiles, shouldProcessImage, etc. (update accordingly)
     async getAllImageFiles(): Promise<TFile[]> {
         const allFiles = this.app.vault.getFiles();
         const imageFiles = allFiles.filter(file =>
             this.plugin.supportedImageFormats.isSupported(undefined, file.name)
         );
 
-        // Get images from canvas files
         const canvasFiles = allFiles.filter(file =>
             file instanceof TFile &&
             file.extension === 'canvas'
         );
 
-        // Process canvas files and collect image paths
         for (const canvasFile of canvasFiles) {
             const canvasImages = await this.getImagesFromCanvas(canvasFile);
             for (const imagePath of canvasImages) {
@@ -590,70 +530,32 @@ export class BatchImageProcessor {
         return images;
     }
 
+    private getLinkedImageFiles(noteFile: TFile): TFile[] {
+        const { resolvedLinks } = this.app.metadataCache;
+        const linksInCurrentNote = resolvedLinks[noteFile.path];
+
+        if (!linksInCurrentNote) return [];
+
+        return Object.keys(linksInCurrentNote)
+            .map(link => this.app.vault.getAbstractFileByPath(link))
+            .filter((file): file is TFile => file instanceof TFile && this.plugin.supportedImageFormats.isSupported(undefined, file.name));
+    }
+
     shouldProcessImage(image: TFile, isKeepOriginalFormat: boolean, targetFormat: string, skipFormats: string[], skipImagesInTargetFormat: boolean): boolean {
         const effectiveTargetFormat = isKeepOriginalFormat
             ? image.extension
             : targetFormat;
 
-        // Skip files with extensions in the skip list
         if (skipFormats.includes(image.extension.toLowerCase())) {
-            console.log(`Skipping ${image.name}: Format ${image.extension} is in skip list`);
             return false;
         }
 
-        // Skip images already in target format (or original format if disabled)
         if (skipImagesInTargetFormat &&
             image.extension === effectiveTargetFormat) {
-            console.log(`Skipping ${image.name}: Already in ${effectiveTargetFormat} format`);
             return false;
         }
 
         return true;
     }
 
-    // updateLinksInAllNotes removed
-    // updateLinksInNote removed
-    // escapeRegexCharacters removed
-    // updateCanvasFileLinks removed
-
-
-
-
-
-
-
-    // private async updateMarkdownLinks(noteFile: TFile, oldPath: string, newPath: string): Promise<void> {
-    //     const oldLinkText = this.escapeRegexCharacters(oldPath);
-    //     const newLinkText = this.escapeRegexCharacters(newPath);
-
-    //     const content = await this.app.vault.read(noteFile);
-    //     const newContent = content.replace(new RegExp(oldLinkText, 'g'), newLinkText);
-
-    //     if (content !== newContent) {
-    //         await this.app.vault.modify(noteFile, newContent);
-    //         console.log(`Links updated in ${noteFile.path}`);
-    //     }
-    // }
-
-    // private async updateCanvasLinks(canvasFile: TFile, oldPath: string, newPath: string): Promise<void> {
-    //     try {
-    //         const content = await this.app.vault.read(canvasFile);
-    //         const canvasData = JSON.parse(content);
-
-    //         let changesMade = false;
-    //         for (const node of canvasData.nodes) {
-    //             if (node.type === 'file' && node.file === oldPath) {
-    //                 node.file = newPath;
-    //                 changesMade = true;
-    //             }
-    //         }
-
-    //         if (changesMade) {
-    //             await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
-    //             console.log(`Links updated in canvas file ${canvasFile.path}`);
-    //         }
-    //     } catch (error) {
-    //         console.error('Error updating canvas file links:', error);
-    //     }
-    // }
 }

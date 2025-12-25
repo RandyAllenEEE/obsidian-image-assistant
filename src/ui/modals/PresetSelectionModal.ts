@@ -1,14 +1,14 @@
-import { Modal, Notice, App, Setting, ButtonComponent, DropdownComponent, TextComponent } from "obsidian";
+import { App, Modal, Notice, Setting, TFile, DropdownComponent, SliderComponent, ButtonComponent, TextComponent } from "obsidian";
 import {
-    ImageAssistantSettings,
-    ConversionPreset,
-    FilenamePreset,
     FolderPreset,
-    GlobalPreset,
-    AvailableVariablesModal
-} from "../../settings/ImageAssistantSettings";
-import { LinkFormatPreset } from "../../settings/LinkFormatSettings";
-import { NonDestructiveResizePreset } from "../../settings/NonDestructiveResizeSettings";
+    FilenamePreset,
+    ConversionPreset,
+    LinkFormatPreset,
+    NonDestructiveResizePreset,
+    GlobalPreset, // GlobalPreset is still used in this file, so it needs to be imported. Assuming it also moved to types.ts
+    ImageAssistantSettings // ImageAssistantSettings is still used in this file, so it needs to be imported. Assuming it also moved to types.ts
+} from "../../settings/types";
+import { AvailableVariablesModal } from "../../settings/SettingsModals";
 import { VariableProcessor } from "../../local/VariableProcessor";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
@@ -384,12 +384,12 @@ export class PresetSelectionModal extends Modal {
         // Format dropdown
         const formatDiv = componentRow1.createDiv("image-converter-grid-component");
         this.conversionPresetDropdown = new Setting(formatDiv)
-            .addDropdown((dropdown) => {
-                this.settings.conversionPresets.forEach((preset) => {
+            .addDropdown((dropdown: DropdownComponent) => {
+                this.settings.conversionPresets.forEach((preset: any) => {
                     dropdown.addOption(preset.name, preset.name);
                 });
                 dropdown.setValue(this.selectedConversionPreset.name);
-                dropdown.onChange((value) => {
+                dropdown.onChange((value: string) => {
                     this.selectedConversionPreset = this.settings.conversionPresets.find(preset => preset.name === value) || this.settings.conversionPresets[0];
                     this.updateConversionSettings(card);
                     this.updateProcessingPreview();
@@ -403,13 +403,13 @@ export class PresetSelectionModal extends Modal {
         // Link dropdown
         const linkDiv = componentRow1.createDiv("image-converter-grid-component");
         this.linkFormatPresetDropdown = new Setting(linkDiv)
-            .addDropdown((dropdown) => {
-                this.settings.linkFormatSettings.linkFormatPresets.forEach((preset) => {
+            .addDropdown((dropdown: DropdownComponent) => {
+                this.settings.linkFormatSettings.linkFormatPresets.forEach((preset: LinkFormatPreset) => {
                     dropdown.addOption(preset.name, preset.name);
                 });
                 dropdown.setValue(this.selectedLinkFormatPreset.name);
-                dropdown.onChange((value) => {
-                    this.selectedLinkFormatPreset = this.settings.linkFormatSettings.linkFormatPresets.find(preset => preset.name === value) || this.settings.linkFormatSettings.linkFormatPresets[0];
+                dropdown.onChange((value: string) => {
+                    this.selectedLinkFormatPreset = this.settings.linkFormatSettings.linkFormatPresets.find((preset: LinkFormatPreset) => preset.name === value) || this.settings.linkFormatSettings.linkFormatPresets[0];
                     this.updateProcessingPreview();
                 });
                 // Pre-fill with "Wiki/Md ▼" appearance
@@ -422,7 +422,7 @@ export class PresetSelectionModal extends Modal {
         const headerRow2 = this.processingCardContent.createDiv("image-converter-grid-header-row");
         headerRow2.createEl("div", { text: t("LABEL_RESIZE"), cls: "image-converter-grid-header" });
         const qualityHeader = headerRow2.createEl("div", {
-            text: `${t("LABEL_QUALITY")} ${this.selectedConversionPreset.quality}%`,
+            text: `${t("LABEL_QUALITY")} ${this.selectedConversionPreset.quality}% `,
             cls: "image-converter-grid-header image-converter-quality-header"
         });
 
@@ -432,13 +432,13 @@ export class PresetSelectionModal extends Modal {
         // Resize dropdown
         const resizeDiv = componentRow2.createDiv("image-converter-grid-component");
         this.resizePresetDropdown = new Setting(resizeDiv)
-            .addDropdown((dropdown) => {
-                this.settings.nonDestructiveResizeSettings.resizePresets.forEach((preset) => {
+            .addDropdown((dropdown: DropdownComponent) => {
+                this.settings.nonDestructiveResizeSettings.resizePresets.forEach((preset: NonDestructiveResizePreset) => {
                     dropdown.addOption(preset.name, preset.name);
                 });
                 dropdown.setValue(this.selectedResizePreset.name);
-                dropdown.onChange((value) => {
-                    this.selectedResizePreset = this.settings.nonDestructiveResizeSettings.resizePresets.find(preset => preset.name === value) || this.settings.nonDestructiveResizeSettings.resizePresets[0];
+                dropdown.onChange((value: string) => {
+                    this.selectedResizePreset = this.settings.nonDestructiveResizeSettings.resizePresets.find((preset: NonDestructiveResizePreset) => preset.name === value) || this.settings.nonDestructiveResizeSettings.resizePresets[0];
                     this.updateProcessingPreview();
                 });
                 // Pre-fill with "Default ▼" appearance
@@ -450,15 +450,15 @@ export class PresetSelectionModal extends Modal {
         // Quality slider
         const qualityDiv = componentRow2.createDiv("image-converter-grid-component");
         this.conversionQualitySetting = new Setting(qualityDiv)
-            .addSlider((slider) => {
+            .addSlider((slider: SliderComponent) => {
                 slider
                     .setLimits(0, 100, 1)
                     .setValue(this.selectedConversionPreset.quality)
                     .setDynamicTooltip()
-                    .onChange((value) => {
+                    .onChange((value: number) => {
                         this.selectedConversionPreset.quality = value;
                         // Update the quality header text
-                        qualityHeader.textContent = `${t("LABEL_QUALITY")} ${value}%`;
+                        qualityHeader.textContent = `${t("LABEL_QUALITY")} ${value}% `;
                         this.updateProcessingPreview();
                     });
                 slider.sliderEl.addClass("image-converter-quality-slider");
@@ -507,7 +507,7 @@ export class PresetSelectionModal extends Modal {
                         }
                     });
             })
-            .addButton((button) => {
+            .addButton((button: ButtonComponent) => {
                 button
                     .setButtonText(t("BUTTON_APPLY"))
                     .setCta()
@@ -547,7 +547,7 @@ export class PresetSelectionModal extends Modal {
         const miniSetting = new Setting(contentEl)
             .addDropdown((dropdown: DropdownComponent) => {
                 dropdown.addOption("none", t("OPTION_NONE"));
-                this.settings.globalPresets.forEach((preset) => {
+                this.settings.globalPresets.forEach((preset: GlobalPreset) => {
                     dropdown.addOption(preset.name, preset.name);
                 });
                 dropdown.setValue(
@@ -555,38 +555,38 @@ export class PresetSelectionModal extends Modal {
                         ? this.selectedGlobalPreset.name
                         : "none"
                 );
-                dropdown.onChange((value) => {
+                dropdown.onChange((value: string) => {
                     if (value === "none") {
                         this.selectedGlobalPreset = null;
                         // Reset to current settings
                         this.selectedConversionPreset =
                             this.settings.conversionPresets.find(
-                                (preset) => preset.name === this.settings.selectedConversionPreset
+                                (preset: ConversionPreset) => preset.name === this.settings.selectedConversionPreset
                             ) || this.settings.conversionPresets[0];
                         this.selectedFilenamePreset =
                             this.settings.filenamePresets.find(
-                                (preset) => preset.name === this.settings.selectedFilenamePreset
+                                (preset: FilenamePreset) => preset.name === this.settings.selectedFilenamePreset
                             ) || this.settings.filenamePresets[0];
                         this.selectedFolderPreset =
                             this.settings.folderPresets.find(
-                                (preset) => preset.name === this.settings.selectedFolderPreset
+                                (preset: FolderPreset) => preset.name === this.settings.selectedFolderPreset
                             ) || this.settings.folderPresets[0];
                         this.selectedLinkFormatPreset =
                             this.settings.linkFormatSettings.linkFormatPresets.find(
-                                (preset) => preset.name === this.settings.linkFormatSettings.selectedLinkFormatPreset
+                                (preset: LinkFormatPreset) => preset.name === this.settings.linkFormatSettings.selectedLinkFormatPreset
                             ) || this.settings.linkFormatSettings.linkFormatPresets[0];
                         this.selectedResizePreset =
                             this.settings.nonDestructiveResizeSettings.resizePresets.find(
-                                (preset) => preset.name === this.settings.nonDestructiveResizeSettings.selectedResizePreset
+                                (preset: NonDestructiveResizePreset) => preset.name === this.settings.nonDestructiveResizeSettings.selectedResizePreset
                             ) || this.settings.nonDestructiveResizeSettings.resizePresets[0];
                     } else {
                         this.selectedGlobalPreset =
-                            this.settings.globalPresets.find((preset) => preset.name === value) || null;
+                            this.settings.globalPresets.find((preset: GlobalPreset) => preset.name === value) || null;
                         if (this.selectedGlobalPreset) {
                             // Apply global preset
                             this.selectedConversionPreset =
                                 this.settings.conversionPresets.find(
-                                    (preset) => preset.name === (this.selectedGlobalPreset?.conversionPreset || '')
+                                    (preset: ConversionPreset) => preset.name === (this.selectedGlobalPreset?.conversionPreset || '')
                                 ) || this.settings.conversionPresets[0];
                             this.selectedFilenamePreset =
                                 this.settings.filenamePresets.find(
@@ -598,11 +598,11 @@ export class PresetSelectionModal extends Modal {
                                 ) || this.settings.folderPresets[0];
                             this.selectedLinkFormatPreset =
                                 this.settings.linkFormatSettings.linkFormatPresets.find(
-                                    (preset) => preset.name === (this.selectedGlobalPreset?.linkFormatPreset || '')
+                                    (preset: LinkFormatPreset) => preset.name === (this.selectedGlobalPreset?.linkFormatPreset || '')
                                 ) || this.settings.linkFormatSettings.linkFormatPresets[0];
                             this.selectedResizePreset =
                                 this.settings.nonDestructiveResizeSettings.resizePresets.find(
-                                    (preset) => preset.name === (this.selectedGlobalPreset?.resizePreset || '')
+                                    (preset: NonDestructiveResizePreset) => preset.name === (this.selectedGlobalPreset?.resizePreset || '')
                                 ) || this.settings.nonDestructiveResizeSettings.resizePresets[0];
                         }
                     }
@@ -717,12 +717,12 @@ export class PresetSelectionModal extends Modal {
 
         // Generate preview text with current settings
         const formatText = this.selectedConversionPreset.name;
-        const qualityText = `${this.selectedConversionPreset.quality}%`;
+        const qualityText = `${this.selectedConversionPreset.quality}% `;
         const linkText = this.selectedLinkFormatPreset.name;
         const resizeText = this.selectedResizePreset.name;
 
         // Create compact preview display
-        const previewText = `${formatText} ${qualityText} • ${linkText} • ${resizeText}`;
+        const previewText = `${formatText} ${qualityText} • ${linkText} • ${resizeText} `;
 
         // Update the text content of the preview div
         this.processingCardPreview.textContent = previewText;

@@ -85,8 +85,8 @@ export class ImageResizer {
 
         );
         // Get settings from plugin
-        this.resizeSensitivity = this.plugin.settings.resizeSensitivity;
-        this.scrollwheelModifier = this.plugin.settings.scrollwheelModifier;
+        this.resizeSensitivity = this.plugin.settings.interactiveResize.sensitivity;
+        this.scrollwheelModifier = this.plugin.settings.interactiveResize.scrollModifier;
 
         // Initialize the debounced function
         this.debouncedSaveToCache = debounce(
@@ -121,7 +121,7 @@ export class ImageResizer {
         }
 
         // Only register events if master switch is enabled
-        if (this.plugin.settings.isImageResizeEnabled) {
+        if (this.plugin.settings.interactiveResize.enabled) {
             // Create a fresh scope for this view
             this.eventScope = new Component();
             this.registerEditorEvents();
@@ -586,7 +586,7 @@ export class ImageResizer {
                 newHeight = Math.max(minSize, this.initialHeight * scaleFactor);
             } else {
                 // Handle-based resizing (internal images)
-                const isAspectFixed = this.plugin.settings.isDragAspectRatioLocked;
+                const isAspectFixed = this.plugin.settings.interactiveResize.aspectRatioLocked;
 
                 switch (this.currentHandle) {
                     case 'n': // Top handle: adjust height from the top
@@ -646,7 +646,7 @@ export class ImageResizer {
                     ["nw", "ne", "sw", "se"].includes(this.currentHandle || "")) {
                     // For proportional handles, always maintain aspect ratio
                     newHeight = newWidth / aspectRatio;
-                } else if (this.plugin.settings.isDragAspectRatioLocked) {
+                } else if (this.plugin.settings.interactiveResize.aspectRatioLocked) {
                     // For edge handles, only maintain ratio if aspect ratio lock is enabled
                     newHeight = newWidth / aspectRatio;
                 }
@@ -739,7 +739,7 @@ export class ImageResizer {
      */
     private handleMouseWheel = (event: WheelEvent) => {
         // Early permission check
-        if (!this.plugin.settings.isScrollResizeEnabled) return;
+        if (!this.plugin.settings.interactiveResize.scrollEnabled) return;
         if (!this.checkModifierKey(event)) return;
 
         // Get the target element
@@ -812,7 +812,7 @@ export class ImageResizer {
         if (!imageName) return;
 
         // Check if alignment is enabled
-        const isAlignmentEnabled = this.plugin.settings.isImageAlignmentEnabled;
+        const isAlignmentEnabled = this.plugin.settings.alignment.enabled;
 
         // 注：我们不再使用缓存和 hash，改为基于 Pipe Syntax
         /*
@@ -871,7 +871,7 @@ export class ImageResizer {
         if (!this.isResizingPermitted('scroll')) return false;
 
         // Read the current setting to honor runtime changes
-        const currentModifier = this.plugin?.settings?.scrollwheelModifier ?? this.scrollwheelModifier;
+        const currentModifier = this.plugin?.settings?.interactiveResize.scrollModifier ?? this.scrollwheelModifier;
         switch (currentModifier) {
             case "Shift":
                 return event.shiftKey;
@@ -902,7 +902,7 @@ export class ImageResizer {
         const delta = Math.sign(event.deltaY);
 
         // Use resizeSensitivity from plugin settings
-        const sensitivity = this.plugin.settings.resizeSensitivity;
+        const sensitivity = this.plugin.settings.interactiveResize.sensitivity;
         const scaleFactor = delta < 0 ? (1 + sensitivity) : (1 / (1 + sensitivity));
 
         let newWidth;
@@ -1044,7 +1044,7 @@ export class ImageResizer {
         // Handle external/cloud images based on settings
         if (this.isExternalLink(imageName)) {
             // Check cloud upload settings
-            const cloudSettings = this.plugin.settings.cloudUploadSettings;
+            const cloudSettings = this.plugin.settings.pasteHandling.cloud;
 
             // Only update markdown if user chose 'actual' size source
             if (cloudSettings.imageSizeSource !== 'actual') {
@@ -1090,7 +1090,7 @@ export class ImageResizer {
                     // Calculate new size string based on handler
                     let newSizeString = `${Math.round(newWidth)}`; // default
 
-                    const isAspectLocked = this.plugin.settings.isDragAspectRatioLocked;
+                    const isAspectLocked = this.plugin.settings.interactiveResize.aspectRatioLocked;
 
                     // Logic to determine format based on handle and locking
                     if (this.isExternalLink(imageName)) {
@@ -1336,23 +1336,23 @@ export class ImageResizer {
         if (!this.markdownView) return false;
 
         // Check master switch first
-        if (!this.plugin.settings.isImageResizeEnabled) {
+        if (!this.plugin.settings.interactiveResize.enabled) {
             return false;
         }
 
         // Check reading mode permissions
         const state = this.markdownView.getState();
         const isReadingMode = state.mode === "preview";
-        if (isReadingMode && !this.plugin.settings.isResizeInReadingModeEnabled) {
+        if (isReadingMode && !this.plugin.settings.interactiveResize.readingModeEnabled) {
             return false;
         }
 
         // Check specific resize type permissions
         if (resizeType === 'drag') {
-            return this.plugin.settings.isDragResizeEnabled;
+            return this.plugin.settings.interactiveResize.dragEnabled;
         }
         if (resizeType === 'scroll') {
-            return this.plugin.settings.isScrollResizeEnabled;
+            return this.plugin.settings.interactiveResize.scrollEnabled;
         }
 
         return false;

@@ -1,0 +1,35 @@
+src/cloud/CloudImageHandler.ts(299,54): error TS7006: Parameter 'd' implicitly has an 'any' type.
+src/cloud/CloudImageHandler.ts(299,90): error TS7006: Parameter 'd' implicitly has an 'any' type.
+src/cloud/CloudImageHandler.ts(304,33): error TS7006: Parameter 'domain' implicitly has an 'any' type.
+src/cloud/uploader/picgo.ts(10,15): error TS2305: Module '"../../settings/ImageAssistantSettings"' has no exported member 'CloudUploadSettings'.
+src/cloud/uploader/picgoCore.ts(8,15): error TS2305: Module '"../../settings/ImageAssistantSettings"' has no exported member 'CloudUploadSettings'.
+src/local/BatchImageProcessor.ts(49,22): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(50,25): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(271,22): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(272,25): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(416,23): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(417,26): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/FolderAndFilenameManagement.ts(374,29): error TS2339: Property 'outputFormat' does not exist on type 'ImageAssistantSettings'.
+src/local/ImageProcessor.ts(6,10): error TS2459: Module '"../settings/defaults"' declares 'ImageAssistantSettings' locally, but it is not exported.
+src/local/LocalImageHandler.ts(159,92): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(160,88): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(161,84): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(162,111): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(163,113): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(245,100): error TS2345: Argument of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/types").LinkFormatPreset' is not assignable to parameter of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/LinkFormatSettings").LinkFormatPreset'.
+  Type 'LinkFormatPreset' is missing the following properties from type 'LinkFormatPreset': linkFormat, pathFormat, prependCurrentDir, hideFolders
+src/local/LocalImageHandler.ts(272,100): error TS2345: Argument of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/types").LinkFormatPreset' is not assignable to parameter of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/LinkFormatSettings").LinkFormatPreset'.
+  Type 'LinkFormatPreset' is missing the following properties from type 'LinkFormatPreset': linkFormat, pathFormat, prependCurrentDir, hideFolders
+src/local/LocalImageHandler.ts(281,103): error TS2345: Argument of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/types").LinkFormatPreset' is not assignable to parameter of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/LinkFormatSettings").LinkFormatPreset'.
+  Type 'LinkFormatPreset' is missing the following properties from type 'LinkFormatPreset': linkFormat, pathFormat, prependCurrentDir, hideFolders
+src/local/VariableProcessor.ts(984,48): error TS2339: Property 'quality' does not exist on type 'ImageAssistantSettings'.
+src/local/VariableProcessor.ts(1086,48): error TS2339: Property 'quality' does not exist on type 'ImageAssistantSettings'.
+src/main.ts(46,10): error TS2459: Module '"./settings/defaults"' declares 'ImageAssistantSettings' locally, but it is not exported.
+src/main.ts(945,14): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/main.ts(949,14): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/main.ts(990,14): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/main.ts(994,14): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/settings/defaults.ts(32,14): error TS2739: Type '{ folderPresets: ({ type: "DEFAULT"; name: string; } | { type: "ROOT"; name: string; } | { type: "CURRENT"; name: string; })[]; selectedFolderPreset: string; filenamePresets: { name: string; customTemplate: string; skipRenamePatterns: string; conflictResolution: "increment"; }[]; ... 14 more ...; resizeCursorLocatio...' is missing the following properties from type 'ImageAssistantSettings': conversionPresets, selectedConversionPreset, globalPresets, selectedGlobalPreset
+src/settings/sections/CaptionSettingsSection.ts(32,58): error TS2345: Argument of type '"SETTING_IMG_CAPTION_SECTION"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/CleanerSettingsSection.ts(31,38): error TS2345: Argument of type '"SETTING_CLEANER_TRASH_OBSIDIAN"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/CleanerSettingsSection.ts(32,36): error TS2345: Argument of type '"SETTING_CLEANER_TRASH_SYSTEM"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.

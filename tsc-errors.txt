@@ -1,0 +1,109 @@
+src/cloud/CloudImageHandler.ts(299,54): error TS7006: Parameter 'd' implicitly has an 'any' type.
+src/cloud/CloudImageHandler.ts(299,90): error TS7006: Parameter 'd' implicitly has an 'any' type.
+src/cloud/CloudImageHandler.ts(304,33): error TS7006: Parameter 'domain' implicitly has an 'any' type.
+src/cloud/uploader/picgo.ts(10,15): error TS2305: Module '"../../settings/ImageAssistantSettings"' has no exported member 'CloudUploadSettings'.
+src/cloud/uploader/picgoCore.ts(8,15): error TS2305: Module '"../../settings/ImageAssistantSettings"' has no exported member 'CloudUploadSettings'.
+src/local/BatchImageProcessor.ts(49,22): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(50,25): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(271,22): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(272,25): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(416,23): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/BatchImageProcessor.ts(417,26): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/local/FolderAndFilenameManagement.ts(374,29): error TS2339: Property 'outputFormat' does not exist on type 'ImageAssistantSettings'.
+src/local/ImageProcessor.ts(6,10): error TS2459: Module '"../settings/defaults"' declares 'ImageAssistantSettings' locally, but it is not exported.
+src/local/LocalImageHandler.ts(159,92): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(160,88): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(161,84): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(162,111): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(163,113): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/local/LocalImageHandler.ts(245,100): error TS2345: Argument of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/types").LinkFormatPreset' is not assignable to parameter of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/LinkFormatSettings").LinkFormatPreset'.
+  Type 'LinkFormatPreset' is missing the following properties from type 'LinkFormatPreset': linkFormat, pathFormat, prependCurrentDir, hideFolders
+src/local/LocalImageHandler.ts(272,100): error TS2345: Argument of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/types").LinkFormatPreset' is not assignable to parameter of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/LinkFormatSettings").LinkFormatPreset'.
+  Type 'LinkFormatPreset' is missing the following properties from type 'LinkFormatPreset': linkFormat, pathFormat, prependCurrentDir, hideFolders
+src/local/LocalImageHandler.ts(281,103): error TS2345: Argument of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/types").LinkFormatPreset' is not assignable to parameter of type 'import("G:/Randy/temp/plugins/obsidian-image-assistant/src/settings/LinkFormatSettings").LinkFormatPreset'.
+  Type 'LinkFormatPreset' is missing the following properties from type 'LinkFormatPreset': linkFormat, pathFormat, prependCurrentDir, hideFolders
+src/local/VariableProcessor.ts(984,48): error TS2339: Property 'quality' does not exist on type 'ImageAssistantSettings'.
+src/local/VariableProcessor.ts(1086,48): error TS2339: Property 'quality' does not exist on type 'ImageAssistantSettings'.
+src/main.ts(46,10): error TS2459: Module '"./settings/defaults"' declares 'ImageAssistantSettings' locally, but it is not exported.
+src/main.ts(945,14): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/main.ts(949,14): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/main.ts(990,14): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/main.ts(994,14): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/settings/defaults.ts(32,14): error TS2739: Type '{ folderPresets: ({ type: "DEFAULT"; name: string; } | { type: "ROOT"; name: string; } | { type: "CURRENT"; name: string; })[]; selectedFolderPreset: string; filenamePresets: { name: string; customTemplate: string; skipRenamePatterns: string; conflictResolution: "increment"; }[]; ... 14 more ...; resizeCursorLocatio...' is missing the following properties from type 'ImageAssistantSettings': conversionPresets, selectedConversionPreset, globalPresets, selectedGlobalPreset
+src/settings/sections/CaptionSettingsSection.ts(32,58): error TS2345: Argument of type '"SETTING_IMG_CAPTION_SECTION"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/CleanerSettingsSection.ts(31,38): error TS2345: Argument of type '"SETTING_CLEANER_TRASH_OBSIDIAN"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/CleanerSettingsSection.ts(32,36): error TS2345: Argument of type '"SETTING_CLEANER_TRASH_SYSTEM"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/CleanerSettingsSection.ts(33,36): error TS2345: Argument of type '"SETTING_CLEANER_TRASH_CUSTOM"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/LocalPresetsSection.ts(13,5): error TS2459: Module '"../types"' declares 'OutputFormat' locally, but it is not exported.
+src/settings/sections/LocalPresetsSection.ts(16,5): error TS2305: Module '"../types"' has no exported member 'ResizeDimension'.
+src/settings/sections/LocalPresetsSection.ts(18,5): error TS2724: '"../types"' has no exported member named 'ResizeScaleMode'. Did you mean 'ResizeMode'?
+src/settings/sections/LocalPresetsSection.ts(19,5): error TS2305: Module '"../types"' has no exported member 'ResizeUnits'.
+src/settings/sections/LocalPresetsSection.ts(21,5): error TS2305: Module '"../types"' has no exported member 'PathFormat'.
+src/settings/sections/LocalPresetsSection.ts(22,5): error TS2305: Module '"../types"' has no exported member 'LinkFormat'.
+src/settings/sections/LocalPresetsSection.ts(129,52): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/settings/sections/LocalPresetsSection.ts(136,80): error TS7006: Parameter 'presetItem' implicitly has an 'any' type.
+src/settings/sections/LocalPresetsSection.ts(192,30): error TS7006: Parameter 'presetItem' implicitly has an 'any' type.
+src/settings/sections/LocalPresetsSection.ts(446,114): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/settings/sections/LocalPresetsSection.ts(449,118): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/settings/sections/LocalPresetsSection.ts(525,33): error TS2352: Conversion of type '{ name: string; linkFormat: string; pathFormat: string; }' to type 'T' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  'T' could be instantiated with an arbitrary type which could be unrelated to '{ name: string; linkFormat: string; pathFormat: string; }'.
+src/settings/sections/LocalPresetsSection.ts(527,33): error TS2352: Conversion of type '{ name: string; outputFormat: string; quality: number; colorDepth: number; resizeMode: "None"; desiredWidth: number; desiredHeight: number; desiredLongestEdge: number; enlargeOrReduce: "Auto"; ... 4 more ...; ffmpegPreset: string; }' to type 'T' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  'T' could be instantiated with an arbitrary type which could be unrelated to '{ name: string; outputFormat: string; quality: number; colorDepth: number; resizeMode: "None"; desiredWidth: number; desiredHeight: number; desiredLongestEdge: number; enlargeOrReduce: "Auto"; ... 4 more ...; ffmpegPreset: string; }'.
+src/settings/sections/LocalPresetsSection.ts(529,33): error TS2352: Conversion of type '{ name: string; resizeDimension: string; }' to type 'T' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  'T' could be instantiated with an arbitrary type which could be unrelated to '{ name: string; resizeDimension: string; }'.
+src/settings/sections/LocalPresetsSection.ts(750,149): error TS2339: Property 'linkFormat' does not exist on type 'LinkFormatPreset'.
+src/settings/sections/LocalPresetsSection.ts(750,184): error TS2339: Property 'linkFormat' does not exist on type 'LinkFormatPreset'.
+src/settings/sections/LocalPresetsSection.ts(751,171): error TS2339: Property 'pathFormat' does not exist on type 'LinkFormatPreset'.
+src/settings/sections/LocalPresetsSection.ts(751,206): error TS2339: Property 'pathFormat' does not exist on type 'LinkFormatPreset'.
+src/settings/sections/LocalPresetsSection.ts(762,59): error TS2339: Property 'linkFormat' does not exist on type 'LinkFormatPreset'.
+src/settings/sections/LocalPresetsSection.ts(762,134): error TS2339: Property 'pathFormat' does not exist on type 'LinkFormatPreset'.
+src/settings/sections/LocalPresetsSection.ts(797,352): error TS2339: Property 'resizeDimension' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(797,392): error TS2339: Property 'resizeDimension' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(804,16): error TS2339: Property 'resizeDimension' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(804,176): error TS2339: Property 'width' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(804,205): error TS2339: Property 'width' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(805,16): error TS2339: Property 'resizeDimension' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(805,179): error TS2339: Property 'height' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(805,209): error TS2339: Property 'height' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(820,50): error TS2339: Property 'resizeDimension' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(821,16): error TS2339: Property 'resizeDimension' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/LocalPresetsSection.ts(821,86): error TS2339: Property 'width' does not exist on type 'NonDestructiveResizePreset'.
+src/settings/sections/OtherSettingsSection.ts(11,20): error TS2345: Argument of type '"SETTING_MODAL_BEHAVIOR_NAME"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/OtherSettingsSection.ts(14,36): error TS2345: Argument of type '"SETTING_MODAL_BEHAVIOR_ALWAYS"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/OtherSettingsSection.ts(15,35): error TS2345: Argument of type '"SETTING_MODAL_BEHAVIOR_NEVER"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/OtherSettingsSection.ts(16,33): error TS2345: Argument of type '"SETTING_MODAL_BEHAVIOR_ASK"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/OtherSettingsSection.ts(25,20): error TS2345: Argument of type '"SETTING_ENABLE_CONTEXT_MENU_NAME"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/OtherSettingsSection.ts(26,20): error TS2345: Argument of type '"SETTING_ENABLE_CONTEXT_MENU_DESC"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/OtherSettingsSection.ts(36,20): error TS2345: Argument of type '"SETTING_SHOW_NOTIFICATION_NAME"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/OtherSettingsSection.ts(37,20): error TS2345: Argument of type '"SETTING_SHOW_NOTIFICATION_DESC"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/OtherSettingsSection.ts(47,20): error TS2345: Argument of type '"SETTING_REVERT_IF_LARGER_NAME"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/sections/OtherSettingsSection.ts(48,20): error TS2345: Argument of type '"SETTING_REVERT_IF_LARGER_DESC"' is not assignable to parameter of type '"LOADING_OCR_LATEX" | "LOADING_OCR_MARKDOWN" | "LOADING_UPLOAD" | "LOADING_PROCESS" | "SETTING_PASTE_MODE_NAME" | "SETTING_PASTE_MODE_DESC" | "SETTING_PASTE_MODE_LOCAL" | ... 529 more ... | "MSG_DELETE_CLOUD_ERROR"'.
+src/settings/SettingsModals.ts(121,14): error TS7006: Parameter 'presetItem' implicitly has an 'any' type.
+src/settings/SettingsModals.ts(124,14): error TS7006: Parameter 'presetItem' implicitly has an 'any' type.
+src/settings/SettingsModals.ts(127,14): error TS7006: Parameter 'presetItem' implicitly has an 'any' type.
+src/settings/SettingsModals.ts(130,14): error TS7006: Parameter 'presetItem' implicitly has an 'any' type.
+src/settings/SettingsModals.ts(133,14): error TS7006: Parameter 'presetItem' implicitly has an 'any' type.
+src/settings/types.ts(1,10): error TS2614: Module '"../main"' has no exported member 'OutputFormat'. Did you mean to use 'import OutputFormat from "../main"' instead?
+src/ui/ContextMenu.ts(20,10): error TS2305: Module '"../settings/ImageAssistantSettings"' has no exported member 'ConfirmDialog'.
+src/ui/ImageCaption.ts(71,73): error TS7006: Parameter 'ext' implicitly has an 'any' type.
+src/ui/ImageCaption.ts(109,73): error TS7006: Parameter 'ext' implicitly has an 'any' type.
+src/ui/modals/ProcessCurrentNote.ts(392,18): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/ui/modals/ProcessCurrentNote.ts(393,21): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/ui/modals/ProcessFolderModal.ts(844,19): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/ui/modals/ProcessFolderModal.ts(845,22): error TS7006: Parameter 'format' implicitly has an 'any' type.
+src/ui/modals/ProcessSingleImageModal.ts(5,10): error TS2305: Module '"../../settings/ImageAssistantSettings"' has no exported member 'OutputFormat'.
+src/ui/modals/ProcessSingleImageModal.ts(5,24): error TS2305: Module '"../../settings/ImageAssistantSettings"' has no exported member 'ResizeMode'.
+src/ui/modals/ProcessSingleImageModal.ts(5,36): error TS2305: Module '"../../settings/ImageAssistantSettings"' has no exported member 'EnlargeReduce'.
+src/ui/modals/ProcessSingleImageModal.ts(50,76): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/ui/modals/ProcessSingleImageModal.ts(51,80): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/ui/modals/ProcessSingleImageModal.ts(182,88): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/ui/modals/ProcessSingleImageModal.ts(188,47): error TS2339: Property 'pngquantExecutablePath' does not exist on type '{ name: string; }'.
+src/ui/modals/ProcessSingleImageModal.ts(214,84): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/ui/modals/ProcessSingleImageModal.ts(220,47): error TS2339: Property 'ffmpegExecutablePath' does not exist on type '{ name: string; }'.
+src/ui/modals/ProcessSingleImageModal.ts(463,119): error TS2345: Argument of type '{ name: string; }' is not assignable to parameter of type 'ConversionPreset'.
+  Type '{ name: string; }' is missing the following properties from type 'ConversionPreset': outputFormat, quality, colorDepth, resizeMode, and 6 more.
+src/ui/modals/ProcessSingleImageModal.ts(499,21): error TS7006: Parameter 'preset' implicitly has an 'any' type.
+src/ui/modals/ProcessSingleImageModal.ts(512,21): error TS2345: Argument of type '{ name: string; outputFormat: string; quality: number; colorDepth: number; resizeMode: "None"; desiredWidth: number; desiredHeight: number; desiredLongestEdge: number; enlargeOrReduce: "Auto"; allowLargerFiles: false; skipConversionPatterns: string; pngquantExecutablePath: string; pngquantQuality: string; } | { ...;...' is not assignable to parameter of type 'ConversionPreset | undefined'.
+  Type '{ name: string; outputFormat: string; quality: number; colorDepth: number; resizeMode: "None"; desiredWidth: number; desiredHeight: number; desiredLongestEdge: number; enlargeOrReduce: "Auto"; allowLargerFiles: false; skipConversionPatterns: string; pngquantExecutablePath: string; pngquantQuality: string; }' is not assignable to type 'ConversionPreset'.
+    Types of property 'enlargeOrReduce' are incompatible.
+      Type '"Auto"' is not assignable to type 'EnlargeReduce'.

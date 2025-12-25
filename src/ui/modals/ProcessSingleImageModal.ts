@@ -2,7 +2,8 @@
 import { App, Modal, Notice, TFile, Setting, MarkdownView } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { createAnyLinkRegex } from "../../utils/RegexPatterns";
-import { OutputFormat, ResizeMode, EnlargeReduce } from "../../settings/ImageAssistantSettings";
+import { ImageAssistantSettings } from "../../settings/defaults";
+import { OutputFormat, ResizeMode, EnlargeReduce, ConversionPreset } from "../../settings/types";
 import { t } from "../../lang/helpers";
 
 export interface SingleImageModalSettings {
@@ -43,31 +44,31 @@ export class ProcessSingleImageModal extends Modal {
 
     private loadModalSettings() {
         const savedSettings = this.plugin.settings.singleImageModalSettings;
+        this.modalSettings = { ...this.getInitialSettings(), ...savedSettings };
+    }
 
-        if (savedSettings) {
-            this.modalSettings = { ...savedSettings };
-        } else {
-            const avifPreset = this.plugin.settings.conversionPresets.find(preset => preset.outputFormat === "AVIF");
-            const pngQuantPreset = this.plugin.settings.conversionPresets.find(preset => preset.outputFormat === "PNGQUANT");
+    private getInitialSettings(): SingleImageModalSettings {
+        const resizeModeValue = this.plugin.settings.processCurrentNote.resizeMode as ResizeMode;
+        const avifPreset = this.plugin.settings.conversionPresets.find((preset: ConversionPreset) => preset.outputFormat === "AVIF");
+        const pngQuantPreset = this.plugin.settings.conversionPresets.find((preset: ConversionPreset) => preset.outputFormat === "PNGQUANT");
 
-            this.modalSettings = {
-                conversionPresetName: this.plugin.settings.selectedConversionPreset,
-                outputFormat: this.plugin.settings.outputFormat,
-                quality: this.plugin.settings.quality,
-                colorDepth: this.plugin.settings.colorDepth,
-                resizeMode: this.plugin.settings.resizeMode,
-                desiredWidth: this.plugin.settings.desiredWidth,
-                desiredHeight: this.plugin.settings.desiredHeight,
-                desiredLongestEdge: this.plugin.settings.desiredLongestEdge,
-                enlargeOrReduce: this.plugin.settings.enlargeOrReduce,
-                allowLargerFiles: this.plugin.settings.allowLargerFiles,
-                pngquantExecutablePath: pngQuantPreset?.pngquantExecutablePath || "",
-                pngquantQuality: pngQuantPreset?.pngquantQuality || "",
-                ffmpegExecutablePath: avifPreset?.ffmpegExecutablePath || "",
-                ffmpegCrf: avifPreset?.ffmpegCrf !== undefined ? avifPreset.ffmpegCrf : (this.plugin.settings.ffmpegCrf !== undefined ? this.plugin.settings.ffmpegCrf : 23),
-                ffmpegPreset: avifPreset?.ffmpegPreset || this.plugin.settings.ffmpegPreset || "medium",
-            };
-        }
+        return {
+            conversionPresetName: this.plugin.settings.selectedConversionPreset,
+            outputFormat: this.plugin.settings.global.outputFormat,
+            quality: this.plugin.settings.global.quality,
+            colorDepth: this.plugin.settings.global.colorDepth,
+            resizeMode: resizeModeValue,
+            desiredWidth: this.plugin.settings.processCurrentNote.desiredWidth,
+            desiredHeight: this.plugin.settings.processCurrentNote.desiredHeight,
+            desiredLongestEdge: this.plugin.settings.processCurrentNote.desiredLength,
+            enlargeOrReduce: this.plugin.settings.processCurrentNote.enlargeOrReduce as EnlargeReduce,
+            allowLargerFiles: !this.plugin.settings.global.revertToOriginalIfLarger,
+            pngquantExecutablePath: pngQuantPreset?.pngquantExecutablePath || "",
+            pngquantQuality: pngQuantPreset?.pngquantQuality || "",
+            ffmpegExecutablePath: avifPreset?.ffmpegExecutablePath || "",
+            ffmpegCrf: avifPreset?.ffmpegCrf !== undefined ? avifPreset.ffmpegCrf : (this.plugin.settings.global.ffmpegCrf !== undefined ? this.plugin.settings.global.ffmpegCrf : 23),
+            ffmpegPreset: avifPreset?.ffmpegPreset || this.plugin.settings.global.ffmpegPreset || "medium",
+        };
     }
 
     private saveModalSettings() {
@@ -96,7 +97,7 @@ export class ProcessSingleImageModal extends Modal {
         const windowWidth = window.innerWidth;
         const maxWidth = 800;
         const modalWidth = Math.min(windowWidth * 0.9, maxWidth);
-        this.modalEl.setCssStyles({ width: `${modalWidth}px` });
+        this.modalEl.setCssStyles({ width: `${modalWidth} px` });
 
         this.renderSettings();
         await this.generatePreview();  // Initial preview, may be skipped.
@@ -124,10 +125,10 @@ export class ProcessSingleImageModal extends Modal {
                     "WEBP": "WEBP",
                     "JPEG": "JPEG",
                     "PNG": "PNG",
-                    "ORIGINAL": "Original (Compress)",
-                    "NONE": "None (No Conversion)",
-                    "PNGQUANT": "pngquant (PNG Only)",
-                    "AVIF": "AVIF (via ffmpeg)"
+                    "ORIGINAL": t("OPTION_COMPRESS"),
+                    "NONE": t("OPTION_NO_CONVERSION"),
+                    "PNGQUANT": t("OPTION_PNGQUANT"),
+                    "AVIF": t("OPTION_AVIF")
                 };
                 Object.entries(options).forEach(([key, value]) => {
                     dropdown.addOption(key, value);
@@ -177,7 +178,7 @@ export class ProcessSingleImageModal extends Modal {
         if (this.modalSettings.outputFormat === "PNGQUANT") {
             new Setting(this.conversionSettingsContainer)
                 .setName(t("MODAL_PNGQUANT_PATH"))
-                .setTooltip("Provide full-path to the binary file. It can be inside vault or anywhere in your file system.")
+                .setTooltip(t("TOOLTIP_PNGQUANT_PATH"))
                 .addText(text => {
                     const pngquantPreset = this.plugin.settings.conversionPresets.find(preset => preset.outputFormat === "PNGQUANT");
                     pngquantPreset?.pngquantExecutablePath || "";
@@ -195,7 +196,7 @@ export class ProcessSingleImageModal extends Modal {
 
             new Setting(this.conversionSettingsContainer)
                 .setName(t("MODAL_PNGQUANT_QUALITY"))
-                .setTooltip("Instructs pngquant to use the least amount of colors required to meet or exceed the max quality. min and max are numbers in range 0 (worst) to 100 (perfect).")
+                .setTooltip(t("TOOLTIP_PNGQUANT_QUALITY"))
                 .addText(text => {
                     text.setValue(this.modalSettings.pngquantQuality)
                         .onChange(async value => {
@@ -209,7 +210,7 @@ export class ProcessSingleImageModal extends Modal {
         if (this.modalSettings.outputFormat === "AVIF") {
             new Setting(this.conversionSettingsContainer)
                 .setName(t("MODAL_FFMPEG_PATH"))
-                .setTooltip("Provide full-path to the binary file. It can be inside vault or anywhere in your file system.")
+                .setTooltip(t("TOOLTIP_PNGQUANT_PATH"))
                 .addText(text => {
                     const avifPreset = this.plugin.settings.conversionPresets.find(preset => preset.outputFormat === "AVIF");
                     avifPreset?.ffmpegExecutablePath || "";
@@ -227,7 +228,7 @@ export class ProcessSingleImageModal extends Modal {
 
             new Setting(this.conversionSettingsContainer)
                 .setName(t("MODAL_FFMPEG_CRF"))
-                .setDesc("Lower values mean better quality (larger file size). 0 is lossless.")
+                .setDesc(t("DESC_FFMPEG_CRF"))
                 .addSlider(slider => {
                     slider.setLimits(0, 63, 1)
                         .setValue(this.modalSettings.ffmpegCrf)
@@ -270,12 +271,13 @@ export class ProcessSingleImageModal extends Modal {
             .addDropdown(dropdown => {
                 const resizeOptions: Record<ResizeMode, string> = {
                     "None": "None",
-                    "Fit": "Fit",
-                    "Fill": "Fill",
-                    "LongestEdge": "Longest Edge",
-                    "ShortestEdge": "Shortest Edge",
-                    "Width": "Width",
-                    "Height": "Height",
+                    "Fit": t("OPTION_RESIZE_FIT"),
+                    "Fill": t("OPTION_RESIZE_FILL"),
+                    "Scale": "Scale",
+                    "LongestEdge": t("OPTION_RESIZE_LONGEST"),
+                    "ShortestEdge": t("OPTION_RESIZE_SHORTEST"),
+                    "Width": t("OPTION_RESIZE_WIDTH"),
+                    "Height": t("OPTION_RESIZE_HEIGHT"),
                 };
                 Object.entries(resizeOptions).forEach(([key, value]) => {
                     dropdown.addOption(key, value);
@@ -294,7 +296,8 @@ export class ProcessSingleImageModal extends Modal {
                 new Setting(this.resizeSettingsContainer)
                     .setName(t("MODAL_DESIRED_WIDTH"))
                     .addText(text => {
-                        text.setValue(this.modalSettings.desiredWidth.toString())
+                        text.setPlaceholder(t("PLACEHOLDER_WIDTH"))
+                            .setValue(this.modalSettings.desiredWidth.toString())
                             .onChange(async (value) => {
                                 this.modalSettings.desiredWidth = parseInt(value, 10) || 0;
                                 if (!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))) {
@@ -308,7 +311,8 @@ export class ProcessSingleImageModal extends Modal {
                 new Setting(this.resizeSettingsContainer)
                     .setName(t("MODAL_DESIRED_HEIGHT"))
                     .addText(text => {
-                        text.setValue(this.modalSettings.desiredHeight.toString())
+                        text.setPlaceholder(t("PLACEHOLDER_HEIGHT"))
+                            .setValue(this.modalSettings.desiredHeight.toString())
                             .onChange(async (value) => {
                                 this.modalSettings.desiredHeight = parseInt(value, 10) || 0;
                                 if (!(["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat))) {
@@ -338,9 +342,10 @@ export class ProcessSingleImageModal extends Modal {
                 .setName(t("MODAL_ENLARGE_REDUCE"))
                 .addDropdown(dropdown => {
                     const enlargeReduceOptions: Record<EnlargeReduce, string> = {
-                        "Auto": "Auto",
-                        "Reduce": "Only Reduce",
-                        "Enlarge": "Only Enlarge",
+                        "Always": t("OPTION_ALWAYS"),
+                        "Reduce": t("OPTION_REDUCE"),
+                        "Enlarge": t("OPTION_ENLARGE"),
+                        "Auto": t("OPTION_AUTO")
                     };
                     Object.entries(enlargeReduceOptions).forEach(([key, value]) => {
                         dropdown.addOption(key, value);
@@ -385,7 +390,7 @@ export class ProcessSingleImageModal extends Modal {
 
         try {
             const fileBuffer = await this.app.vault.readBinary(this.imageFile);
-            const imageBlob = new Blob([fileBuffer], { type: this.imageFile.extension ? `image/${this.imageFile.extension}` : 'application/octet-stream' });
+            const imageBlob = new Blob([fileBuffer], { type: this.imageFile.extension ? `image / ${this.imageFile.extension} ` : 'application/octet-stream' });
 
             // No need to get conversionPreset here; preview uses modalSettings
 
@@ -404,7 +409,7 @@ export class ProcessSingleImageModal extends Modal {
                 this.plugin.settings
             );
 
-            const blob = new Blob([processedImageBuffer], { type: `image/${this.modalSettings.outputFormat.toLowerCase()}` });
+            const blob = new Blob([processedImageBuffer], { type: `image / ${this.modalSettings.outputFormat.toLowerCase()} ` });
             this.previewImageUrl = URL.createObjectURL(blob);
 
             const img = this.previewContainer.createEl("img", {
@@ -432,12 +437,12 @@ export class ProcessSingleImageModal extends Modal {
         //No Changes needed
         try {
             const fileBuffer = await this.app.vault.readBinary(this.imageFile);
-            const imageFile = new File([fileBuffer], this.imageFile.name, { type: this.imageFile.extension ? `image/${this.imageFile.extension}` : 'application/octet-stream' });
+            const imageFile = new File([fileBuffer], this.imageFile.name, { type: this.imageFile.extension ? `image / ${this.imageFile.extension} ` : 'application/octet-stream' });
 
             const destinationPath: string = this.imageFile.parent?.path || "";
             let newFilename: string = (this.modalSettings.outputFormat === "NONE" || this.modalSettings.outputFormat === "ORIGINAL")
                 ? this.imageFile.name
-                : `${this.imageFile.name.substring(0, this.imageFile.name.lastIndexOf("."))}.${this.modalSettings.outputFormat.toLowerCase()}`;
+                : `${this.imageFile.name.substring(0, this.imageFile.name.lastIndexOf("."))}.${this.modalSettings.outputFormat.toLowerCase()} `;
 
             //  Handle PNGQuant extension
             if (this.modalSettings.outputFormat === "PNGQUANT") {
@@ -545,7 +550,7 @@ export class ProcessSingleImageModal extends Modal {
 
 
             // --- File Creation/Replacement ---
-            if (processedImageBuffer && this.plugin.settings.revertToOriginalIfLarger && processedImageBuffer.byteLength > originalSize) {
+            if (processedImageBuffer && this.plugin.settings.global.revertToOriginalIfLarger && processedImageBuffer.byteLength > originalSize) {
                 this.plugin.showSizeComparisonNotification(originalSize, processedImageBuffer.byteLength);
                 new Notice(`Using original image for "${this.imageFile.name}" as processed image is larger.`, 1000);
                 // We don't create/modify a file, but the link *might* need updating (if format changed).
@@ -562,7 +567,7 @@ export class ProcessSingleImageModal extends Modal {
                         // Now modify the *renamed* file.
                         await this.app.vault.modifyBinary(renamedFile, processedImageBuffer);
                     } else {
-                        new Notice(`Error: Could not find renamed file at ${fullPath}`);
+                        new Notice(`Error: Could not find renamed file at ${fullPath} `);
                         return; // Exit if rename failed
                     }
                 } else {
@@ -580,7 +585,7 @@ export class ProcessSingleImageModal extends Modal {
                 const fileContent = editor.getValue();
 
                 // const escapedOriginalName = this.imageFile.name.replace(/[[\]]/g, '\\$&');
-                // const linkRegex = new RegExp(`!\\[\\[${escapedOriginalName}(?:\\|[^\\]]+)?\\]\\[\\]|!\\[.*?\\]\\((${escapedOriginalName})(?:\\?[^)]*)?\\)`, 'g');
+                // const linkRegex = new RegExp(`!\\[\\[${ escapedOriginalName }(?: \\| [^\\]] +)?\\]\\[\\] | !\\[.*?\\]\\((${ escapedOriginalName }) (?: \\?[^)] *)?\\)`, 'g');
 
                 // Use centralized factory
                 const linkRegex = createAnyLinkRegex(this.imageFile.name);
@@ -601,7 +606,7 @@ export class ProcessSingleImageModal extends Modal {
 
         } catch (error) {
             console.error("Error processing image:", error);
-            new Notice(`Failed to process image: ${error.message}`, 2000);
+            new Notice(`Failed to process image: ${error.message} `, 2000);
         } finally {
             if (this.previewImageUrl) {
                 URL.revokeObjectURL(this.previewImageUrl);

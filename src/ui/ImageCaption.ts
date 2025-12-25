@@ -57,7 +57,7 @@ export class ImageCaption {
             });
         }
 
-        const { enableImageCaptions, skipCaptionExtensions } = this.plugin.settings;
+        const { enabled: enableImageCaptions, skipExtensions: skipCaptionExtensions } = this.plugin.settings.captions;
         if (!enableImageCaptions) return;
 
         // Get the actual width of the image
@@ -105,7 +105,7 @@ export class ImageCaption {
     }
 
     applyCaptionClass() {
-        const { enableImageCaptions, skipCaptionExtensions } = this.plugin.settings;
+        const { enabled: enableImageCaptions, skipExtensions: skipCaptionExtensions } = this.plugin.settings.captions;
         const excludedExtensions = skipCaptionExtensions.split(',').map(ext => ext.trim().toLowerCase());
 
         if (enableImageCaptions) {
@@ -127,20 +127,20 @@ export class ImageCaption {
         }
 
         const {
-            captionFontSize,
-            captionColor,
-            captionFontStyle,
-            captionBackgroundColor,
-            captionPadding,
-            captionBorderRadius,
-            captionMarginTop,
-            captionOpacity,
-            captionFontWeight,
-            captionTextTransform,
-            captionLetterSpacing,
-            captionBorder,
-            captionAlignment
-        } = this.plugin.settings;
+            fontSize: captionFontSize,
+            color: captionColor,
+            fontStyle: captionFontStyle,
+            backgroundColor: captionBackgroundColor,
+            padding: captionPadding,
+            borderRadius: captionBorderRadius,
+            marginTop: captionMarginTop,
+            opacity: captionOpacity,
+            fontWeight: captionFontWeight,
+            textTransform: captionTextTransform,
+            letterSpacing: captionLetterSpacing,
+            border: captionBorder,
+            alignment: captionAlignment
+        } = this.plugin.settings.captions;
 
         styleElement.textContent = `
             /* Container styling (covers internal, external, and tagged containers) */

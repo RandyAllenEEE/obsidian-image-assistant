@@ -28,55 +28,38 @@ import { ImageCaption } from './ui/ImageCaption';
 import { ImageResizer } from "./ui/ImageResizer";
 import { t } from './lang/helpers';
 import { BatchImageProcessor } from "./local/BatchImageProcessor";
-import { ProcessSingleImageModal } from "./ui/modals/ProcessSingleImageModal";
-import { ProcessFolderModal } from "./ui/modals/ProcessFolderModal";
-import { ProcessCurrentNote } from "./ui/modals/ProcessCurrentNote";
-import { ProcessAllVaultModal } from "./ui/modals/ProcessAllVaultModal"
+import { UnifiedBatchProcessModal } from "./ui/modals/UnifiedBatchProcessModal";
+import { ProcessSingleImageModal } from "./ui/modals/ProcessSingleImageModal"; // Keep Single Image for now as it might be used differently
+
 
 
 import { UploaderManager } from "./cloud/uploader/index";
-import { CloudLinkFormatter } from "./cloud/CloudLinkFormatter";
+
 import { UploadHelper, ImageLink } from "./utils/UploadHelper";
 import { UploadHistoryManager } from "./utils/UploadHistoryManager";
 import { basename, dirname, extname, join } from "path-browserify";
 import { resolve } from "path-browserify";
 
 // Settings tab and all DEFAULTS
-import {
-    ImageAssistantSettings,
-    DEFAULT_SETTINGS,
-    ImageConverterSettingTab,
-    ConversionPreset,
-    FilenamePreset,
-    FolderPreset,
-    ConfirmDialog
-} from "./settings/ImageAssistantSettings";
+import { ImageConverterSettingTab } from "./settings/ImageAssistantSettings";
+import { ImageAssistantSettings, DEFAULT_SETTINGS } from "./settings/defaults";
+import { ConversionPreset, FilenamePreset, FolderPreset } from "./settings/types";
+import { ConfirmDialog } from "./settings/SettingsModals";
 
 import { PresetSelectionModal } from "./ui/modals/PresetSelectionModal";
-import {
-    UploadErrorDialog,
-    NoReferenceUploadDialog,
-    SingleReferenceUploadDialog,
-    MultiReferenceUploadDialog,
-    ImageMatchResult,
-    BatchUploadConfirmDialog,
-    BatchUploadTaskInfo,
-    BatchDownloadPreviewDialog,
-    BatchDownloadProgressDialog,
-    DownloadTaskInfo,
-    FileMatchInfo,  // 添加 FileMatchInfo 导入
-    ImageMatch // Add ImageMatch import
-} from "./ui/modals/UploadModals";
+
 import { VaultReferenceManager } from "./utils/VaultReferenceManager";
-import { CloudImageDeleter } from "./cloud/CloudImageDeleter";
+
 import { NetworkImageDownloader } from "./cloud/NetworkImageDownloader";
 import { UnusedFileCleanerModal } from "./utils/UnusedFileCleanerModal";
 import { PasteModeConfigModal } from "./ui/modals/PasteModeConfigModal";
-import { NotificationManager } from "./utils/NotificationManager";
+
 
 // OCR imports
 import { EditorContentInserter } from "./utils/EditorContentInserter";
 import { getLatexProvider, getMarkdownProvider } from "./ocr/providers/index";
+import { CloudImageHandler } from "./cloud/CloudImageHandler";
+import { LocalImageHandler } from "./local/LocalImageHandler";
 
 /**
  * Folder Selector Modal for selecting a folder from the vault
@@ -141,12 +124,7 @@ export default class ImageConverterPlugin extends Plugin {
     batchImageProcessor: BatchImageProcessor;
     // Single Image Modal
     processSingleImageModal: ProcessSingleImageModal;
-    // Process whole fodler
-    processFolderModal: ProcessFolderModal;
-    // Processcurrent note/canvas
-    processCurrentNote: ProcessCurrentNote;
-    // ProcessAllVault
-    processAllVaultModal: ProcessAllVaultModal
+
     // captions
     // captionManager: ImageCaptionManager; // Deprecated
     // upload history
@@ -155,12 +133,31 @@ export default class ImageConverterPlugin extends Plugin {
     uploadHelper: UploadHelper;
     // network image downloader
     networkDownloader: NetworkImageDownloader;
+
+    // Handlers
+    cloudImageHandler: CloudImageHandler;
+    localImageHandler: LocalImageHandler;
+
+    // Concurrent Queue
+    public concurrentQueue: ConcurrentQueue;
+
+    // Proxy methods for external access
+    public async uploadSingleFile(file: TFile) {
+        await this.cloudImageHandler.uploadSingleFile(file);
+    }
+
+    public async uploadFolderImagesPublic(folderPath: string, recursive: boolean) {
+        await this.cloudImageHandler.uploadFolderImages(folderPath, recursive);
+    }
+
+    public async downloadFolderImagesPublic(folderPath: string, recursive: boolean) {
+        await this.networkDownloader.downloadFolderImages(folderPath, recursive);
+    }
+
     // unused file cleaner
     unusedFileCleaner: UnusedFileCleanerModal | null = null;
     // Vault Reference Manager
     vaultReferenceManager: VaultReferenceManager;
-    // Concurrent queue for rate limiting
-    private concurrentQueue: ConcurrentQueue;
 
     private processedImage: ArrayBuffer | null = null;
     private temporaryBuffers: (ArrayBuffer | Blob | null)[] = [];
@@ -190,17 +187,26 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Initialize concurrent queue with settings
         this.concurrentQueue = new ConcurrentQueue(
-            this.settings.cloudUploadSettings.uploadConcurrency
+            this.settings.pasteHandling.cloud.uploadConcurrency
         );
 
         // Initialize core components immediately
         this.supportedImageFormats = new SupportedImageFormats(this.app);
 
+        // Initialize Handlers
+        this.cloudImageHandler = new CloudImageHandler(
+            this.app,
+            this,
+            new UploaderManager(this.settings.pasteHandling.cloud.uploader, this),
+            this.concurrentQueue
+        );
+        this.localImageHandler = new LocalImageHandler(this.app, this);
+
         // Ensure temp folder exists for cloud upload
         await this.ensureTempFolderExists();
 
         // 应用编辑模式 Wrap 开关
-        if (this.settings.enableEditModeWrap) {
+        if (this.settings.alignment.enableEditModeWrap) {
             document.body.addClass('image-assistant-wrap-in-edit-mode');
         } else {
             document.body.removeClass('image-assistant-wrap-in-edit-mode');
@@ -216,7 +222,7 @@ export default class ImageConverterPlugin extends Plugin {
         this.imageCaption = new ImageCaption(this);
 
         // Register StateManager refresh events
-        if (this.settings.isImageAlignmentEnabled || this.settings.enableImageCaptions) {
+        if (this.settings.alignment.enabled || this.settings.captions.enabled) {
             this.registerEvent(
                 this.app.workspace.on('file-open', (file) => {
                     if (file) {
@@ -257,12 +263,12 @@ export default class ImageConverterPlugin extends Plugin {
             this.initializeComponents();
 
             // Apply Image Alignment and Resizing when switching Live to Reading mode etc.
-            if (this.settings.isImageAlignmentEnabled || this.settings.isImageResizeEnabled || this.settings.enableImageCaptions) {
+            if (this.settings.alignment.enabled || this.settings.interactiveResize.enabled || this.settings.captions.enabled) {
                 this.registerEvent(
                     this.app.workspace.on('layout-change', () => {
                         this.imageStateManager?.refreshAllImages();
 
-                        if (this.settings.isImageResizeEnabled) {
+                        if (this.settings.interactiveResize.enabled) {
                             const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
                             if (activeView) {
                                 this.imageResizer?.onLayoutChange(activeView);
@@ -302,14 +308,14 @@ export default class ImageConverterPlugin extends Plugin {
         // Initialize base components first
         this.variableProcessor = new VariableProcessor(this.app, this.settings);
         this.linkFormatter = new LinkFormatter(this.app);
-        this.imageProcessor = new ImageProcessor(this.supportedImageFormats);
+        this.imageProcessor = new ImageProcessor(this.app, this.supportedImageFormats);
         this.vaultReferenceManager = new VaultReferenceManager(this.app);
 
         // Initialize History Manager
         this.historyManager = new UploadHistoryManager(this.app, this);
         await this.historyManager.init();
 
-        if (this.settings.isImageResizeEnabled) {
+        if (this.settings.interactiveResize.enabled) {
             // Resizer initialized above/together with StateManager now
             // kept here for layout ready logic
             // this.imageResizer = new ImageResizer(this);
@@ -358,7 +364,7 @@ export default class ImageConverterPlugin extends Plugin {
         );
 
         // Initialize context menu if enabled
-        if (this.settings.enableContextMenu) {
+        if (this.settings.global.enableContextMenu) {
             this.contextMenu = new ContextMenu(
                 this.app,
                 this,
@@ -383,21 +389,33 @@ export default class ImageConverterPlugin extends Plugin {
                     });
 
                     // Add "Upload to cloud" option for images in cloud mode
-                    if (this.settings.pasteHandlingMode === 'cloud') {
+                    if (this.settings.pasteHandling.mode === 'cloud') {
                         menu.addItem((item) => {
                             item.setTitle(t("MENU_UPLOAD_CLOUD"))
                                 .setIcon("cloud-upload")
                                 .onClick(async () => {
-                                    await this.uploadSingleFile(file);
+                                    await this.cloudImageHandler.uploadSingleFile(file);
                                 });
                         });
                     }
+                } else if (file instanceof TFile && file.extension === 'md') {
+                    // Context menu for Markdown Notes (Batch Operations)
+
+                    // 1. Local Process
+                    menu.addItem((item) => {
+                        item.setTitle(t("CMD_PROCESS_CURRENT_NOTE") || "Process Images in Note")
+                            .setIcon("cog")
+                            .onClick(() => {
+                                new UnifiedBatchProcessModal(this.app, this, "note", file, "local_process").open();
+                            });
+                    });
+
                 } else if (file instanceof TFolder) {
                     menu.addItem((item) => {
                         item.setTitle(t("MENU_PROCESS_FOLDER_IMAGES"))
                             .setIcon("cog")
                             .onClick(() => {
-                                new ProcessFolderModal(this.app, this, file.path, this.batchImageProcessor).open();
+                                new UnifiedBatchProcessModal(this.app, this, "folder", file, "local_process").open();
                             });
                     });
                 }
@@ -421,11 +439,7 @@ export default class ImageConverterPlugin extends Plugin {
             id: 'process-all-vault-images',
             name: t("CMD_PROCESS_ALL_VAULT"),
             callback: () => {
-                if (!this.batchImageProcessor) {
-                    new Notice(t("MSG_PLUGIN_INITIALIZING"));
-                    return;
-                }
-                new ProcessAllVaultModal(this.app, this, this.batchImageProcessor).open();
+                new UnifiedBatchProcessModal(this.app, this, "vault", null, "local_process").open();
             }
         });
 
@@ -433,13 +447,9 @@ export default class ImageConverterPlugin extends Plugin {
             id: 'process-all-images-current-note',
             name: t("CMD_PROCESS_CURRENT_NOTE"),
             callback: () => {
-                if (!this.batchImageProcessor) {
-                    new Notice(t("MSG_PLUGIN_INITIALIZING"));
-                    return;
-                }
                 const activeFile = this.app.workspace.getActiveFile();
                 if (activeFile) {
-                    new ProcessCurrentNote(this.app, this, activeFile, this.batchImageProcessor).open();
+                    new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "local_process").open();
                 } else {
                     new Notice(t("MSG_NO_ACTIVE_FILE"));
                 }
@@ -452,73 +462,23 @@ export default class ImageConverterPlugin extends Plugin {
             callback: () => this.commandOpenSettingsTab()
         });
 
-        // 批量上传当前笔记的所有本地图片到图床
-        this.addCommand({
-            id: 'upload-all-images',
-            name: t("CMD_UPLOAD_ALL"),
-            callback: async () => {
-                // 只在图床模式下可用
-                if (this.settings.pasteHandlingMode !== 'cloud') {
-                    new Notice(t("MSG_ONLY_CLOUD_MODE"));
-                    return;
-                }
-                await this.uploadAllImages();
-            }
-        });
-
-        // 批量下载当前笔记的所有网络图片到本地
-        this.addCommand({
-            id: 'download-all-images',
-            name: t("CMD_DOWNLOAD_ALL"),
-            callback: async () => {
-                await this.downloadAllImages();
-            }
-        });
-
-        // 批量上传文件夹内的所有本地图片到图床
-        this.addCommand({
-            id: 'upload-folder-images',
-            name: t("CMD_UPLOAD_FOLDER"),
-            callback: async () => {
-                // 只在图床模式下可用
-                if (this.settings.pasteHandlingMode !== 'cloud') {
-                    new Notice(t("MSG_ONLY_CLOUD_MODE"));
-                    return;
-                }
-                // 打开文件夹选择器
-                new FolderSelectorModal(this.app, async (folder) => {
-                    // 询问用户是否包含子文件夹
-                    const recursive = await new Promise<boolean>((resolve) => {
-                        const modal = new Modal(this.app);
-                        modal.titleEl.setText(t("DIALOG_FOLDER_UPLOAD_TITLE"));
-                        modal.contentEl.createEl("p", { text: t("DIALOG_FOLDER_UPLOAD_DESC") });
-
-                        const buttonContainer = modal.contentEl.createDiv({ cls: "modal-button-container" });
-                        buttonContainer.createEl("button", { text: t("DIALOG_FOLDER_UPLOAD_CURRENT_ONLY") })
-                            .addEventListener("click", () => {
-                                modal.close();
-                                resolve(false);
-                            });
-                        buttonContainer.createEl("button", { text: t("DIALOG_FOLDER_UPLOAD_INCLUDE_SUBFOLDERS"), cls: "mod-cta" })
-                            .addEventListener("click", () => {
-                                modal.close();
-                                resolve(true);
-                            });
-
-                        modal.open();
-                    });
-
-                    await this.uploadFolderImages(folder.path, recursive);
-                }).open();
-            }
-        });
-
         // 清理无用文件
         this.addCommand({
             id: 'clean-unused-files',
             name: t("CMD_CLEAN_UNUSED"),
             callback: () => {
                 new UnusedFileCleanerModal(this.app, this).open();
+            }
+        });
+
+        // 批量处理文件夹内的所有图片
+        this.addCommand({
+            id: 'process-folder-images',
+            name: t("MENU_PROCESS_FOLDER_IMAGES"),
+            callback: async () => {
+                new FolderSelectorModal(this.app, async (folder: TFolder) => {
+                    new UnifiedBatchProcessModal(this.app, this, "folder", folder, "local_process").open();
+                }).open();
             }
         });
 
@@ -580,20 +540,14 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Clean up modals
         [
-            this.processSingleImageModal,
-            this.processFolderModal,
-            this.processCurrentNote,
-            this.processAllVaultModal
+            this.processSingleImageModal
         ].forEach(modal => {
             if (modal?.close) modal.close();
         });
 
         // Clean up any open modals
         [
-            this.processSingleImageModal,
-            this.processFolderModal,
-            this.processCurrentNote,
-            this.processAllVaultModal
+            this.processSingleImageModal
         ].forEach(modal => {
             if (modal?.close) modal.close();
         });
@@ -604,17 +558,42 @@ export default class ImageConverterPlugin extends Plugin {
 
     // Load settings method
     async loadSettings() {
-        const data = await this.loadData();
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+        const loadedData = await this.loadData();
 
-        // 向后兼容：迁移拼写错误的设置项
-        // isImageResizeEnbaled -> isImageResizeEnabled
-        if (data && 'isImageResizeEnbaled' in data && !('isImageResizeEnabled' in data)) {
-            console.log('[Settings Migration] Migrating isImageResizeEnbaled to isImageResizeEnabled');
-            this.settings.isImageResizeEnabled = data.isImageResizeEnbaled;
-            // 保存迁移后的设置
-            await this.saveSettings();
-        }
+        // Deep merge helper
+        const deepMerge = (target: any, source: any): any => {
+            if (typeof target !== 'object' || target === null) {
+                return source;
+            }
+            if (typeof source !== 'object' || source === null) {
+                return target;
+            }
+
+            const output = { ...target };
+
+            for (const key in source) {
+                if (source.hasOwnProperty(key)) {
+                    if (source[key] instanceof Array) {
+                        // Arrays are overwritten, not merged (usually desired for lists)
+                        // But for stability, if source has array, we take it.
+                        output[key] = source[key];
+                    } else if (typeof source[key] === 'object' && source[key] !== null) {
+                        output[key] = deepMerge(target[key], source[key]);
+                    } else {
+                        output[key] = source[key];
+                    }
+                }
+            }
+            return output;
+        };
+
+        this.settings = deepMerge(DEFAULT_SETTINGS, loadedData);
+
+        // Ensure critical sections exist even if deepMerge missed something (e.g. new sections)
+        if (!this.settings.global) this.settings.global = { ...DEFAULT_SETTINGS.global };
+        if (!this.settings.pasteHandling) this.settings.pasteHandling = { ...DEFAULT_SETTINGS.pasteHandling };
+        if (!this.settings.processCurrentNote) this.settings.processCurrentNote = { ...DEFAULT_SETTINGS.processCurrentNote };
+        if (!this.settings.processAllVault) this.settings.processAllVault = { ...DEFAULT_SETTINGS.processAllVault };
     }
 
     // Save settings method
@@ -692,7 +671,7 @@ export default class ImageConverterPlugin extends Plugin {
     private getEffectivePasteMode(): 'local' | 'cloud' | 'disabled' {
         const activeFile = this.app.workspace.getActiveFile();
         if (!activeFile) {
-            return this.settings.pasteHandlingMode;
+            return this.settings.pasteHandling.mode;
         }
 
         const cache = this.app.metadataCache.getFileCache(activeFile);
@@ -705,7 +684,7 @@ export default class ImageConverterPlugin extends Plugin {
             }
         }
 
-        return this.settings.pasteHandlingMode;
+        return this.settings.pasteHandling.mode;
     }
 
     /**
@@ -818,7 +797,6 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     private dropPasteRegisterEvents() {
-        // On mobile DROP events are not supported, but lets still check as a precaution
         if (Platform.isMobile) return;
 
         // Drop event (Obsidian editor - primary handlers)
@@ -842,10 +820,9 @@ export default class ImageConverterPlugin extends Plugin {
                     fileData.push({ name: file.name, type: file.type, file });
                 }
 
-                // Check if we should process these files
                 const hasSupportedFiles = fileData.some(data =>
                     this.supportedImageFormats.isSupported(data.type, data.name) &&
-                    !this.folderAndFilenameManagement.matchesPatterns(data.name, this.settings.neverProcessFilenames)
+                    !this.folderAndFilenameManagement.matchesPatterns(data.name, this.settings.pasteHandling.neverProcessFilenames)
                 );
 
                 if (hasSupportedFiles) {
@@ -862,10 +839,10 @@ export default class ImageConverterPlugin extends Plugin {
 
                     if (effectiveMode === 'cloud') {
                         // Cloud mode: upload to image hosting
-                        await this.handleDropCloud(fileData, editor, pos);
+                        await this.cloudImageHandler.handleDrop(evt, editor);
                     } else {
                         // Local mode: use original converter logic
-                        await this.handleDrop(fileData, editor, evt, pos);
+                        await this.localImageHandler.handleDrop(evt, editor);
                     }
                 }
             })
@@ -892,12 +869,11 @@ export default class ImageConverterPlugin extends Plugin {
                 // Get clipboard text for URL detection
                 const clipboardText = evt.clipboardData.getData('text/plain');
 
-                // Check if we should process these items
                 const hasSupportedItems = itemData.some(data =>
                     data.kind === "file" &&
                     data.file &&
                     this.supportedImageFormats.isSupported(data.type, data.file.name) &&
-                    !this.folderAndFilenameManagement.matchesPatterns(data.file.name, this.settings.neverProcessFilenames)
+                    !this.folderAndFilenameManagement.matchesPatterns(data.file.name, this.settings.pasteHandling.neverProcessFilenames)
                 );
 
                 if (hasSupportedItems) {
@@ -914,691 +890,21 @@ export default class ImageConverterPlugin extends Plugin {
 
                     if (effectiveMode === 'cloud') {
                         // Cloud mode: upload to image hosting
-                        await this.handlePasteCloud(itemData, editor, cursor, clipboardText);
+                        await this.cloudImageHandler.handlePaste(evt, editor);
                     } else {
                         // Local mode: use original converter logic
-                        await this.handlePaste(itemData, editor, cursor);
+                        await this.localImageHandler.handlePaste(evt, editor);
                     }
-                } else if (this.settings.pasteHandlingMode === 'cloud' && clipboardText) {
+                } else if (this.settings.pasteHandling.mode === 'cloud' && clipboardText) {
                     // Check if pasted text contains image URLs (for URL auto-upload)
-                    await this.handlePasteTextCloud(clipboardText, editor, cursor, evt);
+                    // Use the CloudImageHandler to handle text paste
+                    await this.cloudImageHandler.handlePasteText(clipboardText, editor, cursor, evt);
                 }
             })
         );
     }
 
-    private async handleDrop(fileData: { name: string; type: string; file: File }[], editor: Editor, evt: DragEvent, cursor: EditorPosition) {
 
-        // Step 1: Filter Supported Files
-        // - Filter the incoming `fileData` to keep only the files that are supported by the plugin (using `isSupported`).
-        const supportedFiles = fileData
-            .filter(data => {
-                // console.log(`Dropped file: ${data.name}, file.type: ${data.type}`);
-                return this.supportedImageFormats.isSupported(data.type, data.name)
-            })
-            .map(data => data.file);
-
-        // Step 2: Check for Active File
-        // - Return early if no supported files are found or if there's no active file in the Obsidian workspace.
-        if (supportedFiles.length === 0) return;
-
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) {
-            new Notice('No active file detected.');
-            return;
-        }
-
-        // Step 3: Map Files to Processing Promises
-        // - Create an array of promises, each responsible for processing one file.
-        // - This allows for sequential processing, avoiding concurrency issues.
-        const filePromises = supportedFiles.map((file) => {
-            // Create inserter and placeholder immediately for EACH file
-            // This ensures sequential cursor placement: [Loading 1][Loading 2]...
-            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
-            inserter.insertLoadingText(`${t("LOADING_PROCESS") || "Processing"} ${file.name}...`);
-
-            return async () => {
-                try {
-                    // Check modal behavior setting
-                    const { modalBehavior } = this.settings;
-                    let showModal = modalBehavior === "always";
-
-                    if (modalBehavior === "ask") {
-                        showModal = await new Promise<boolean>((resolve) => {
-                            new ConfirmDialog(
-                                this.app,
-                                "Show Preset Selection Modal?",
-                                "Do you want to select presets for this image?",
-                                "Yes",
-                                () => resolve(true)
-                            ).open();
-                        });
-                    }
-
-                    let selectedConversionPreset: ConversionPreset;
-                    let selectedFilenamePreset: FilenamePreset;
-                    let selectedFolderPreset: FolderPreset;
-                    let selectedLinkFormatPreset: LinkFormatPreset;
-                    let selectedResizePreset: NonDestructiveResizePreset;
-
-                    if (showModal) {
-                        // Show the modal and wait for user selection
-                        const result = await new Promise<{
-                            selectedConversionPreset: ConversionPreset;
-                            selectedFilenamePreset: FilenamePreset;
-                            selectedFolderPreset: FolderPreset;
-                            selectedLinkFormatPreset: LinkFormatPreset;
-                            selectedResizePreset: NonDestructiveResizePreset;
-                        } | null>((resolve) => {
-                            new PresetSelectionModal(
-                                this.app,
-                                this.settings,
-                                (conversionPreset, filenamePreset, folderPreset, linkFormatPreset, resizePreset) => {
-                                    resolve({
-                                        selectedConversionPreset: conversionPreset,
-                                        selectedFilenamePreset: filenamePreset,
-                                        selectedFolderPreset: folderPreset,
-                                        selectedLinkFormatPreset: linkFormatPreset,
-                                        selectedResizePreset: resizePreset,
-                                    });
-                                },
-                                () => resolve(null), // onCancel
-                                this,
-                                this.variableProcessor
-                            ).open();
-                        });
-
-                        if (!result) {
-                            new Notice(t("MSG_PROCESSING_CANCELLED") || "Processing cancelled.");
-                            inserter.removeLoadingText();
-                            return;
-                        }
-
-                        ({
-                            selectedConversionPreset,
-                            selectedFilenamePreset,
-                            selectedFolderPreset,
-                            selectedLinkFormatPreset,
-                            selectedResizePreset
-                        } = result);
-                    } else {
-                        // Use default presets from settings using the generic getter
-                        selectedConversionPreset = this.getPresetByName(
-                            this.settings.selectedConversionPreset,
-                            this.settings.conversionPresets,
-                            'Conversion'
-                        );
-
-                        selectedFilenamePreset = this.getPresetByName(
-                            this.settings.selectedFilenamePreset,
-                            this.settings.filenamePresets,
-                            'Filename'
-                        );
-
-                        selectedFolderPreset = this.getPresetByName(
-                            this.settings.selectedFolderPreset,
-                            this.settings.folderPresets,
-                            'Folder'
-                        );
-
-                        selectedLinkFormatPreset = this.getPresetByName(
-                            this.settings.linkFormatSettings.selectedLinkFormatPreset,
-                            this.settings.linkFormatSettings.linkFormatPresets,
-                            'Link Format'
-                        );
-
-                        selectedResizePreset = this.getPresetByName(
-                            this.settings.nonDestructiveResizeSettings.selectedResizePreset,
-                            this.settings.nonDestructiveResizeSettings.resizePresets,
-                            'Resize'
-                        );
-                    }
-
-                    // Step 3.2: Determine Destination and Filename
-                    // - Use the `determineDestination` function to calculate the destination path and new filename for the current file.
-                    let destinationPath: string;
-                    let newFilename: string;
-
-                    try {
-                        ({ destinationPath, newFilename } = await this.folderAndFilenameManagement.determineDestination(
-                            file,
-                            activeFile,
-                            selectedConversionPreset,
-                            selectedFilenamePreset,
-                            selectedFolderPreset
-                        ));
-                    } catch (error) {
-                        console.error("Error determining destination and filename:", error);
-                        new Notice(`Failed to determine destination or filename for "${file.name}". Check console for details.`);
-                        return; // Resolve this promise (no further processing for this file)
-                    }
-
-                    // Rest of the steps (3.3 to 3.7) remain the same,
-                    // using selectedConversionPreset and selectedFilenamePreset
-                    // ...
-                    // Step 3.3: Create Destination Folder
-                    // - Create the destination folder if it doesn't exist.
-                    try {
-                        await this.folderAndFilenameManagement.ensureFolderExists(destinationPath);
-                    } catch (error) {
-                        // Ignore "Folder already exists" error, but handle other errors.
-                        if (!error.message.startsWith('Folder already exists')) {
-                            console.error("Error creating folder:", error);
-                            new Notice(`Failed to create folder "${destinationPath}". Check console for details.`);
-                            return; // Resolve this promise
-                        }
-                    }
-
-                    // Step 3.4: Handle Filename Conflicts
-                    // - Check if a file with the same name already exists at the destination.
-                    // - Apply conflict resolution rules based on the selected filename preset (e.g., increment, reuse, or skip).
-                    const fullPath = `${destinationPath}/${newFilename}`;
-                    let existingFile = this.app.vault.getAbstractFileByPath(fullPath);
-                    let skipFurtherProcessing = false;
-
-                    if (selectedFilenamePreset && this.folderAndFilenameManagement.shouldSkipRename(file.name, selectedFilenamePreset)) {
-                        new Notice(
-                            `Skipped renaming/conversion of image "${file.name}" due to skip pattern match.`
-                        );
-                        skipFurtherProcessing = true;
-                    } else if (selectedFilenamePreset && selectedFilenamePreset.conflictResolution === "increment") {
-                        try {
-                            newFilename = await this.folderAndFilenameManagement.handleNameConflicts(
-                                destinationPath,
-                                newFilename,
-                                "increment"
-                            );
-                            existingFile = this.app.vault.getAbstractFileByPath(
-                                `${destinationPath}/${newFilename}`
-                            );
-                        } catch (error) {
-                            console.error("Error handling filename conflicts:", error);
-                            new Notice(`Error incrementing filename for "${file.name}". Check console for details.`);
-                            return; // Resolve this promise
-                        }
-                    }
-
-                    const newFullPath = this.folderAndFilenameManagement.combinePath(destinationPath, newFilename);
-
-                    // Step 3.5: Process, Reuse, or Skip
-                    if (!skipFurtherProcessing) {
-
-                        // Step 3.5.1: Reuse Existing File (if applicable)
-                        // - If a file exists and the preset is set to "reuse," insert a link to the existing file and skip processing.
-                        if (existingFile && selectedFilenamePreset && selectedFilenamePreset.conflictResolution === "reuse") {
-                            await this.insertLinkWithInserter(inserter, editor, existingFile.path, selectedLinkFormatPreset, selectedResizePreset);
-                            return; // Resolve this promise
-                        }
-
-
-                        // Step 3.5.2: Check for Skipped Conversion BEFORE Processing
-                        // - Check if the current file matches a skip pattern defined in the selected conversion preset.
-                        // - If it matches, skip the image processing step entirely.
-                        if (selectedConversionPreset && this.folderAndFilenameManagement.shouldSkipConversion(file.name, selectedConversionPreset)) {
-                            new Notice(`Skipped conversion of image "${file.name}" due to skip pattern match in the conversion preset.`);
-
-
-                            // Save the original file directly to the vault without any processing.
-                            // const originalSize = file.size;
-                            const fileBuffer = await file.arrayBuffer();
-                            const tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
-
-                            if (!tfile) {
-                                new Notice(`Failed to create file "${newFilename}". Check console for details.`);
-                                return; // Resolve this promise
-                            }
-
-                            // Insert a link to the newly created (but unprocessed) file.
-                            await this.insertLinkWithInserter(inserter, editor, tfile.path, selectedLinkFormatPreset, selectedResizePreset);
-
-                        } else {
-                            // Step 3.5.3: Process the Image (ONLY if not skipped)
-                            // - Call the `processImage` function to perform image conversion based on the selected preset or default settings.
-                            try {
-                                const originalSize = file.size;  // Store original size
-                                this.processedImage = await this.imageProcessor.processImage(
-                                    file,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.outputFormat
-                                        : this.settings.outputFormat,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.quality / 100
-                                        : this.settings.quality / 100,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.colorDepth
-                                        : this.settings.colorDepth,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.resizeMode
-                                        : this.settings.resizeMode,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.desiredWidth
-                                        : this.settings.desiredWidth,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.desiredHeight
-                                        : this.settings.desiredHeight,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.desiredLongestEdge
-                                        : this.settings.desiredLongestEdge,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.enlargeOrReduce
-                                        : this.settings.enlargeOrReduce,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.allowLargerFiles
-                                        : this.settings.allowLargerFiles,
-                                    selectedConversionPreset, // Pass preset to ImageProcessor
-                                    this.settings
-                                );
-
-
-                                let tfile: TFile;
-
-                                // Step 3.5.4: Create the Image File in Vault
-                                // - Create the new image file in the Obsidian vault using `createBinary`.
-                                // Show space savings notification
-                                // Check if processed image is larger than original
-                                if (this.settings.revertToOriginalIfLarger && this.processedImage.byteLength > originalSize) {
-                                    // User wants to revert AND processed image is larger
-                                    this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
-                                    new Notice(`Using original image for "${file.name}" as processed image is larger.`);
-
-                                    const fileBuffer = await file.arrayBuffer();
-                                    tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
-                                } else {
-                                    // Processed image is smaller OR user doesn't want to revert
-                                    this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
-                                    tfile = await this.app.vault.createBinary(newFullPath, this.processedImage) as TFile;
-                                }
-
-                                // Step 3.5.5: Insert Link into Editor
-                                // - Insert the Markdown link to the newly created image file into the editor at the current cursor position.
-                                await this.insertLinkWithInserter(inserter, editor, tfile.path, selectedLinkFormatPreset, selectedResizePreset);
-                            } catch (error) {
-                                // Step 3.5.6: Handle Image Processing Errors
-                                // - Catch and display errors that occur during image processing.
-                                console.error("Image processing failed:", error);
-                                if (error instanceof Error) {
-                                    if (error.message.includes("File already exists")) {
-                                        new Notice(`Failed to process image: File "${newFilename}" already exists.`);
-                                    } else if (error.message.includes("Invalid input file type")) {
-                                        new Notice(`Failed to process image: Invalid input file type for "${file.name}".`);
-                                    } else {
-                                        new Notice(`Failed to process image "${file.name}": ${error.message}. Check console for details.`);
-                                    }
-                                } else {
-                                    new Notice(`Failed to process image "${file.name}". Check console for details.`);
-                                }
-                                inserter.removeLoadingText(); // Remove placeholder on error
-                                return; // Resolve this promise
-                            } finally {
-                                // Clear memory after processing
-                                this.clearMemory();
-                            }
-                        }
-                    } else {
-                        // Step 3.6: Handle Skipped Processing
-                        // - If further processing is skipped due to filename conflict resolution, insert a link to an existing file (if applicable).
-                        if (existingFile) {
-                            await this.insertLinkWithInserter(inserter, editor, existingFile.path, selectedLinkFormatPreset, selectedResizePreset);
-                        } else {
-                            inserter.removeLoadingText(); // Remove placeholder if skipped and no existing file
-                        }
-                    }
-                } catch (error) {
-                    // Step 3.7: Handle Unexpected Errors
-                    // - Catch and display any other unexpected errors that might occur.
-                    console.error("An unexpected error occurred:", error);
-                    new Notice('An unexpected error occurred. Check console for details.');
-                    inserter.removeLoadingText(); // Clean up
-                }
-            };
-        });
-
-        // Step 4: Execute Tasks with Concurrent Queue
-        // - Use `ConcurrentQueue` to process images with limited concurrency (e.g., 3 at a time)
-        // - This prevents UI freezing when dropping many images
-        if (!this.concurrentQueue) {
-            this.concurrentQueue = new ConcurrentQueue(3);
-        }
-        await this.concurrentQueue.run(filePromises);
-
-        if (this.settings.enableImageCaptions) {
-            this.imageStateManager?.refreshAllImages();
-        }
-    }
-
-    private async handlePaste(itemData: { kind: string; type: string; file: File | null }[], editor: Editor, cursor: EditorPosition) {
-        // Step 1: Filter Supported Image Files
-        // - Filter the pasted `itemData` to keep only supported image files.
-        const supportedFiles = itemData
-            .filter(data => data.kind === "file" && data.file &&
-                this.supportedImageFormats.isSupported(data.type, data.file.name))
-            .map(data => data.file!)
-            .filter((file): file is File => file !== null);
-
-        // Step 2: Check for Active File
-        // - Return early if no supported files are found or if there's no active file.
-        if (supportedFiles.length === 0) return;
-
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) {
-            new Notice('No active file found!');
-            return;
-        }
-
-        // Step 3: Map Files to Processing Promises
-        // - Create an array of promises, each responsible for processing one pasted file.
-        const filePromises = supportedFiles.map((file) => {
-            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
-            inserter.insertLoadingText(`${t("LOADING_PROCESS") || "Processing"} ${file.name}...`);
-
-            return async () => {
-                // Check modal behavior setting
-                const { modalBehavior } = this.settings;
-                let showModal = modalBehavior === "always";
-
-                if (modalBehavior === "ask") {
-                    showModal = await new Promise<boolean>((resolve) => {
-                        new ConfirmDialog(
-                            this.app,
-                            "Show Preset Selection Modal?",
-                            "Do you want to select presets for this image?",
-                            "Yes",
-                            () => resolve(true)
-                        ).open();
-                    });
-                }
-
-                let selectedConversionPreset: ConversionPreset;
-                let selectedFilenamePreset: FilenamePreset;
-                let selectedFolderPreset: FolderPreset;
-                let selectedLinkFormatPreset: LinkFormatPreset;
-                let selectedResizePreset: NonDestructiveResizePreset;
-
-                if (showModal) {
-                    // Show the modal and wait for user selection
-                    const result = await new Promise<{
-                        selectedConversionPreset: ConversionPreset;
-                        selectedFilenamePreset: FilenamePreset;
-                        selectedFolderPreset: FolderPreset;
-                        selectedLinkFormatPreset: LinkFormatPreset;
-                        selectedResizePreset: NonDestructiveResizePreset;
-                    } | null>((resolve) => {
-                        new PresetSelectionModal(
-                            this.app,
-                            this.settings,
-                            (conversionPreset, filenamePreset, folderPreset, linkFormatPreset, resizePreset) => {
-                                resolve({
-                                    selectedConversionPreset: conversionPreset,
-                                    selectedFilenamePreset: filenamePreset,
-                                    selectedFolderPreset: folderPreset,
-                                    selectedLinkFormatPreset: linkFormatPreset,
-                                    selectedResizePreset: resizePreset,
-                                });
-                            },
-                            () => resolve(null), // onCancel
-                            this,
-                            this.variableProcessor
-                        ).open();
-                    });
-
-                    if (!result) {
-                        new Notice(t("MSG_PROCESSING_CANCELLED") || "Processing cancelled.");
-                        inserter.removeLoadingText();
-                        return;
-                    }
-
-                    ({
-                        selectedConversionPreset,
-                        selectedFilenamePreset,
-                        selectedFolderPreset,
-                        selectedLinkFormatPreset,
-                        selectedResizePreset
-                    } = result);
-                } else {
-                    // Use default presets from settings using the generic getter
-                    selectedConversionPreset = this.getPresetByName(
-                        this.settings.selectedConversionPreset,
-                        this.settings.conversionPresets,
-                        'Conversion'
-                    );
-
-                    selectedFilenamePreset = this.getPresetByName(
-                        this.settings.selectedFilenamePreset,
-                        this.settings.filenamePresets,
-                        'Filename'
-                    );
-
-                    selectedFolderPreset = this.getPresetByName(
-                        this.settings.selectedFolderPreset,
-                        this.settings.folderPresets,
-                        'Folder'
-                    );
-
-                    selectedLinkFormatPreset = this.getPresetByName(
-                        this.settings.linkFormatSettings.selectedLinkFormatPreset,
-                        this.settings.linkFormatSettings.linkFormatPresets,
-                        'Link Format'
-                    );
-
-                    selectedResizePreset = this.getPresetByName(
-                        this.settings.nonDestructiveResizeSettings.selectedResizePreset,
-                        this.settings.nonDestructiveResizeSettings.resizePresets,
-                        'Resize'
-                    );
-                }
-                // Step 3.2: Determine Destination and Filename
-                // - Calculate the destination path and new filename for the current file.
-                try {
-                    let destinationPath: string;
-                    let newFilename: string;
-
-                    try {
-                        ({ destinationPath, newFilename } = await this.folderAndFilenameManagement.determineDestination(
-                            file,
-                            activeFile,
-                            selectedConversionPreset,
-                            selectedFilenamePreset,
-                            selectedFolderPreset
-                        ));
-                    } catch (error) {
-                        console.error("Error determining destination and filename:", error);
-                        new Notice(`Failed to determine destination or filename for "${file.name}". Check console for details.`);
-                        return; // Resolve this promise
-                    }
-
-                    // Step 3.3: Create Destination Folder
-                    // - Create the destination folder if it doesn't exist.
-                    try {
-                        await this.folderAndFilenameManagement.ensureFolderExists(destinationPath);
-                    } catch (error) {
-                        if (!error.message.startsWith('Folder already exists')) {
-                            console.error("Error creating folder:", error);
-                            new Notice(`Failed to create folder: ${destinationPath}`);
-                            return; // Resolve this promise
-                        }
-                    }
-
-                    // Step 3.4: Handle Filename Conflicts
-                    // - Check for filename conflicts and apply conflict resolution rules.
-                    const fullPath = `${destinationPath}/${newFilename}`;
-                    let existingFile = this.app.vault.getAbstractFileByPath(fullPath);
-                    let skipFurtherProcessing = false;
-
-                    if (
-                        selectedFilenamePreset &&
-                        this.folderAndFilenameManagement.shouldSkipRename(
-                            file.name,
-                            selectedFilenamePreset
-                        )
-                    ) {
-                        new Notice(
-                            `Skipped renaming/conversion of image "${file.name}" due to skip pattern match.`
-                        );
-                        skipFurtherProcessing = true;
-                    } else if (
-                        selectedFilenamePreset &&
-                        selectedFilenamePreset.conflictResolution === "increment"
-                    ) {
-                        try {
-                            newFilename = await this.folderAndFilenameManagement.handleNameConflicts(
-                                destinationPath,
-                                newFilename,
-                                "increment"
-                            );
-                            existingFile = this.app.vault.getAbstractFileByPath(
-                                `${destinationPath}/${newFilename}`
-                            );
-                        } catch (error) {
-                            console.error("Error handling filename conflicts:", error);
-                            new Notice(`Error incrementing filename for "${file.name}". Check console for details.`);
-                            return; // Resolve this promise
-                        }
-                    }
-
-                    const newFullPath = this.folderAndFilenameManagement.combinePath(destinationPath, newFilename);
-
-                    // Step 3.5: Process, Reuse, or Skip
-                    if (!skipFurtherProcessing) {
-                        // Step 3.5.1: Reuse Existing File (if applicable)
-                        // - If the file exists and the preset is set to "reuse," insert a link to the existing file.
-                        if (existingFile && selectedFilenamePreset && selectedFilenamePreset.conflictResolution === "reuse") {
-                            await this.insertLinkWithInserter(inserter, editor, existingFile.path, selectedLinkFormatPreset, selectedResizePreset);
-                            return;
-                        }
-
-                        // Step 3.5.2: Check for Skipped Conversion BEFORE Processing
-                        // - Check if the current file matches a skip pattern in the conversion preset.
-                        // - If it matches, skip image processing entirely.
-                        if (selectedConversionPreset && this.folderAndFilenameManagement.shouldSkipConversion(file.name, selectedConversionPreset)) {
-                            new Notice(`Skipped conversion of image "${file.name}" due to skip pattern match in the conversion preset.`);
-
-                            // Save the original file directly to the vault without any processing.
-                            // const originalSize = file.size;
-                            const fileBuffer = await file.arrayBuffer();
-                            const tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
-
-                            if (!tfile) {
-                                new Notice(`Failed to create file: ${newFilename}`);
-                                return; // Resolve this promise
-                            }
-
-                            // Insert a link to the newly created (unprocessed) file.
-                            await this.insertLinkWithInserter(inserter, editor, tfile.path, selectedLinkFormatPreset, selectedResizePreset);
-                        } else {
-                            // Step 3.5.3: Process the Image (ONLY if not skipped)
-                            // - Process the image using the selected or default settings.
-                            try {
-                                const originalSize = file.size;
-                                this.processedImage = await this.imageProcessor.processImage(
-                                    file,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.outputFormat
-                                        : this.settings.outputFormat,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.quality / 100
-                                        : this.settings.quality / 100,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.colorDepth
-                                        : this.settings.colorDepth,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.resizeMode
-                                        : this.settings.resizeMode,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.desiredWidth
-                                        : this.settings.desiredWidth,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.desiredHeight
-                                        : this.settings.desiredHeight,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.desiredLongestEdge
-                                        : this.settings.desiredLongestEdge,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.enlargeOrReduce
-                                        : this.settings.enlargeOrReduce,
-                                    selectedConversionPreset
-                                        ? selectedConversionPreset.allowLargerFiles
-                                        : this.settings.allowLargerFiles,
-                                    selectedConversionPreset, // Pass preset to ImageProcessor
-                                    this.settings
-                                );
-
-                                let tfile: TFile;
-                                // Step 3.5.4: Create the Image File in Vault
-                                // - Create the new image file in the Obsidian vault using `createBinary`.
-                                // - Show space savings notification
-                                // Check if processed image is larger than original
-                                if (this.settings.revertToOriginalIfLarger && this.processedImage.byteLength > originalSize) {
-                                    // User wants to revert AND processed image is larger
-                                    this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
-                                    new Notice(`Using original image for "${file.name}" as processed image is larger.`);
-
-                                    const fileBuffer = await file.arrayBuffer();
-                                    tfile = await this.app.vault.createBinary(newFullPath, fileBuffer) as TFile;
-                                } else {
-                                    // Processed image is smaller OR user doesn't want to revert
-                                    this.showSizeComparisonNotification(originalSize, this.processedImage.byteLength);
-                                    tfile = await this.app.vault.createBinary(newFullPath, this.processedImage) as TFile;
-                                }
-
-
-                                if (!tfile) {
-                                    new Notice(`Failed to create file "${newFilename}". Check console for details.`);
-                                    return; // Resolve this promise
-                                }
-
-                                // Step 3.5.5: Insert Link into Editor
-                                // - Insert the link to the new image into the editor.
-                                await this.insertLinkWithInserter(inserter, editor, tfile.path, selectedLinkFormatPreset, selectedResizePreset);
-                            } catch (error) {
-                                // Step 3.5.6: Handle Image Processing Errors
-                                // - Handle errors during image processing.
-                                console.error("Image processing failed:", error);
-                                if (error instanceof Error) {
-                                    if (error.message.includes("File already exists")) {
-                                        new Notice(`Failed to process image: File "${newFilename}" already exists.`);
-                                    } else if (error.message.includes("Invalid input file type")) {
-                                        new Notice(`Failed to process image: Invalid input file type for "${file.name}".`);
-                                    } else {
-                                        new Notice(`Failed to process image "${file.name}": ${error.message}. Check console for details.`);
-                                    }
-                                } else {
-                                    new Notice(`Failed to process image "${file.name}". Check console for details.`);
-                                }
-                                return; // Resolve this promise
-                            }
-                        }
-                    } else {
-                        // Step 3.6: Handle Skipped Processing
-                        // - If skipping, insert a link to an existing file or do nothing.
-                        if (existingFile) {
-                            await this.insertLinkWithInserter(inserter, editor, existingFile.path, selectedLinkFormatPreset, selectedResizePreset);
-                        } else {
-                            inserter.removeLoadingText();
-                        }
-                    }
-                } catch (error) {
-                    // Step 3.7: Handle Unexpected Errors
-                    console.error("An unexpected error occurred:", error);
-                    new Notice('An unexpected error occurred. Check console for details.');
-                    inserter.removeLoadingText();
-                } finally {
-                    // Clear memory after processing
-                    this.clearMemory();
-                }
-            };
-        });
-
-        // Step 4: Execute Tasks with Concurrent Queue
-        // - Use `ConcurrentQueue` to process images with limited concurrency
-        if (!this.concurrentQueue) {
-            this.concurrentQueue = new ConcurrentQueue(3);
-        }
-        await this.concurrentQueue.run(filePromises);
-
-        if (this.settings.enableImageCaptions) {
-            this.imageStateManager?.refreshAllImages();
-        }
-    }
 
     // Helper function to insert link at the specified cursor position
     private async insertLinkAtCursorPosition(
@@ -1613,11 +919,11 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Use the passed presets or fall back to the plugin settings
         const linkFormatPresetToUse = selectedLinkFormatPreset || this.settings.linkFormatSettings.linkFormatPresets.find(
-            (preset) => preset.name === this.settings.linkFormatSettings.selectedLinkFormatPreset
+            (preset: LinkFormatPreset) => preset.name === this.settings.linkFormatSettings.selectedLinkFormatPreset
         );
 
         const resizePresetToUse = selectedResizePreset || this.settings.nonDestructiveResizeSettings.resizePresets.find(
-            (preset) => preset.name === this.settings.nonDestructiveResizeSettings.selectedResizePreset
+            (preset: NonDestructiveResizePreset) => preset.name === this.settings.nonDestructiveResizeSettings.selectedResizePreset
         );
 
         // Await the result of formatLink
@@ -1637,7 +943,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Use positive check for "back"
         // - We have to be carefull not to place it to the back 2 times.
-        if (this.settings.dropPasteCursorLocation === "back") {
+        if (this.settings.pasteHandling.cursorLocation === "back") {
             editor.setCursor({
                 line: cursor.line,
                 ch: cursor.ch + formattedLink.length,
@@ -1647,7 +953,7 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     // Helper function to insert link using EditorContentInserter (for placeholders)
-    private async insertLinkWithInserter(
+    public async insertLinkWithInserter(
         inserter: EditorContentInserter,
         editor: Editor,
         linkPath: string,
@@ -1658,11 +964,11 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Use the passed presets or fall back to the plugin settings
         const linkFormatPresetToUse = selectedLinkFormatPreset || this.settings.linkFormatSettings.linkFormatPresets.find(
-            (preset) => preset.name === this.settings.linkFormatSettings.selectedLinkFormatPreset
+            (preset: LinkFormatPreset) => preset.name === this.settings.linkFormatSettings.selectedLinkFormatPreset
         );
 
         const resizePresetToUse = selectedResizePreset || this.settings.nonDestructiveResizeSettings.resizePresets.find(
-            (preset) => preset.name === this.settings.nonDestructiveResizeSettings.selectedResizePreset
+            (preset: NonDestructiveResizePreset) => preset.name === this.settings.nonDestructiveResizeSettings.selectedResizePreset
         );
 
         // Await the result of formatLink
@@ -1688,7 +994,7 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     showSizeComparisonNotification(originalSize: number, newSize: number) {
-        if (!this.settings.showSpaceSavedNotification) return;
+        if (!this.settings.global.showSpaceSavedNotification) return;
 
         const originalSizeFormatted = this.formatFileSize(originalSize);
         const newSizeFormatted = this.formatFileSize(newSize);
@@ -1761,1871 +1067,5 @@ export default class ImageConverterPlugin extends Plugin {
             // Don't throw, just log the warning
         }
     }
-
-    /**
-     * Handle drop event in cloud mode
-     * Upload images to image hosting service and insert links
-     */
-    private async handleDropCloud(
-        fileData: { name: string; type: string; file: File }[],
-        editor: Editor,
-        cursor: EditorPosition
-    ) {
-        console.log('[Cloud Upload] handleDropCloud called with', fileData.length, 'files');
-
-        // Filter supported files
-        const supportedFiles = fileData
-            .filter(data => this.supportedImageFormats.isSupported(data.type, data.name))
-            .map(data => data.file);
-
-        console.log('[Cloud Upload] Found', supportedFiles.length, 'supported files');
-        if (supportedFiles.length === 0) return;
-
-        const activeFile = this.app.workspace.getActiveFile();
-        console.log('[Cloud Upload] Active file:', activeFile?.path);
-        if (!activeFile) {
-            new Notice('No active file detected.');
-            return;
-        }
-
-        // Process each file
-        for (const file of supportedFiles) {
-            console.log('[Cloud Upload] Processing file:', file.name, 'size:', file.size, 'type:', file.type);
-
-            // Insert uploading placeholder using EditorContentInserter
-            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
-            inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
-
-            try {
-                // Create uploader manager
-                const uploaderManager = new UploaderManager(
-                    this.settings.cloudUploadSettings.uploader,
-                    this
-                );
-                console.log('[Cloud Upload] Created uploader manager for:', this.settings.cloudUploadSettings.uploader);
-
-                // Convert File to FileList for upload
-                const dataTransfer = new DataTransfer();
-                dataTransfer.items.add(file);
-                const fileList = dataTransfer.files;
-                console.log('[Cloud Upload] Prepared FileList with', fileList.length, 'file(s)');
-
-                // Upload directly from drop without saving to vault
-                console.log('[Cloud Upload] Starting clipboard upload for:', file.name);
-                const uploadResult = await uploaderManager.uploadByClipboard(fileList);
-                console.log('[Cloud Upload] Upload result:', uploadResult);
-
-                // Generate cloud link with size parameters
-                const cloudUrl = uploadResult.result[0];
-                console.log('[Cloud Upload] Cloud URL:', cloudUrl);
-
-                const cloudLink = CloudLinkFormatter.formatCloudLink(
-                    cloudUrl,
-                    this.settings.cloudUploadSettings
-                    // Clipboard upload - no original link to preserve
-                );
-                console.log('[Cloud Upload] Formatted cloud link:', cloudLink);
-
-                // Replace placeholder with final link
-                inserter.insertResponseToEditor(cloudLink);
-
-                new Notice('Image uploaded successfully!');
-                console.log('[Cloud Upload] Upload completed successfully');
-            } catch (error) {
-                console.error('[Cloud Upload] Upload failed:', error);
-                console.error('[Cloud Upload] Error stack:', error.stack);
-                new Notice(`Upload failed: ${error.message}`);
-
-                // Remove placeholder on failure
-                inserter.removeLoadingText();
-                console.log('[Cloud Upload] Placeholder removed due to upload failure');
-            } finally {
-                // Clear memory after processing
-                this.clearMemory();
-            }
-        }
-
-        // Refresh captions if enabled
-        if (this.settings.enableImageCaptions) {
-            this.imageStateManager?.refreshAllImages();
-        }
-    }
-
-    /**
-     * Upload all local images in the current note to cloud storage
-     * 批量上传当前笔记中的所有本地图片到图床
-     */
-    private async uploadAllImages() {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) {
-            new Notice('No active file found.');
-            return;
-        }
-
-        // 创建 Helper 获取图片链接
-        const helper = new UploadHelper(this.app);
-        const allImageLinks = helper.getAllImageLinks();
-
-        if (allImageLinks.length === 0) {
-            new Notice('No images found in current note.');
-            return;
-        }
-
-        console.log('[Batch Upload] Found', allImageLinks.length, 'image links');
-
-        // 过滤图片链接（本地图片 + 符合条件的网络图片）
-        const filteredImageLinks = allImageLinks.filter(img => {
-            const isNetworkImage = img.path.startsWith('http://') || img.path.startsWith('https://');
-
-            // 🔴 跳过已上传图片
-            if (this.historyManager.isUrlUploaded(img.path)) {
-                console.log('[Batch Upload] Skipping already uploaded image:', img.path);
-                return false;
-            }
-
-            if (isNetworkImage) {
-                // 检查是否启用网络图片上传
-                if (!this.settings.cloudUploadSettings.workOnNetWork) {
-                    console.log('[Batch Upload] Skipping network image (workOnNetWork disabled):', img.path);
-                    return false;
-                }
-                // 检查黑名单域名
-                if (this.isBlacklistedDomain(img.path)) {
-                    console.log('[Batch Upload] Skipping blacklisted network image:', img.path);
-                    return false;
-                }
-                return true; // 允许上传网络图片
-            }
-
-            return true; // 本地图片总是包含
-        });
-
-        if (filteredImageLinks.length === 0) {
-            new Notice('No images to upload. All images are filtered or already uploaded.');
-            return;
-        }
-
-        console.log('[Batch Upload] Found', filteredImageLinks.length, 'image(s) to upload');
-        new Notice(`Found ${filteredImageLinks.length} image(s) to upload...`);
-
-        // 构建文件路径映射（用于快速查找本地文件）
-        const filePathMap: Record<string, TFile> = {};
-        const fileNameMap: Record<string, TFile> = {};
-
-        this.app.vault.getFiles().forEach(file => {
-            filePathMap[file.path] = file;
-            fileNameMap[file.name] = file;
-        });
-
-        // 解析并构建上传任务（按路径去重）
-        interface UploadTask {
-            imageLinks: ImageLink[]; // 该路径对应的所有图片链接
-            file: TFile | null; // 本地文件，网络图片为 null
-            path: string; // 唯一路径标识
-            isNetworkImage: boolean;
-        }
-
-        const pathToTaskMap = new Map<string, UploadTask>();
-
-        for (const imageLink of filteredImageLinks) {
-            const uri = decodeURI(imageLink.path);
-            const isNetworkImage = uri.startsWith('http://') || uri.startsWith('https://');
-
-            let uniquePath: string;
-            let file: TFile | null = null;
-
-            if (isNetworkImage) {
-                // 网络图片使用 URL 作为唯一标识
-                uniquePath = uri;
-            } else {
-                // 本地图片：解析文件路径
-                // 1. 优先匹配绝对路径
-                if (filePathMap[uri]) {
-                    file = filePathMap[uri];
-                }
-
-                // 2. 处理相对路径
-                if (!file && (uri.startsWith('./') || uri.startsWith('../'))) {
-                    const filePath = normalizePath(
-                        resolve(dirname(activeFile.path), uri)
-                    );
-                    file = filePathMap[filePath];
-                }
-
-                // 3. 尽可能短路径（只匹配文件名）
-                if (!file) {
-                    const fileName = basename(uri);
-                    file = fileNameMap[fileName];
-                }
-
-                // 4. 检查是否是图片文件
-                if (!file || !this.isImageFile(file.path)) {
-                    console.warn('[Batch Upload] Could not find file for image:', imageLink.path);
-                    continue;
-                }
-
-                uniquePath = normalizePath(file.path);
-            }
-
-            // 按路径去重：相同路径的图片链接添加到同一个任务
-            if (pathToTaskMap.has(uniquePath)) {
-                pathToTaskMap.get(uniquePath)!.imageLinks.push(imageLink);
-            } else {
-                pathToTaskMap.set(uniquePath, {
-                    imageLinks: [imageLink],
-                    file: file,
-                    path: uniquePath,
-                    isNetworkImage: isNetworkImage
-                });
-            }
-        }
-
-        const uploadTasks = Array.from(pathToTaskMap.values());
-
-        if (uploadTasks.length === 0) {
-            new Notice('No valid images found to upload.');
-            return;
-        }
-
-        const totalLinks = uploadTasks.reduce((sum, task) => sum + task.imageLinks.length, 0);
-        console.log('[Batch Upload] Prepared', uploadTasks.length, 'unique upload tasks for', totalLinks, 'image links');
-        new Notice(`Uploading ${uploadTasks.length} unique image(s)...`);
-
-        // 使用NotificationManager收集验证错误
-        const notificationManager = new NotificationManager();
-
-        // 验证本地文件存在性
-        const validationErrors: string[] = [];
-        for (const task of uploadTasks) {
-            if (!task.isNetworkImage && task.file) {
-                const exists = await this.validateFileExists(task.file);
-                if (!exists) {
-                    // 收集验证错误
-                    notificationManager.collectError(
-                        task.file.name,
-                        '文件不存在'
-                    );
-                    validationErrors.push(task.file.name);
-                }
-            }
-        }
-
-        if (validationErrors.length > 0) {
-            console.warn('[Batch Upload] Files not found:', validationErrors);
-            // 过滤掉不存在的文件
-            const filteredTasks = uploadTasks.filter(task =>
-                task.isNetworkImage || !validationErrors.includes(task.file!.name)
-            );
-            if (filteredTasks.length === 0) {
-                notificationManager.showBatchSummary(
-                    uploadTasks.length,
-                    0,
-                    "批量上传"
-                );
-                return;
-            }
-            // 更新 uploadTasks
-            uploadTasks.length = 0;
-            uploadTasks.push(...filteredTasks);
-        }
-
-        // 批量上传
-        try {
-            const uploaderManager = new UploaderManager(
-                this.settings.cloudUploadSettings.uploader,
-                this
-            );
-
-            // 准备上传路径列表
-            const pathsToUpload = uploadTasks.map(task => {
-                // 网络图片直接使用 URL
-                if (task.isNetworkImage) {
-                    console.log('[Batch Upload] Network image:', task.path);
-                    return task.path;
-                }
-                // 本地图片：使用统一的路径构建方法
-                return this.buildUploadPath(task.file!);
-            });
-            console.log('[Batch Upload] Uploading files:', pathsToUpload);
-            console.log('[Batch Upload] Remote mode:', this.settings.cloudUploadSettings.remoteServerMode);
-
-            // Upload images with concurrent control (3 at a time)
-            const uploadResult = await this.concurrentQueue.run(
-                pathsToUpload.map(path => async () => {
-                    const result = await uploaderManager.upload([path]);
-                    if (!result.success) {
-                        throw new Error(result.msg || 'Upload failed');
-                    }
-                    return result.result[0];
-                })
-            );
-
-            const uploadedUrls = uploadResult;
-            console.log('[Batch Upload] Upload result:', uploadedUrls);
-
-            // 检查上传结果数量
-            if (uploadedUrls.length !== uploadTasks.length) {
-                notificationManager.collectError(
-                    'batch-upload-mismatch',
-                    `上传数量不匹配: 期望 ${uploadTasks.length}，实际 ${uploadedUrls.length}`
-                );
-                console.warn('[Batch Upload] Expected', uploadTasks.length, 'but got', uploadedUrls.length);
-            }
-
-            // ====================
-            // Stage 2: 多引用验证
-            // ====================
-            new Notice(t("MSG_SCANNING_REFS"));
-
-            // 为每个本地图片检查 Vault 级别的引用
-            const multiReferenceImages: BatchUploadTaskInfo[] = [];
-            const taskWithVaultMatches: Array<{
-                task: typeof uploadTasks[0];
-                cloudUrl: string;
-                vaultMatches: ImageMatchResult;
-            }> = [];
-
-            for (let i = 0; i < Math.min(uploadTasks.length, uploadedUrls.length); i++) {
-                const task = uploadTasks[i];
-                const cloudUrl = uploadedUrls[i];
-
-                // 只为本地图片检查引用
-                // 只为本地图片检查引用
-                if (!task.isNetworkImage && task.file) {
-                    // Use VaultReferenceManager
-                    const references = await this.vaultReferenceManager.getFilesReferencingImage(task.file.path);
-
-                    // Convert to ImageMatchResult structure
-                    const fileGroups = new Map<string, ImageMatch[]>();
-                    for (const ref of references) {
-                        if (!fileGroups.has(ref.file.path)) {
-                            fileGroups.set(ref.file.path, []);
-                        }
-                        fileGroups.get(ref.file.path)?.push({
-                            lineNumber: 0,
-                            line: ref.original,
-                            original: ref.original
-                        });
-                    }
-
-                    const vaultMatches: ImageMatchResult = {
-                        totalCount: references.length,
-                        files: []
-                    };
-
-                    for (const [path, matchItems] of fileGroups.entries()) {
-                        vaultMatches.files.push({
-                            path: path,
-                            matches: matchItems
-                        });
-                    }
-
-                    const totalReferences = vaultMatches.totalCount;
-                    const currentNoteReferences = vaultMatches.files.find(
-                        f => f.path === activeFile.path
-                    )?.matches.length || 0;
-                    const otherNotesReferences = totalReferences - currentNoteReferences;
-
-                    // 保存任务和匹配信息
-                    taskWithVaultMatches.push({
-                        task,
-                        cloudUrl,
-                        vaultMatches
-                    });
-
-                    // 如果有其他笔记的引用,记录到多引用列表
-                    if (otherNotesReferences > 0) {
-                        multiReferenceImages.push({
-                            imageName: task.file.name,
-                            vaultReferences: totalReferences,
-                            currentNoteReferences: currentNoteReferences,
-                            otherNotesReferences: otherNotesReferences,
-                            hasMultipleReferences: true
-                        });
-                    }
-                }
-            }
-
-            // 显示确认对话框
-            const userChoice = await new Promise<'replace-current' | 'replace-all' | 'replace-all-delete' | 'cancel'>((resolve) => {
-                new BatchUploadConfirmDialog(
-                    this.app,
-                    uploadTasks.length,
-                    multiReferenceImages,
-                    activeFile.path,
-                    resolve
-                ).open();
-            });
-
-            if (userChoice === 'cancel') {
-                new Notice(t("MSG_UPLOAD_CANCELLED"));
-                return;
-            }
-
-            // ====================
-            // Stage 3: 根据用户选择执行替换操作
-            // ====================
-            let replacedLinkCount = 0;
-
-            if (userChoice === 'replace-current') {
-                // 仅替换当前笔记
-                let content = helper.getValue();
-
-                for (let i = 0; i < Math.min(uploadTasks.length, uploadedUrls.length); i++) {
-                    const task = uploadTasks[i];
-                    const cloudUrl = uploadedUrls[i];
-
-                    // 替换该路径对应的所有图片链接
-                    for (const imageLink of task.imageLinks) {
-                        // 生成云图链接 (传入原始链接以保留题注和尺寸)
-                        const cloudLink = CloudLinkFormatter.formatCloudLink(
-                            cloudUrl,
-                            this.settings.cloudUploadSettings,
-                            imageLink.source
-                        );
-
-                        content = content.replaceAll(imageLink.source, cloudLink);
-                        replacedLinkCount++;
-                        console.log('[Batch Upload] Replaced in current note:', imageLink.source, '->', cloudLink);
-                    }
-                }
-
-                // 更新编辑器内容
-                helper.setValue(content);
-                new Notice(t("MSG_REPLACED_CURRENT_NOTE").replace("{0}", replacedLinkCount.toString()));
-
-            } else if (userChoice === 'replace-all' || userChoice === 'replace-all-delete') {
-                // 替换所有引用
-                for (let i = 0; i < Math.min(uploadTasks.length, uploadedUrls.length); i++) {
-                    const task = uploadTasks[i];
-                    const cloudUrl = uploadedUrls[i];
-
-                    // 生成云图链接
-                    // 检查是否有 Vault 匹配信息
-                    const matchInfo = taskWithVaultMatches.find(m => m.task === task);
-                    if (matchInfo) {
-                        // 本地图片:替换所有 Vault 引用
-                        // Use VaultReferenceManager to update all references for this image
-                        const count = await this.updateLinksWithManager(matchInfo.task.file!.path, cloudUrl);
-                        replacedLinkCount += count;
-                        console.log(`[Batch Upload] Replaced ${count} references for:`, matchInfo.task.file!.path);
-                    } else {
-                        // 网络图片:仅替换当前笔记
-                        let content = helper.getValue();
-                        for (const imageLink of task.imageLinks) {
-                            // 生成云图链接 (传入原始链接以保留题注和尺寸)
-                            const cloudLink = CloudLinkFormatter.formatCloudLink(
-                                cloudUrl,
-                                this.settings.cloudUploadSettings,
-                                imageLink.source
-                            );
-
-                            content = content.replaceAll(imageLink.source, cloudLink);
-                            replacedLinkCount++;
-                            console.log('[Batch Upload] Replaced network image in current note:', imageLink.source, '->', cloudLink);
-                        }
-                        helper.setValue(content);
-                    }
-                }
-
-                new Notice(t("MSG_REPLACED_ALL_LINKS").replace("{0}", replacedLinkCount.toString()));
-
-                // 删除本地源文件(仅当用户选择"替换所有并删除本地")
-                if (userChoice === 'replace-all-delete' && uploadTasks.length > 0) {
-                    let deletedCount = 0;
-                    for (const task of uploadTasks) {
-                        // 只删除本地图片文件,跳过网络图片
-                        if (!task.isNetworkImage && task.file) {
-                            try {
-                                await this.app.fileManager.trashFile(task.file);
-                                deletedCount++;
-                                console.log('[Batch Upload] Deleted source file:', task.file.path);
-                            } catch (error) {
-                                console.error('[Batch Upload] Failed to delete source file:', task.file.path, error);
-                            }
-                        }
-                    }
-                    if (deletedCount > 0) {
-                        new Notice(t("MSG_DELETED_SOURCE_FILES").replace("{0}", deletedCount.toString()));
-                    }
-                }
-            }
-
-            // 刷新图片题注（如果启用）
-            if (this.settings.enableImageCaptions) {
-                this.imageStateManager?.refreshAllImages();
-            }
-
-        } catch (error) {
-            console.error('[Batch Upload] Upload failed:', error);
-            new Notice(`Batch upload failed: ${error.message}`);
-        } finally {
-            // Clear memory after batch upload
-            this.clearMemory();
-        }
-    }
-
-    /**
-     * Check if a file path is an image file
-     */
-    private isImageFile(path: string): boolean {
-        const ext = extname(path).toLowerCase();
-        const imageExts = ['.png', '.jpg', '.jpeg', '.bmp', '.gif', '.svg', '.tiff', '.webp', '.avif'];
-        return imageExts.includes(ext);
-    }
-
-    /**
-     * Download all network images in the current note to local
-     * 下载当前笔记中的所有网络图片到本地
-     */
-    private async downloadAllImages(): Promise<void> {
-        try {
-            await this.networkDownloader.downloadAllNetworkImages();
-        } catch (error) {
-            console.error('[Download] Download all images failed:', error);
-            new Notice(t("MSG_DOWNLOAD_FAILED").replace("{0}", error.message));
-        }
-    }
-
-    /**
-     * Public method to upload folder images
-     * @param folderPath - Path to the folder
-     * @param recursive - Whether to process subfolders recursively
-     */
-    async uploadFolderImagesPublic(folderPath: string, recursive: boolean = false): Promise<void> {
-        await this.uploadFolderImages(folderPath, recursive);
-    }
-
-    /**
-     * Public method to download folder images
-     * @param folderPath - Path to the folder
-     * @param recursive - Whether to process subfolders recursively
-     */
-    async downloadFolderImagesPublic(folderPath: string, recursive: boolean = false): Promise<void> {
-        await this.downloadFolderImages(folderPath, recursive);
-    }
-
-    /**
-     * Upload all local images in a folder to cloud storage
-     * 批量上传文件夹中的所有本地图片到图床
-     * @param folderPath - Folder path
-     * @param recursive - Whether to include subfolders
-     */
-    private async uploadFolderImages(folderPath: string, recursive: boolean = false): Promise<void> {
-        // Step 1: Validate folder
-        const folder = this.app.vault.getAbstractFileByPath(folderPath);
-        if (!(folder instanceof TFolder)) {
-            new Notice(t("MSG_INVALID_FOLDER"));
-            return;
-        }
-
-        // Step 2: Collect all image files in folder
-        const allFiles = this.app.vault.getFiles();
-        const normalizedFolderPath = folderPath.replace(/\\/g, '/').replace(/\/$/, '');
-        const prefix = normalizedFolderPath === '' || normalizedFolderPath === '/' ? '' : `${normalizedFolderPath}/`;
-
-        const isImmediateChild = (filePath: string) => {
-            if (!prefix) {
-                // Root folder: immediate children have no '/'
-                return filePath.indexOf('/') === -1;
-            }
-            if (!filePath.startsWith(prefix)) return false;
-            const remainder = filePath.slice(prefix.length);
-            return remainder.indexOf('/') === -1;
-        };
-
-        const imageFiles = allFiles.filter((file) => {
-            if (!this.supportedImageFormats.isSupported(undefined, file.name)) return false;
-            const normalized = file.path.replace(/\\/g, '/');
-            if (recursive) {
-                return prefix === '' ? true : normalized.startsWith(prefix);
-            }
-            return isImmediateChild(normalized);
-        });
-
-        if (imageFiles.length === 0) {
-            new Notice(t("MSG_NO_IMAGES_IN_FOLDER"));
-            return;
-        }
-
-        console.log('[Folder Upload] Found', imageFiles.length, 'image file(s) in folder:', folderPath);
-
-        // Step 3: Filter out already uploaded images and network images
-        const filteredFiles = imageFiles.filter(file => {
-            // Skip already uploaded images
-            if (this.historyManager.isLocalPathUploaded(file.path)) {
-                console.log('[Folder Upload] Skipping already uploaded image:', file.path);
-                return false;
-            }
-            return true;
-        });
-
-        if (filteredFiles.length === 0) {
-            new Notice(t("MSG_NO_IMAGES_TO_UPLOAD"));
-            return;
-        }
-
-        console.log('[Folder Upload] Prepared', filteredFiles.length, 'image(s) to upload');
-        new Notice(t("MSG_UPLOADING_IMAGES").replace("{0}", filteredFiles.length.toString()));
-
-        // Step 4: Use NotificationManager to collect errors
-        const notificationManager = new NotificationManager();
-
-        // Validate file existence
-        const validationErrors: string[] = [];
-        for (const file of filteredFiles) {
-            const exists = await this.validateFileExists(file);
-            if (!exists) {
-                notificationManager.collectError(file.name, t("MSG_FILE_NOT_FOUND"));
-                validationErrors.push(file.name);
-            }
-        }
-
-        if (validationErrors.length > 0) {
-            console.warn('[Folder Upload] Files not found:', validationErrors);
-            const validFiles = filteredFiles.filter(file => !validationErrors.includes(file.name));
-            if (validFiles.length === 0) {
-                notificationManager.showBatchSummary(
-                    filteredFiles.length,
-                    0,
-                    t("MSG_FOLDER_UPLOAD")
-                );
-                return;
-            }
-            filteredFiles.length = 0;
-            filteredFiles.push(...validFiles);
-        }
-
-        // Step 5: Upload images with concurrent control
-        try {
-            const uploaderManager = new UploaderManager(
-                this.settings.cloudUploadSettings.uploader,
-                this
-            );
-
-            // Prepare upload paths
-            const pathsToUpload = filteredFiles.map(file => this.buildUploadPath(file));
-            console.log('[Folder Upload] Uploading files:', pathsToUpload);
-            console.log('[Folder Upload] Remote mode:', this.settings.cloudUploadSettings.remoteServerMode);
-
-            // Upload with concurrent queue (using uploadConcurrency setting)
-            const uploadResult = await this.concurrentQueue.run(
-                pathsToUpload.map(path => async () => {
-                    const result = await uploaderManager.upload([path]);
-                    if (!result.success) {
-                        throw new Error(result.msg || 'Upload failed');
-                    }
-                    return result.result[0];
-                })
-            );
-
-            const uploadedUrls = uploadResult;
-            console.log('[Folder Upload] Upload result:', uploadedUrls);
-
-            // Check upload result count
-            if (uploadedUrls.length !== filteredFiles.length) {
-                notificationManager.collectError(
-                    'folder-upload-mismatch',
-                    t("MSG_UPLOAD_COUNT_MISMATCH")
-                        .replace("{0}", filteredFiles.length.toString())
-                        .replace("{1}", uploadedUrls.length.toString())
-                );
-                console.warn('[Folder Upload] Expected', filteredFiles.length, 'but got', uploadedUrls.length);
-            }
-
-            // Step 6: Scan for vault-wide references
-            new Notice(t("MSG_SCANNING_REFS"));
-
-            const multiReferenceImages: BatchUploadTaskInfo[] = [];
-            const fileWithVaultMatches: Array<{
-                file: TFile;
-                cloudUrl: string;
-                vaultMatches: ImageMatchResult;
-            }> = [];
-
-            for (let i = 0; i < Math.min(filteredFiles.length, uploadedUrls.length); i++) {
-                const file = filteredFiles[i];
-                const cloudUrl = uploadedUrls[i];
-
-                // Use VaultReferenceManager to check references
-                const references = await this.vaultReferenceManager.getFilesReferencingImage(file.path);
-
-                // Convert to ImageMatchResult structure
-                const fileGroups = new Map<string, ImageMatch[]>();
-                for (const ref of references) {
-                    if (!fileGroups.has(ref.file.path)) {
-                        fileGroups.set(ref.file.path, []);
-                    }
-                    fileGroups.get(ref.file.path)?.push({
-                        lineNumber: 0,
-                        line: ref.original,
-                        original: ref.original
-                    });
-                }
-
-                const vaultMatches: ImageMatchResult = {
-                    totalCount: references.length,
-                    files: []
-                };
-
-                for (const [path, matchItems] of fileGroups.entries()) {
-                    vaultMatches.files.push({
-                        path: path,
-                        matches: matchItems
-                    });
-                }
-
-                const totalReferences = vaultMatches.totalCount;
-
-                // Save file and match info
-                fileWithVaultMatches.push({
-                    file,
-                    cloudUrl,
-                    vaultMatches
-                });
-
-                // Record to multi-reference list if has references
-                if (totalReferences > 0) {
-                    multiReferenceImages.push({
-                        imageName: file.name,
-                        vaultReferences: totalReferences,
-                        currentNoteReferences: 0, // No current note context in folder upload
-                        otherNotesReferences: totalReferences,
-                        hasMultipleReferences: true
-                    });
-                }
-            }
-
-            // Step 7: Show confirmation dialog
-            const userChoice = await new Promise<'replace-current' | 'replace-all' | 'replace-all-delete' | 'cancel'>((resolve) => {
-                new BatchUploadConfirmDialog(
-                    this.app,
-                    filteredFiles.length,
-                    multiReferenceImages,
-                    folderPath, // Use folder path instead of current note path
-                    resolve
-                ).open();
-            });
-
-            if (userChoice === 'cancel') {
-                new Notice(t("MSG_UPLOAD_CANCELLED"));
-                return;
-            }
-
-            // Step 8: Replace links based on user choice
-            let replacedLinkCount = 0;
-
-            if (userChoice === 'replace-current') {
-                // For folder upload, 'replace-current' means no replacement (only upload)
-                new Notice(t("MSG_UPLOAD_ONLY_NO_REPLACEMENT"));
-            } else if (userChoice === 'replace-all' || userChoice === 'replace-all-delete') {
-                // Replace all vault references
-                for (let i = 0; i < Math.min(filteredFiles.length, uploadedUrls.length); i++) {
-                    const matchInfo = fileWithVaultMatches[i];
-                    if (matchInfo) {
-                        // Use VaultReferenceManager to update all references
-                        const count = await this.updateLinksWithManager(matchInfo.file.path, matchInfo.cloudUrl);
-                        replacedLinkCount += count;
-                        console.log(`[Folder Upload] Replaced ${count} references for:`, matchInfo.file.path);
-                    }
-                }
-
-                new Notice(t("MSG_REPLACED_ALL_LINKS").replace("{0}", replacedLinkCount.toString()));
-
-                // Delete local files (only when user chooses "replace all and delete")
-                if (userChoice === 'replace-all-delete' && filteredFiles.length > 0) {
-                    let deletedCount = 0;
-                    for (const file of filteredFiles) {
-                        try {
-                            await this.app.fileManager.trashFile(file);
-                            deletedCount++;
-                            console.log('[Folder Upload] Deleted source file:', file.path);
-                        } catch (error) {
-                            console.error('[Folder Upload] Failed to delete source file:', file.path, error);
-                            notificationManager.collectError(file.name, t("MSG_FILE_NOT_FOUND"));
-                        }
-                    }
-                    if (deletedCount > 0) {
-                        new Notice(t("MSG_DELETED_SOURCE_FILES").replace("{0}", deletedCount.toString()));
-                    }
-                }
-            }
-
-            // Refresh image captions (if enabled)
-            if (this.settings.enableImageCaptions) {
-                this.imageStateManager?.refreshAllImages();
-            }
-
-            // Show batch summary if there were errors
-            const totalErrors = notificationManager.getErrorCount();
-            if (totalErrors > 0) {
-                notificationManager.showBatchSummary(
-                    filteredFiles.length,
-                    uploadedUrls.length,
-                    t("MSG_FOLDER_UPLOAD")
-                );
-            }
-
-        } catch (error) {
-            console.error('[Folder Upload] Upload failed:', error);
-            new Notice(t("MSG_BATCH_UPLOAD_FAILED").replace("{0}", error.message));
-            notificationManager.showBatchSummary(
-                filteredFiles.length,
-                0,
-                t("MSG_FOLDER_UPLOAD")
-            );
-        } finally {
-            // Clear memory after batch upload
-            this.clearMemory();
-        }
-    }
-
-    /**
-     * Download all network images referenced in notes within a folder
-     * 批量下载文件夹内笔记引用的所有网络图片
-     * @param folderPath - Folder path
-     * @param recursive - Whether to include subfolders
-     */
-    private async downloadFolderImages(folderPath: string, recursive: boolean = false): Promise<void> {
-        // Step 1: Validate folder
-        const folder = this.app.vault.getAbstractFileByPath(folderPath);
-        if (!(folder instanceof TFolder)) {
-            new Notice(t("MSG_INVALID_FOLDER"));
-            return;
-        }
-
-        // Step 2: Collect all markdown files in folder
-        const allFiles = this.app.vault.getMarkdownFiles();
-        const normalizedFolderPath = folderPath.replace(/\\/g, '/').replace(/\/$/, '');
-        const prefix = normalizedFolderPath === '' || normalizedFolderPath === '/' ? '' : `${normalizedFolderPath}/`;
-
-        const isImmediateChild = (filePath: string) => {
-            if (!prefix) {
-                // Root folder: immediate children have no '/'
-                return filePath.indexOf('/') === -1;
-            }
-            if (!filePath.startsWith(prefix)) return false;
-            const remainder = filePath.slice(prefix.length);
-            return remainder.indexOf('/') === -1;
-        };
-
-        const markdownFiles = allFiles.filter((file) => {
-            const normalized = file.path.replace(/\\/g, '/');
-            if (recursive) {
-                return prefix === '' ? true : normalized.startsWith(prefix);
-            }
-            return isImmediateChild(normalized);
-        });
-
-        if (markdownFiles.length === 0) {
-            new Notice(t("MSG_NO_NOTES_IN_FOLDER"));
-            return;
-        }
-
-        console.log('[Folder Download] Found', markdownFiles.length, 'markdown file(s) in folder:', folderPath);
-
-        // Step 3: Extract all network images from notes
-        const networkImageMap = new Map<string, { url: string; notes: TFile[] }>();
-
-        for (const noteFile of markdownFiles) {
-            try {
-                const content = await this.app.vault.read(noteFile);
-
-                // Extract network images using regex (Markdown format)
-                const markdownRegex = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
-                let match;
-                while ((match = markdownRegex.exec(content)) !== null) {
-                    const url = match[1];
-                    if (!networkImageMap.has(url)) {
-                        networkImageMap.set(url, { url, notes: [] });
-                    }
-                    const existing = networkImageMap.get(url)!;
-                    if (!existing.notes.includes(noteFile)) {
-                        existing.notes.push(noteFile);
-                    }
-                }
-
-                // Extract network images (Wikilink format)
-                const wikilinkRegex = /!\[\[(https?:\/\/[^\]]+)\]\]/g;
-                while ((match = wikilinkRegex.exec(content)) !== null) {
-                    const url = match[1];
-                    if (!networkImageMap.has(url)) {
-                        networkImageMap.set(url, { url, notes: [] });
-                    }
-                    const existing = networkImageMap.get(url)!;
-                    if (!existing.notes.includes(noteFile)) {
-                        existing.notes.push(noteFile);
-                    }
-                }
-            } catch (error) {
-                console.error('[Folder Download] Failed to read note:', noteFile.path, error);
-            }
-        }
-
-        const networkImages = Array.from(networkImageMap.values());
-
-        if (networkImages.length === 0) {
-            new Notice(t("MSG_NO_NETWORK_IMAGES_IN_FOLDER"));
-            return;
-        }
-
-        console.log('[Folder Download] Found', networkImages.length, 'unique network image(s)');
-
-        // Step 4: Apply blacklist filter
-        const blackDomains = this.settings.cloudUploadSettings?.newWorkBlackDomains || "";
-        const filteredImages = networkImages.filter(img => {
-            if (!blackDomains.trim()) return true;
-            return !this.isBlacklistedDomain(img.url);
-        });
-
-        if (filteredImages.length < networkImages.length) {
-            new Notice(t("MSG_FILTERED_BLACKLISTED").replace("{0}", (networkImages.length - filteredImages.length).toString()));
-        }
-
-        if (filteredImages.length === 0) {
-            new Notice(t("MSG_ALL_IMAGES_BLACKLISTED"));
-            return;
-        }
-
-        // Step 5: Build download tasks with reference information
-        const tasks: any[] = filteredImages.map(img => {
-            const filename = this.extractFilenameFromUrl(img.url);
-            return {
-                url: img.url,
-                originalSource: img.url,
-                suggestedName: filename,
-                selected: true
-            };
-        });
-
-        // Step 6: Show download modal
-        const { NetworkImageDownloadModal } = await import('./cloud/NetworkImageDownloadModal');
-
-        const modal = new NetworkImageDownloadModal(
-            this.app,
-            tasks,
-            async (choice) => {
-                await this.executeFolderDownload(choice, filteredImages, folderPath);
-            }
-        );
-
-        modal.open();
-    }
-
-    /**
-     * Execute folder download operation
-     * 执行文件夹下载操作
-     */
-    private async executeFolderDownload(
-        choice: { mode: string; selectedTasks: any[] },
-        imageData: Array<{ url: string; notes: TFile[] }>,
-        folderPath: string
-    ): Promise<void> {
-        const { mode, selectedTasks } = choice;
-        const notificationManager = new NotificationManager();
-
-        try {
-            let successCount = 0;
-            let skippedCount = 0;
-
-            // Use concurrent queue for download
-            const concurrency = this.settings.cloudUploadSettings.uploadConcurrency || 3;
-            const queue = new ConcurrentQueue(concurrency);
-
-            const downloadTasks = selectedTasks.map(task => async () => {
-                const imageInfo = imageData.find(img => img.url === task.url);
-                if (!imageInfo) return;
-
-                try {
-                    // Get attachment folder for the first note that references this image
-                    const firstNote = imageInfo.notes[0];
-                    const attachmentPath = await this.app.fileManager.getAvailablePathForAttachment(
-                        "",
-                        firstNote.path
-                    );
-
-                    // Download image using NetworkImageDownloader
-                    const result = await this.networkDownloader.downloadSingleImageInternal(
-                        task.url,
-                        attachmentPath,
-                        task.suggestedName,
-                        firstNote
-                    );
-
-                    if (result.success && result.localPath) {
-                        successCount++;
-
-                        // Replace links in all notes that reference this image (if mode is download-and-replace)
-                        if (mode === "download-and-replace") {
-                            for (const noteFile of imageInfo.notes) {
-                                try {
-                                    await this.vaultReferenceManager.updateReferencesInFile(
-                                        noteFile,
-                                        task.url,
-                                        (location) => {
-                                            // Extract original alt text and size params
-                                            let altText = "";
-                                            let sizeParams = "";
-                                            const markdownMatch = location.original.match(/!\[([^\]]*)\]/);
-                                            if (markdownMatch) {
-                                                const fullAlt = markdownMatch[1];
-                                                const sizeMatch = fullAlt.match(/^(.*?)\|(\d+x\d*|\d*x\d+|\d+)$/);
-                                                if (sizeMatch) {
-                                                    altText = sizeMatch[1];
-                                                    sizeParams = `|${sizeMatch[2]}`;
-                                                } else {
-                                                    altText = fullAlt;
-                                                }
-                                            }
-
-                                            // Generate new link with relative path
-                                            const relativePath = this.app.metadataCache.fileToLinktext(
-                                                this.app.vault.getAbstractFileByPath(result.localPath!) as TFile,
-                                                noteFile.path
-                                            );
-                                            return `![${altText}${sizeParams}](${encodeURI(relativePath)})`;
-                                        }
-                                    );
-                                    console.log('[Folder Download] Replaced links in:', noteFile.path);
-                                } catch (error) {
-                                    console.error('[Folder Download] Failed to replace links in:', noteFile.path, error);
-                                    notificationManager.collectError(
-                                        noteFile.name,
-                                        t("MSG_REPLACE_FAILED").replace("{0}", error.message)
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        notificationManager.collectError(
-                            task.suggestedName,
-                            result.error || t("MSG_UNKNOWN_ERROR"),
-                            task.url
-                        );
-                        console.error('[Folder Download] Failed:', task.url, '-', result.error);
-                    }
-                } catch (error) {
-                    notificationManager.collectError(
-                        task.suggestedName,
-                        error.message || t("MSG_PROCESSING_FAILED"),
-                        task.url
-                    );
-                    console.error('[Folder Download] Error processing', task.url, ':', error);
-                }
-            });
-
-            // Execute download tasks with concurrency control
-            await queue.run(downloadTasks);
-
-            // Show completion notice
-            const totalSelected = selectedTasks.length;
-            if (mode === "download-and-replace") {
-                new Notice(
-                    t("MSG_DOWNLOAD_REPLACE_COMPLETE")
-                        .replace("{0}", successCount.toString())
-                        .replace("{1}", totalSelected.toString())
-                );
-            } else if (mode === "download-only") {
-                new Notice(
-                    t("MSG_DOWNLOAD_COMPLETE")
-                        .replace("{0}", successCount.toString())
-                        .replace("{1}", totalSelected.toString())
-                );
-            }
-
-            // Show batch summary if there were errors
-            const totalErrors = notificationManager.getErrorCount();
-            if (totalErrors > 0) {
-                notificationManager.showBatchSummary(
-                    totalSelected,
-                    successCount,
-                    t("MSG_FOLDER_DOWNLOAD")
-                );
-            }
-
-            // Refresh image captions (if enabled)
-            if (this.settings.enableImageCaptions) {
-                this.imageStateManager?.refreshAllImages();
-            }
-
-        } catch (error) {
-            console.error('[Folder Download] Download failed:', error);
-            new Notice(t("MSG_BATCH_DOWNLOAD_FAILED").replace("{0}", error.message));
-        } finally {
-            // Clear memory after batch download
-            this.clearMemory();
-        }
-    }
-
-    /**
-     * Extract filename from URL
-     * 从 URL 中提取文件名
-     */
-    private extractFilenameFromUrl(url: string): string {
-        try {
-            const urlObj = new URL(url);
-            const pathname = urlObj.pathname;
-            const filename = pathname.substring(pathname.lastIndexOf('/') + 1);
-            return decodeURIComponent(filename) || 'downloaded-image.jpg';
-        } catch (error) {
-            console.error('[Extract Filename] Invalid URL:', url, error);
-            return 'downloaded-image.jpg';
-        }
-    }
-
-    /**
-     * Check if a network image URL is from a blacklisted domain
-     * 检查网络图片 URL 是否来自黑名单域名
-     */
-    private isBlacklistedDomain(url: string): boolean {
-        try {
-            const blacklist = this.settings.cloudUploadSettings.newWorkBlackDomains;
-            if (!blacklist || blacklist.trim() === '') {
-                return false;
-            }
-
-            const domains = blacklist.split(',').map(d => d.trim().toLowerCase()).filter(d => d.length > 0);
-            if (domains.length === 0) {
-                return false;
-            }
-
-            const urlObj = new URL(url);
-            const hostname = urlObj.hostname.toLowerCase();
-
-            // Check if hostname matches or ends with any blacklisted domain
-            return domains.some(domain => {
-                return hostname === domain || hostname.endsWith('.' + domain);
-            });
-        } catch (error) {
-            console.error('[Blacklist Check] Invalid URL:', url, error);
-            return false;
-        }
-    }
-
-    /**
-     * Handle paste event in cloud mode
-     * Upload images to image hosting service and insert links
-     */
-    private async handlePasteCloud(
-        itemData: { kind: string; type: string; file: File | null }[],
-        editor: Editor,
-        cursor: EditorPosition,
-        clipboardText?: string
-    ) {
-        console.log('[Cloud Upload] handlePasteCloud called with', itemData.length, 'items');
-
-        // Check applyImage setting: if clipboard has both text and image
-        const hasText = clipboardText && clipboardText.trim().length > 0;
-        const hasImageFile = itemData.some(data => data.kind === "file" && data.file);
-
-        if (hasText && hasImageFile && !this.settings.cloudUploadSettings.applyImage) {
-            console.log('[Cloud Upload] Skipping upload: clipboard has both text and image, but applyImage is disabled');
-            return; // Don't upload, let Obsidian handle the paste
-        }
-
-        // Filter supported files
-        const supportedFiles = itemData
-            .filter(data => data.kind === "file" && data.file &&
-                this.supportedImageFormats.isSupported(data.type, data.file.name))
-            .map(data => data.file!)
-            .filter((file): file is File => file !== null);
-
-        console.log('[Cloud Upload] Found', supportedFiles.length, 'supported files');
-        if (supportedFiles.length === 0) return;
-
-        const activeFile = this.app.workspace.getActiveFile();
-        console.log('[Cloud Upload] Active file:', activeFile?.path);
-        if (!activeFile) {
-            new Notice('No active file detected.');
-            return;
-        }
-
-        // Process each file
-        for (const file of supportedFiles) {
-            console.log('[Cloud Upload] Processing file:', file.name, 'size:', file.size, 'type:', file.type);
-
-            // Insert uploading placeholder using EditorContentInserter
-            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
-            inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
-
-            try {
-                // Create uploader manager
-                const uploaderManager = new UploaderManager(
-                    this.settings.cloudUploadSettings.uploader,
-                    this
-                );
-                console.log('[Cloud Upload] Created uploader manager for:', this.settings.cloudUploadSettings.uploader);
-
-                // Convert File to FileList for upload
-                const dataTransfer = new DataTransfer();
-                dataTransfer.items.add(file);
-                const fileList = dataTransfer.files;
-                console.log('[Cloud Upload] Prepared FileList with', fileList.length, 'file(s)');
-
-                // Upload directly from drop without saving to vault
-                console.log('[Cloud Upload] Starting clipboard upload for:', file.name);
-                const uploadResult = await uploaderManager.uploadByClipboard(fileList);
-                console.log('[Cloud Upload] Upload result:', uploadResult);
-
-                // Generate cloud link with size parameters
-                const cloudUrl = uploadResult.result[0];
-                console.log('[Cloud Upload] Cloud URL:', cloudUrl);
-
-                const cloudLink = CloudLinkFormatter.formatCloudLink(
-                    cloudUrl,
-                    this.settings.cloudUploadSettings
-                    // Clipboard upload - no original link to preserve
-                );
-                console.log('[Cloud Upload] Formatted cloud link:', cloudLink);
-
-                // Replace placeholder with final link
-                inserter.insertResponseToEditor(cloudLink);
-
-                new Notice('Image uploaded successfully!');
-                console.log('[Cloud Upload] Upload completed successfully');
-            } catch (error) {
-                console.error('[Cloud Upload] Upload failed:', error);
-                console.error('[Cloud Upload] Error stack:', error.stack);
-                new Notice(`Upload failed: ${error.message}`);
-
-                // Remove placeholder on failure
-                inserter.removeLoadingText();
-                console.log('[Cloud Upload] Placeholder removed due to upload failure');
-            } finally {
-                // Clear memory after processing
-                this.clearMemory();
-            }
-        }
-
-        // Refresh captions if enabled
-        if (this.settings.enableImageCaptions) {
-            this.imageStateManager?.refreshAllImages();
-        }
-    }
-
-    /**
-     * Handle pasted text containing image URLs in cloud mode
-     * Extract image URLs and upload them to cloud storage
-     * Supports both Markdown and Wikilink formats
-     */
-    private async handlePasteTextCloud(
-        clipboardText: string,
-        editor: Editor,
-        cursor: EditorPosition,
-        evt: ClipboardEvent
-    ) {
-        // Check if workOnNetWork is enabled
-        if (!this.settings.cloudUploadSettings.workOnNetWork) {
-            return; // Network image upload is disabled
-        }
-
-        // Extract image URLs from pasted text (Markdown format)
-        const imageUrlRegex = /!\[(.*?)\]\((https?:\/\/[^\s)]+)\)/g;
-        const markdownMatches = [...clipboardText.matchAll(imageUrlRegex)];
-
-        // Extract image URLs from pasted text (Wikilink format)
-        // Import from RegexPatterns
-        const { REGEX_WIKI_NETWORK_IMAGE } = await import('./utils/RegexPatterns');
-        const wikilinkMatches = [...clipboardText.matchAll(REGEX_WIKI_NETWORK_IMAGE)];
-
-        const totalMatches = markdownMatches.length + wikilinkMatches.length;
-
-        if (totalMatches === 0) {
-            return; // No image URLs found
-        }
-
-        console.log('[Cloud Upload] Found', totalMatches, 'image URL(s) in pasted text');
-
-        // Filter out blacklisted domains for Markdown format
-        const validMarkdownMatches = markdownMatches.filter(match => {
-            const url = match[2];
-            if (this.isBlacklistedDomain(url)) {
-                console.log('[Cloud Upload] Skipping blacklisted URL:', url);
-                return false;
-            }
-            return true;
-        });
-
-        // Filter out blacklisted domains for Wikilink format
-        const validWikilinkMatches = wikilinkMatches.filter(match => {
-            const url = match[1];
-            if (this.isBlacklistedDomain(url)) {
-                console.log('[Cloud Upload] Skipping blacklisted URL:', url);
-                return false;
-            }
-            return true;
-        });
-
-        if (validMarkdownMatches.length === 0 && validWikilinkMatches.length === 0) {
-            return; // All URLs are blacklisted
-        }
-
-        evt.preventDefault(); // Prevent default paste
-
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) {
-            new Notice('No active file detected.');
-            return;
-        }
-
-        // Process each image URL
-        let newContent = clipboardText;
-        const uploaderManager = new UploaderManager(
-            this.settings.cloudUploadSettings.uploader,
-            this
-        );
-
-        // Process Markdown format matches
-        for (const match of validMarkdownMatches) {
-            const originalLink = match[0]; // Full markdown link
-            const altText = match[1];
-            const imageUrl = match[2];
-
-            try {
-                console.log('[Cloud Upload] Uploading network image:', imageUrl);
-
-                // Upload the network image
-                const uploadResult = await uploaderManager.upload([imageUrl]);
-
-                if (uploadResult.success && uploadResult.result.length > 0) {
-                    const cloudUrl = uploadResult.result[0];
-                    console.log('[Cloud Upload] Network image uploaded to:', cloudUrl);
-
-                    // Generate cloud link with size parameters
-                    const cloudLink = CloudLinkFormatter.formatCloudLink(
-                        cloudUrl,
-                        this.settings.cloudUploadSettings,
-                        originalLink // Determine from match original
-                    );
-
-                    // Replace the original link with the new cloud link
-                    newContent = newContent.replace(originalLink, cloudLink);
-                    console.log('[Cloud Upload] Replaced URL:', imageUrl, '->', cloudUrl);
-                } else {
-                    console.error('[Cloud Upload] Upload failed for:', imageUrl);
-                    new Notice(`Failed to upload network image: ${imageUrl}`);
-                }
-            } catch (error) {
-                console.error('[Cloud Upload] Error uploading network image:', error);
-                new Notice(`Error uploading ${imageUrl}: ${error.message}`);
-            } finally {
-                // Clear memory after processing
-                this.clearMemory();
-            }
-        }
-
-        // Process Wikilink format matches
-        for (const match of validWikilinkMatches) {
-            const originalLink = match[0]; // Full wikilink: ![[https://...]]
-            const imageUrl = match[1];
-            const pipeParams = match[2] || ''; // Pipe parameters like |alt text
-
-            try {
-                console.log('[Cloud Upload] Uploading network image (Wikilink):', imageUrl);
-
-                // Upload the network image
-                const uploadResult = await uploaderManager.upload([imageUrl]);
-
-                if (uploadResult.success && uploadResult.result.length > 0) {
-                    const cloudUrl = uploadResult.result[0];
-                    console.log('[Cloud Upload] Network image uploaded to:', cloudUrl);
-
-                    // Generate cloud link with size parameters (Wikilink format)
-                    const cloudLink = CloudLinkFormatter.formatCloudLink(
-                        cloudUrl,
-                        this.settings.cloudUploadSettings,
-                        originalLink // Determine from match original
-                    );
-
-                    // Replace the original link with the new cloud link
-                    newContent = newContent.replace(originalLink, cloudLink);
-                    console.log('[Cloud Upload] Replaced Wikilink URL:', imageUrl, '->', cloudUrl);
-                } else {
-                    console.error('[Cloud Upload] Upload failed for:', imageUrl);
-                    new Notice(`Failed to upload network image: ${imageUrl}`);
-                }
-            } catch (error) {
-                console.error('[Cloud Upload] Error uploading network image:', error);
-                new Notice(`Error uploading ${imageUrl}: ${error.message}`);
-            } finally {
-                // Clear memory after processing
-                this.clearMemory();
-            }
-        }
-
-        // Insert the modified content
-        editor.replaceRange(newContent, cursor);
-
-        const totalUploaded = validMarkdownMatches.length + validWikilinkMatches.length;
-        if (totalUploaded > 0) {
-            new Notice(`Uploaded ${totalUploaded} network image(s) successfully!`);
-        }
-
-        // Refresh captions if enabled
-        if (this.settings.enableImageCaptions) {
-            this.imageStateManager?.refreshAllImages();
-        }
-    }
-
-    // ============================================
-    // Right-click Upload Methods
-    // ============================================
-
-    /**
-     * Upload a single file from file menu right-click or context menu
-     * 右键上传单个文件
-     */
-    async uploadSingleFile(file: TFile): Promise<void> {
-        // 检查文件是否已经是网络图片（通过检查文件路径是否以 http:// 或 https:// 开头）
-        if (file.path.startsWith('http://') || file.path.startsWith('https://')) {
-            new Notice('⚠️ 不能上传网络图片，请只上传本地图片文件');
-            console.warn('[Upload] Attempted to upload network image:', file.path);
-            return;
-        }
-
-        // Stage 1: Upload
-        const uploadResult = await this.uploadWithRetry(file);
-        if (!uploadResult) {
-            return; // User cancelled or upload failed
-        }
-        const { cloudUrl } = uploadResult;
-        new Notice(`上传成功: ${cloudUrl}`);
-
-        // 2. Check for existing references in the vault to this image
-        // Use VaultReferenceManager for O(1) lookup
-        const references = await this.vaultReferenceManager.getFilesReferencingImage(file.path);
-
-        // Convert to ImageMatchResult for compatibility with existing modals
-        // TODO: Ideally refactor modals to use ReferenceLocation[] directly,
-        // but for now we map it to preserve existing UI structures.
-        const matches: ImageMatchResult = {
-            totalCount: references.length,
-            files: []
-        };
-
-        // Group by file path
-        const fileGroups = new Map<string, ImageMatch[]>(); // Changed type to ImageMatch[]
-        for (const ref of references) {
-            if (!fileGroups.has(ref.file.path)) {
-                fileGroups.set(ref.file.path, []);
-            }
-            fileGroups.get(ref.file.path)?.push({
-                lineNumber: 0, // Cache doesn't give line number directly easily without re-reading, but we have offsets.
-                // UI mostly uses this for display, can be approximated or ignored for now.
-                line: ref.original, // Use original link text context
-                original: ref.original
-            });
-        }
-
-        for (const [path, matchItems] of fileGroups.entries()) {
-            matches.files.push({
-                path: path,
-                matches: matchItems
-            });
-        }
-        const totalCount = matches.totalCount;
-
-        // Stage 3: Decide based on reference count
-        // If matches found, ask user what to do
-        if (matches.totalCount > 0) {
-            // Determine if we are replacing in current note only or all
-            // Logic from original code:
-            // "If we are in the context of a current note (e.g. paste), maybe prompt differently?"
-            // Current logic simplifies to:
-            // 1. Single reference -> SingleReferenceUploadDialog
-            // 2. Multiple references -> MultiReferenceUploadDialog
-            // 3. No references -> NoReferenceUploadDialog (handled below)
-
-            // Reuse existing modals, but map their callbacks to our standardized actions
-            const currentNote = this.app.workspace.getActiveFile();
-            const currentNotePath = currentNote ? currentNote.path : undefined;
-
-            if (matches.totalCount === 1) {
-                const match = matches.files[0];
-                new SingleReferenceUploadDialog(
-                    this.app,
-                    file.name,
-                    cloudUrl,
-                    { file: match.path, line: match.matches[0].lineNumber },
-                    (choice) => {
-                        if (choice === 'replace') {
-                            this.updateLinksWithManager(file.path, cloudUrl);
-                        } else if (choice === 'replace-delete') {
-                            this.updateLinksWithManager(file.path, cloudUrl).then(() => {
-                                this.app.vault.trash(file, true);
-                            });
-                        } else if (choice === 'undo') {
-                            this.deleteCloudImage(cloudUrl);
-                        }
-                    }
-                ).open();
-            } else { // Multiple references
-                new MultiReferenceUploadDialog(
-                    this.app,
-                    file.name,
-                    cloudUrl,
-                    matches,
-                    currentNotePath,
-                    (choice) => {
-                        if (choice === 'replace-current') {
-                            this.updateLinksWithManager(file.path, cloudUrl, currentNotePath ? [currentNotePath] : undefined);
-                        } else if (choice === 'replace-all') {
-                            this.updateLinksWithManager(file.path, cloudUrl);
-                        } else if (choice === 'replace-all-delete') {
-                            this.updateLinksWithManager(file.path, cloudUrl).then(() => {
-                                this.app.vault.trash(file, true);
-                            });
-                        }
-                    }
-                ).open();
-            }
-
-        } else { // No references
-            new NoReferenceUploadDialog(
-                this.app,
-                file.name,
-                cloudUrl,
-                file,
-                (choice) => {
-                    if (choice === 'delete-all') {
-                        this.deleteCloudImage(cloudUrl);
-                        this.app.vault.trash(file, true);
-                    } else if (choice === 'keep-cloud') {
-                        this.app.vault.trash(file, true);
-                    }
-                }
-            ).open();
-        }
-    }
-
-    /**
-     * Build upload path for a local file
-     * 根据远程模式选择路径格式：
-     * - 远程模式：使用 vault 内相对路径
-     * - 本地模式：拼接完整的文件系统绝对路径
-     */
-    private buildUploadPath(file: TFile): string {
-        try {
-            // 远程模式使用 vault 内路径
-            if (this.settings.cloudUploadSettings.remoteServerMode) {
-                console.log('[Upload] Remote mode - using vault path:', file.path);
-                return file.path;
-            }
-
-            // 本地模式使用绝对路径
-            const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
-            const fullPath = normalizePath(join(basePath, file.path));
-            console.log('[Upload] Local mode - vault path:', file.path, '-> full path:', fullPath);
-            return fullPath;
-        } catch (error) {
-            console.error('[Upload] Failed to build upload path:', error);
-            throw new Error(`无法构建文件路径: ${error.message}`);
-        }
-    }
-
-    /**
-     * Validate file exists in vault
-     */
-    private async validateFileExists(file: TFile): Promise<boolean> {
-        try {
-            const exists = await this.app.vault.adapter.exists(file.path);
-            if (!exists) {
-                console.warn('[Upload] File does not exist:', file.path);
-                new Notice(`⚠️ 文件不存在: ${file.name}`);
-                return false;
-            }
-            return true;
-        } catch (error) {
-            console.error('[Upload] Failed to check file existence:', error);
-            return false;
-        }
-    }
-
-    /**
-     * Upload with retry mechanism
-     */
-    private async uploadWithRetry(file: TFile): Promise<{ cloudUrl: string } | null> {
-        let retryCount = 0;
-        const maxRetries = 3;
-
-        while (retryCount < maxRetries) {
-            try {
-                new Notice(`正在上传 ${file.name}...`);
-
-                // 验证文件存在性
-                if (!await this.validateFileExists(file)) {
-                    throw new Error('文件不存在');
-                }
-
-                const uploaderManager = new UploaderManager(
-                    this.settings.cloudUploadSettings.uploader,
-                    this
-                );
-
-                // 使用统一的路径构建方法
-                const uploadPath = this.buildUploadPath(file);
-
-                const uploadResult = await uploaderManager.upload([uploadPath]);
-                const cloudUrl = uploadResult.result[0];
-
-                return { cloudUrl };
-            } catch (error) {
-                retryCount++;
-
-                if (retryCount >= maxRetries) {
-                    // Show error dialog
-                    const retry = await new Promise<boolean>((resolve) => {
-                        new UploadErrorDialog(
-                            this.app,
-                            file.name,
-                            error.message,
-                            (choice) => resolve(choice === 'retry')
-                        ).open();
-                    });
-
-                    if (retry) {
-                        retryCount = 0; // Reset counter and continue loop
-                    } else {
-                        return null; // User cancelled
-                    }
-                } else {
-                    // Auto retry
-                    new Notice(`上传失败,正在重试... (${retryCount}/${maxRetries})`);
-                    await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-                }
-            }
-        }
-
-        return null;
-    }
-
-    // findVaultImageMatches removed
-    // findImageMatchesInContent removed
-
-    /**
-     * Resolve image path relative to source file
-     */
-    private resolveImagePath(linkPath: string, sourceFilePath: string): string {
-        if (linkPath.startsWith('http://') || linkPath.startsWith('https://')) {
-            return linkPath; // Network image, return as is
-        }
-
-        const sourceDir = dirname(sourceFilePath);
-
-        if (linkPath.startsWith('./') || linkPath.startsWith('../')) {
-            return normalizePath(join(sourceDir, linkPath));
-        }
-
-        // Try to find the file in the vault
-        const file = this.app.metadataCache.getFirstLinkpathDest(linkPath, sourceFilePath);
-        if (file) {
-            return file.path;
-        }
-
-        return normalizePath(linkPath);
-    }
-
-    /**
-     * Check if two paths match
-     */
-    private pathsMatch(path1: string, path2: string): boolean {
-        const normalized1 = normalizePath(path1).toLowerCase();
-        const normalized2 = normalizePath(path2).toLowerCase();
-
-        return normalized1 === normalized2 ||
-            normalized1.endsWith(normalized2) ||
-            normalized2.endsWith(normalized1);
-    }
-
-    /**
-     * Handle case when image has no references
-     */
-    private async handleNoReference(file: TFile, cloudUrl: string): Promise<void> {
-        const choice = await new Promise<string>((resolve) => {
-            new NoReferenceUploadDialog(
-                this.app,
-                file.name,
-                cloudUrl,
-                file,
-                resolve
-            ).open();
-        });
-
-        switch (choice) {
-            case 'keep-cloud':
-                // Delete local file
-                await this.app.vault.trash(file, true);
-                new Notice(`✓ 已删除本地文件,云端保留`);
-                break;
-
-            case 'delete-all':
-                // Delete cloud
-                await this.deleteCloudImage(cloudUrl);
-                // Delete local
-                await this.app.vault.trash(file, true);
-                new Notice(`✓ 已删除云端和本地文件`);
-                break;
-
-            case 'keep-all':
-                new Notice(`已保留云端和本地文件`);
-                break;
-        }
-    }
-
-    /**
-     * Handle case when image has single reference
-     */
-    private async handleSingleReference(
-        file: TFile,
-        cloudUrl: string,
-        matches: ImageMatchResult
-    ): Promise<void> {
-        const referenceFile = matches.files[0];
-        const referenceLine = referenceFile.matches[0].lineNumber;
-
-        const choice = await new Promise<string>((resolve) => {
-            new SingleReferenceUploadDialog(
-                this.app,
-                file.name,
-                cloudUrl,
-                { file: referenceFile.path, line: referenceLine },
-                resolve
-            ).open();
-        });
-
-        switch (choice) {
-            case 'replace':
-                await this.updateLinksWithManager(file.path, cloudUrl);
-                new Notice(`✓ 已替换引用`);
-                break;
-
-            case 'replace-delete':
-                await this.updateLinksWithManager(file.path, cloudUrl);
-                if (this.settings.cloudUploadSettings.deleteSource) {
-                    await this.app.vault.trash(file, true);
-                    new Notice(`✓ 已替换引用并删除本地文件`);
-                } else {
-                    new Notice(`✓ 已替换引用 (设置中未启用删除源文件)`);
-                }
-                break;
-
-            case 'undo':
-                await this.deleteCloudImage(cloudUrl);
-                new Notice(`已撤销上传`);
-                break;
-
-            case 'cancel':
-                new Notice(`已取消,图片已上传但未替换引用`);
-                break;
-        }
-    }
-
-    /**
-     * Handle case when image has multiple references
-     */
-    private async handleMultipleReferences(
-        file: TFile,
-        cloudUrl: string,
-        matches: ImageMatchResult,
-        currentNotePath?: string
-    ): Promise<void> {
-        const choice = await new Promise<string>((resolve) => {
-            new MultiReferenceUploadDialog(
-                this.app,
-                file.name,
-                cloudUrl,
-                matches,
-                currentNotePath,
-                resolve
-            ).open();
-        });
-
-        switch (choice) {
-            case 'replace-current':
-                if (currentNotePath) {
-                    const currentMatches = {
-                        totalCount: 0,
-                        files: matches.files.filter(f => f.path === currentNotePath)
-                    };
-                    currentMatches.totalCount = currentMatches.files.reduce(
-                        (sum, f) => sum + f.matches.length, 0
-                    );
-
-                    await this.updateLinksWithManager(file.path, cloudUrl, [currentNotePath]);
-                    new Notice(`✓ 已替换当前笔记中的 ${currentMatches.totalCount} 处引用`);
-                }
-                break;
-
-            case 'replace-all':
-                await this.updateLinksWithManager(file.path, cloudUrl);
-                if (this.settings.cloudUploadSettings.deleteSource) {
-                    await this.app.vault.trash(file, true);
-                    new Notice(`✓ 已替换所有引用并删除本地文件`);
-                } else {
-                    new Notice(`✓ 已替换所有引用 (设置中未启用删除源文件)`);
-                }
-                break;
-
-            case 'cancel':
-                new Notice(`已取消,图片已上传但未替换引用`);
-                break;
-        }
-    }
-
-    // handleUploadResponse removed as logic moved inline above or replaced by direct calls to updateLinksWithManager
-    // replaceAllReferences removed
-
-    /**
-     * WRAPPER: Update links using VaultReferenceManager
-     */
-    private async updateLinksWithManager(imagePath: string, cloudUrl: string, scopeFiles?: string[]): Promise<number> {
-        const count = await this.vaultReferenceManager.updateReferences(imagePath, (loc) => {
-            // Check if we should only update specific files (for 'replace-current' logic)
-            if (scopeFiles && !scopeFiles.includes(loc.file.path)) {
-                return loc.original; // No change
-            }
-
-            return CloudLinkFormatter.formatCloudLink(
-                cloudUrl,
-                this.settings.cloudUploadSettings,
-                loc.original
-            );
-        });
-
-        if (this.settings.enableImageCaptions) {
-            this.imageStateManager?.refreshAllImages();
-        }
-
-        return count;
-    }
-
-    /**
-     * Delete cloud image (only works with PicList)
-     */
-    private async deleteCloudImage(cloudUrl: string): Promise<void> {
-        if (this.settings.cloudUploadSettings.uploader !== 'PicList') {
-            new Notice(t("MSG_DELETE_NOT_SUPPORTED"));
-            return;
-        }
-
-        try {
-            new Notice(t("MSG_DELETING_CLOUD"));
-
-            const deleter = new CloudImageDeleter(this);
-            const success = await deleter.deleteImage({
-                url: cloudUrl
-            });
-
-            if (success) {
-                new Notice(t("MSG_DELETE_CLOUD_SUCCESS"));
-            } else {
-                new Notice(t("MSG_DELETE_CLOUD_FAILED"));
-            }
-        } catch (error) {
-            console.error('[Delete Cloud] Error:', error);
-            new Notice(t("MSG_DELETE_CLOUD_ERROR").replace("{0}", error.message));
-        }
-    }
-
 
 }

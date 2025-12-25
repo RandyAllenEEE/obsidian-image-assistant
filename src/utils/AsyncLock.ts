@@ -32,7 +32,7 @@ export class ConcurrentQueue {
     private running = 0;
     private queue: Array<() => Promise<void>> = [];
 
-    constructor(private concurrency: number = 3) {}
+    constructor(private concurrency: number = 3) { }
 
     async run<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
         const results: T[] = [];
@@ -66,6 +66,49 @@ export class ConcurrentQueue {
                         .catch((error) => {
                             this.running--;
                             reject(error);
+                        });
+                }
+            };
+
+            next();
+        });
+    }
+
+    async runSettled<T>(tasks: Array<() => Promise<T>>): Promise<PromiseSettledResult<T>[]> {
+        const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+        let index = 0;
+
+        const wrappedTasks = tasks.map((task, i) => async () => {
+            try {
+                const value = await task();
+                results[i] = { status: 'fulfilled', value };
+            } catch (reason) {
+                console.error(`Task ${i} failed:`, reason);
+                results[i] = { status: 'rejected', reason };
+            }
+        });
+
+        return new Promise((resolve) => {
+            const next = () => {
+                if (index >= wrappedTasks.length && this.running === 0) {
+                    resolve(results);
+                    return;
+                }
+
+                while (this.running < this.concurrency && index < wrappedTasks.length) {
+                    const task = wrappedTasks[index++];
+                    this.running++;
+
+                    task()
+                        .then(() => {
+                            this.running--;
+                            next();
+                        })
+                        .catch(() => {
+                            // This catch should generally not be hit because wrappedTasks catches internally,
+                            // but good for safety.
+                            this.running--;
+                            next();
                         });
                 }
             };

@@ -13,11 +13,12 @@ import {
 	Editor,
 	Modal,
 } from 'obsidian';
-import * as path from 'path';
 import { t } from '../lang/helpers';
+
+import * as path from 'path';
 import ImageConverterPlugin from "../main";
 import { FolderAndFilenameManagement } from '../local/FolderAndFilenameManagement';
-import { ConfirmDialog } from '../settings/ImageAssistantSettings';
+import { ConfirmDialog } from '../settings/SettingsModals';
 import { VariableProcessor, VariableContext } from '../local/VariableProcessor';
 import { ImageAnnotationModal } from './ImageAnnotation';
 import { Crop } from './Crop';
@@ -169,7 +170,7 @@ export class ContextMenu extends Component {
 		menu.addSeparator();
 
 		// Logic migrated from ImageAlignment.ts
-		if (this.plugin.settings.isImageAlignmentEnabled && this.plugin.imageStateManager) {
+		if (this.plugin.settings.alignment.enabled && this.plugin.imageStateManager) {
 			this.addAlignmentOptions(menu, img);
 		}
 
@@ -184,10 +185,8 @@ export class ContextMenu extends Component {
 			this.addCropRotateFlipMenuItem(menu, img);
 			this.addAnnotateImageMenuItem(menu, img);
 
-			// Add upload option for local images in cloud mode
-			if (this.plugin.settings.pasteHandlingMode === 'cloud') {
-				this.addUploadToCloudMenuItem(menu, img, event);
-			}
+			// Add upload option for local images (always available)
+			this.addUploadToCloudMenuItem(menu, img, event);
 		}
 
 		menu.addSeparator();
@@ -565,7 +564,7 @@ export class ContextMenu extends Component {
 					maybeDom.appendChild(inputContainer);
 				} else {
 					// Minimal fallback for test environment without MenuItem DOM
-					(menuItem as any).setTitle?.('Image tools');
+					(menuItem as any).setTitle?.(t("MENU_IMAGE_TOOLS"));
 				}
 			});
 		}
@@ -1061,7 +1060,7 @@ export class ContextMenu extends Component {
 				canvas.height = img.naturalHeight;
 				const ctx = canvas.getContext('2d');
 				if (!ctx) {
-					new Notice('Failed to get canvas context');
+					new Notice(t("MSG_FAIL_GET_CANVAS"));
 					return;
 				}
 				ctx.drawImage(img, 0, 0);
@@ -1116,7 +1115,7 @@ export class ContextMenu extends Component {
 				canvas.height = img.naturalHeight;
 				const ctx = canvas.getContext('2d');
 				if (!ctx) {
-					new Notice('Failed to get canvas context');
+					new Notice(t("MSG_FAIL_GET_CANVAS"));
 					return;
 				}
 				ctx.drawImage(img, 0, 0);
@@ -1228,7 +1227,7 @@ export class ContextMenu extends Component {
 					// Get the active markdown view
 					const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 					if (!activeView) {
-						new Notice('No active markdown view');
+						new Notice(t("MSG_NO_ACTIVE_VIEW"));
 						return;
 					}
 
@@ -1242,7 +1241,7 @@ export class ContextMenu extends Component {
 					// Get the filename from the src attribute
 					const srcAttribute = img.getAttribute('src');
 					if (!srcAttribute) {
-						new Notice('No source attribute found');
+						new Notice(t("MSG_NO_SOURCE_ATTR"));
 						return;
 					}
 
@@ -1295,14 +1294,14 @@ export class ContextMenu extends Component {
 						// Get the active markdown view
 						const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 						if (!activeView) {
-							new Notice('No active markdown view');
+							new Notice(t("MSG_NO_ACTIVE_VIEW"));
 							return;
 						}
 
 						// Get the current file (note) being viewed
 						const currentFile = activeView.file;
 						if (!currentFile) {
-							new Notice('No current file found');
+							new Notice(t("MSG_NO_CURRENT_FILE"));
 							return;
 						}
 
@@ -1347,7 +1346,7 @@ export class ContextMenu extends Component {
 						}
 					} catch (error) {
 						console.error('Image location error:', error);
-						new Notice('Error processing image path');
+						new Notice(t("MSG_RESOLVE_PATH_FAIL"));
 					}
 				});
 		});
@@ -1566,7 +1565,7 @@ export class ContextMenu extends Component {
 			// Call NetworkImageDownloader to download the single image
 			const downloader = this.plugin.networkDownloader;
 			if (!downloader) {
-				new Notice("Network image downloader not available");
+				new Notice(t("MSG_DOWNLOADER_UNAVAILABLE"));
 				return;
 			}
 
@@ -1630,7 +1629,7 @@ export class ContextMenu extends Component {
 					await this.removeImageLinkFromEditor(editor, lineNumber, line, fullMatch, false);
 				});
 				if (!found) {
-					new Notice('Failed to find Base64 image link');
+					new Notice(t("MSG_FAIL_FIND_BASE64"));
 				}
 				return;
 			}
@@ -1650,7 +1649,7 @@ export class ContextMenu extends Component {
 			const matches = await this.findImageMatches(editor, imagePath, isExternal);
 
 			if (matches.length === 0) {
-				new Notice('Failed to find image link in the current note.');
+				new Notice(t("MSG_FAIL_FIND_IMAGE"));
 				return;
 			}
 
@@ -1753,7 +1752,7 @@ export class ContextMenu extends Component {
 			const matches = await this.findImageMatches(editor, cloudUrl, true);
 
 			if (matches.length === 0) {
-				new Notice('Failed to find cloud image link in the current note.');
+				new Notice(t("MSG_FAIL_FIND_CLOUD"));
 				return;
 			}
 
@@ -1784,13 +1783,13 @@ export class ContextMenu extends Component {
 				await this.plugin.historyManager.removeRecord(cloudUrl);
 
 				if (cloudDeleteSuccess) {
-					new Notice('Cloud image deleted successfully!');
+					new Notice(t("MSG_CLOUD_DELETE_SUCCESS"));
 				} else {
-					const uploader = this.plugin.settings.cloudUploadSettings.uploader;
+					const uploader = this.plugin.settings.pasteHandling.cloud.uploader;
 					if (uploader === 'PicList') {
-						new Notice('Cloud image link removed, but failed to delete from cloud storage. History record removed.');
+						new Notice(t("MSG_CLOUD_DELETE_FAIL_HISTORY"));
 					} else {
-						new Notice(`Cloud image link removed. (${uploader} does not support automatic deletion). History record removed.`);
+						new Notice(t("MSG_CLOUD_DELETE_UNSUPPORTED").replace("{0}", uploader));
 					}
 				}
 			};
@@ -1816,7 +1815,7 @@ export class ContextMenu extends Component {
 				if (cloudDeleteSuccess) {
 					new Notice(t("MSG_CLOUD_DELETED"));
 				} else {
-					const uploader = this.plugin.settings.cloudUploadSettings.uploader;
+					const uploader = this.plugin.settings.pasteHandling.cloud.uploader;
 					if (uploader === 'PicList') {
 						new Notice(t("MSG_CLOUD_DELETE_FAIL"));
 					} else {

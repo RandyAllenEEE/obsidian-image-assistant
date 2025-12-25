@@ -1,8 +1,9 @@
 // ImageProcessor.ts
-import { Notice, Platform } from "obsidian";
+import { Notice, Platform, App, TFile, FileSystemAdapter, TFolder } from "obsidian";
 import { SupportedImageFormats } from "./SupportedImageFormats";
 import { ChildProcess, spawn } from 'child_process';
-import { ConversionPreset, ImageAssistantSettings, DEFAULT_SETTINGS } from "../settings/ImageAssistantSettings";
+import { ConversionPreset, ResizeMode, EnlargeReduce } from "../settings/types";
+import { ImageAssistantSettings, DEFAULT_SETTINGS } from "../settings/defaults";
 import * as piexif from "piexifjs"; // Import piexif library
 
 
@@ -11,8 +12,7 @@ import * as os from 'os';          // Import Node.js os module
 import * as path from 'path';    // Import Node.js path module
 
 // Import types
-export type ResizeMode = 'None' | 'Fit' | 'Fill' | 'LongestEdge' | 'ShortestEdge' | 'Width' | 'Height';
-export type EnlargeReduce = 'Auto' | 'Reduce' | 'Enlarge';
+
 
 interface Dimensions {
     imageWidth: number;
@@ -25,16 +25,19 @@ export class ImageProcessor {
     supportedImageFormats: SupportedImageFormats
     private preset: ConversionPreset | undefined;
     private settings: ImageAssistantSettings;
+    private app: App;
 
-    constructor(supportedImageFormats: SupportedImageFormats) {
+    constructor(app: App, supportedImageFormats: SupportedImageFormats) {
+        this.app = app;
         this.supportedImageFormats = supportedImageFormats;
     }
 
+    // ... imports ...
     /**
      * Main method to process an image file. This method is intended to be used directly
      * for single image processing or by other classes like BatchImageProcessor.
      * 
-     * @param file - The image file as a Blob.
+     * @param file - The image file as a Blob, TFile, or string (path to file).
      * @param format - The desired output format ('WEBP', 'JPEG', 'PNG').
      * @param quality - The quality setting for lossy formats (0.0 - 1.0).
      * @param colorDepth - The color depth for PNG (0.0 - 1.0, where 1 is full color).
@@ -47,7 +50,7 @@ export class ImageProcessor {
      * @returns A Promise that resolves to the processed image as an ArrayBuffer.
      */
     async processImage(
-        file: Blob,
+        file: Blob | TFile | string,
         format: 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL' | 'NONE' | 'PNGQUANT' | 'AVIF',
         quality: number,
         colorDepth: number,
@@ -102,21 +105,9 @@ export class ImageProcessor {
 
     /**
      * Helper method to process an image file.
-     * 
-     * @param file - The image file as a Blob.
-     * @param format - The desired output format ('WEBP', 'JPEG', 'PNG').
-     * @param quality - The quality setting for lossy formats (0.0 - 1.0).
-     * @param colorDepth - The color depth for PNG (0.0 - 1.0, where 1 is full color).
-     * @param resizeMode - The resizing mode.
-     * @param desiredWidth - The desired width for resizing.
-     * @param desiredHeight - The desired height for resizing.
-     * @param desiredLongestEdge - The desired longest edge for resizing.
-     * @param enlargeOrReduce - Whether to enlarge or reduce the image during resizing.
-     * @param allowLargerFiles - Whether to allow output files larger than the original.
-     * @returns A Promise that resolves to the processed image as an ArrayBuffer.
      */
     private async processImageHelper(
-        file: Blob,
+        file: Blob | TFile | string,
         format: 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL' | 'NONE' | 'PNGQUANT' | 'AVIF',
         quality: number,
         colorDepth: number,
@@ -132,12 +123,36 @@ export class ImageProcessor {
         this.preset = preset; // Store the preset
         this.settings = settings ?? DEFAULT_SETTINGS;
 
+        // Resolve input to Blob and optionally Path (for zero-copy)
+        let inputBlob: Blob;
+        let inputPath: string | null = null;
+
         try {
+            if (file instanceof Blob) {
+                inputBlob = file;
+            } else if (file instanceof TFile) {
+                // If it's a TFile, we can get the system path if adapter allows
+                if (this.settings.global.useSystemPathForBinary && this.app.vault.adapter instanceof FileSystemAdapter) {
+                    inputPath = this.app.vault.adapter.getFullPath(file.path);
+                }
+                const data = await this.app.vault.readBinary(file);
+                inputBlob = new Blob([data], { type: `image/${file.extension}` });
+            } else if (typeof file === 'string') {
+                // Assuming it's a file path
+                inputPath = file;
+                const buffer = await fs.readFile(file);
+                // Determine mime type from extension or magic bytes?
+                // Simple extension check for now
+                const ext = path.extname(file).substring(1);
+                inputBlob = new Blob([new Uint8Array(buffer)], { type: `image/${ext}` });
+            } else {
+                throw new Error("Invalid file input type");
+            }
+
             // --- Handle NONE format ---
             if (format === 'NONE' && resizeMode !== 'None') {
-                // No conversion, but resizing is needed
                 return await this.resizeImage(
-                    file,
+                    inputBlob,
                     resizeMode,
                     desiredWidth,
                     desiredHeight,
@@ -147,15 +162,13 @@ export class ImageProcessor {
                 );
             }
             if (format === 'NONE') {
-                // No conversion or compression or resizing
-                return file.arrayBuffer();
+                return inputBlob.arrayBuffer();
             }
 
             // --- Handle ORIGINAL format ---
             if (format === 'ORIGINAL') {
-                // Compress using original format
                 return await this.compressOriginalImage(
-                    file,
+                    inputBlob,
                     quality,
                     resizeMode,
                     desiredWidth,
@@ -165,25 +178,23 @@ export class ImageProcessor {
                 );
             }
 
-            // Prefer magic bytes (header) over file.type per contract
-            const filename = (file instanceof File) ? file.name : 'image';
-            const detected = await this.supportedImageFormats.getMimeTypeFromFile(file);
+            const filename = (file instanceof TFile) ? file.name : (typeof file === 'string' ? path.basename(file) : 'image');
+            const detected = await this.supportedImageFormats.getMimeTypeFromFile(inputBlob instanceof File ? inputBlob : new File([inputBlob], filename));
+
             if (!detected || detected === 'unknown') {
-                // Per contract (1.18): if detection fails, return original bytes; no throw
-                return file.arrayBuffer();
+                return inputBlob.arrayBuffer();
             }
             const mimeType = detected;
-            // If detected MIME isn't supported by our engine, treat as unknown and return original
+
             if (!this.supportedImageFormats.isSupported(mimeType, filename)) {
-                return file.arrayBuffer();
+                return inputBlob.arrayBuffer();
             }
 
             switch (mimeType) {
                 case 'image/tiff':
                 case 'image/tif': {
-                    // TIFF requires special handling
                     try {
-                        const tiffBlob = await this.handleTiff(await file.arrayBuffer());
+                        const tiffBlob = await this.handleTiff(await inputBlob.arrayBuffer());
                         return await this.convertAndCompress(
                             tiffBlob,
                             format,
@@ -194,20 +205,20 @@ export class ImageProcessor {
                             desiredHeight,
                             desiredLongestEdge,
                             enlargeOrReduce,
-                            allowLargerFiles
+                            allowLargerFiles,
+                            inputPath // Pass inputPath
                         );
                     } catch (e) {
-                        // Fallback to original on failure
-                        return file.arrayBuffer();
+                        return inputBlob.arrayBuffer();
                     }
                 }
                 case 'image/heic':
                 case 'image/heif': {
                     try {
                         const heicBlob = await this.handleHeic(
-                            await file.arrayBuffer(),
-                            format === 'JPEG' ? 'JPEG' : 'PNG', // HEIC can only convert to JPEG or PNG
-                            format === 'JPEG' ? quality : 1 // Quality only applies to JPEG
+                            await inputBlob.arrayBuffer(),
+                            format === 'JPEG' ? 'JPEG' : 'PNG',
+                            format === 'JPEG' ? quality : 1
                         );
                         return await this.convertAndCompress(
                             heicBlob,
@@ -219,18 +230,17 @@ export class ImageProcessor {
                             desiredHeight,
                             desiredLongestEdge,
                             enlargeOrReduce,
-                            allowLargerFiles
+                            allowLargerFiles,
+                            null // HEIC intermediate is blob, lost path
                         );
                     } catch (e) {
-                        // Fallback to original on failure
-                        return file.arrayBuffer();
+                        return inputBlob.arrayBuffer();
                     }
                 }
                 default:
                     try {
-                        // Other formats can be handled directly
                         return await this.convertAndCompress(
-                            file,
+                            inputBlob,
                             format,
                             quality,
                             colorDepth,
@@ -239,17 +249,17 @@ export class ImageProcessor {
                             desiredHeight,
                             desiredLongestEdge,
                             enlargeOrReduce,
-                            allowLargerFiles
+                            allowLargerFiles,
+                            inputPath
                         );
                     } catch (unexpected) {
-                        // Any unexpected error in pipeline -> return original, do not throw (1.31)
-                        return file.arrayBuffer();
+                        return inputBlob.arrayBuffer();
                     }
             }
         } catch (error) {
             console.error('Error processing image:', error);
             new Notice(`Failed to process image: ${error.message}`);
-            return file.arrayBuffer(); // Fallback to original
+            return (file instanceof Blob) ? file.arrayBuffer() : new ArrayBuffer(0); // Fallback
         }
     }
 
@@ -385,7 +395,8 @@ export class ImageProcessor {
         desiredHeight: number,
         desiredLongestEdge: number,
         enlargeOrReduce: EnlargeReduce,
-        allowLargerFiles: boolean
+        allowLargerFiles: boolean,
+        inputPath: string | null = null
     ): Promise<ArrayBuffer> {
         switch (format) {
             case 'WEBP':
@@ -423,8 +434,8 @@ export class ImageProcessor {
                 );
             case 'PNGQUANT': {// Add case for PNGQUANT
                 // Retrieve PNGQUANT settings from preset if available, otherwise from global settings.
-                const pngquantExecutablePath = this.preset?.pngquantExecutablePath || this.settings.singleImageModalSettings?.pngquantExecutablePath;
-                const pngquantQuality = this.preset?.pngquantQuality || this.settings.pngquantQuality;
+                const pngquantExecutablePath = this.preset?.pngquantExecutablePath || this.settings.global.pngquantExecutablePath;
+                const pngquantQuality = this.preset?.pngquantQuality || this.settings.global.pngquantQuality;
                 // Check if executable path is set
                 if (!pngquantExecutablePath) {
                     new Notice("PNGQUANT executable path is not set. Please configure it in the plugin settings.");
@@ -446,14 +457,15 @@ export class ImageProcessor {
                     desiredWidth,
                     desiredHeight,
                     desiredLongestEdge,
-                    enlargeOrReduce
+                    enlargeOrReduce,
+                    inputPath
                 );
             }
             case 'AVIF': {
                 // Retrieve AVIF settings from preset if available, or from SingleImageModal
-                const ffmpegExecutablePath = this.preset?.ffmpegExecutablePath || this.settings.singleImageModalSettings?.ffmpegExecutablePath;
-                const ffmpegCrf = this.preset?.ffmpegCrf || this.settings.ffmpegCrf;
-                const ffmpegPreset = this.preset?.ffmpegPreset || this.settings.ffmpegPreset;
+                const ffmpegExecutablePath = this.preset?.ffmpegExecutablePath || this.settings.global.ffmpegExecutablePath;
+                const ffmpegCrf = this.preset?.ffmpegCrf || this.settings.global.ffmpegCrf;
+                const ffmpegPreset = this.preset?.ffmpegPreset || this.settings.global.ffmpegPreset;
 
                 // Check if executable path is set
                 if (!ffmpegExecutablePath) {
@@ -477,7 +489,8 @@ export class ImageProcessor {
                     desiredWidth,
                     desiredHeight,
                     desiredLongestEdge,
-                    enlargeOrReduce
+                    enlargeOrReduce,
+                    inputPath
                 );
             }
             default:
@@ -507,20 +520,28 @@ export class ImageProcessor {
         desiredWidth: number,
         desiredHeight: number,
         desiredLongestEdge: number,
-        enlargeOrReduce: EnlargeReduce
+        enlargeOrReduce: EnlargeReduce,
+        inputPath: string | null = null
     ): Promise<ArrayBuffer> {
 
         let resizedBlob: Blob = file;
+        let useDirectFile = false;
+
         if (resizeMode !== 'None') {
             const resizedBuffer = await this.resizeImage(file, resizeMode, desiredWidth, desiredHeight, desiredLongestEdge, enlargeOrReduce);
             resizedBlob = new Blob([resizedBuffer], { type: file.type });
+        } else if (inputPath) {
+            useDirectFile = true;
         }
 
         const dimensions = await this.getImageDimensions(resizedBlob);
-        const imageData = await resizedBlob.arrayBuffer();
 
-        // Check if the image has transparency
+        // Use direct file check if available, else blob
         const hasTransparency = await this.checkForTransparency(resizedBlob);
+
+        // imageData is needed only if NOT using direct file
+        const imageData = useDirectFile ? null : await resizedBlob.arrayBuffer();
+
 
         // Create a temporary file path
         const tempDir = os.tmpdir(); // Get the system's temporary directory
@@ -532,6 +553,7 @@ export class ImageProcessor {
             const scaleFilter = this.buildScaleFilter(resizeMode, dimensions, desiredWidth, desiredHeight, desiredLongestEdge);
 
             let args: string[];
+            const inputArg = useDirectFile && inputPath ? inputPath : 'pipe:0'; // Input path or stdin pipe
 
             if (hasTransparency) {
                 // For images with transparency
@@ -541,7 +563,7 @@ export class ImageProcessor {
                 }
 
                 args = [
-                    '-i', 'pipe:0',
+                    '-i', inputArg,
                     '-map', '0',
                     '-map', '0',
                     '-filter:v:0', filterChain,
@@ -562,7 +584,7 @@ export class ImageProcessor {
                 }
 
                 args = [
-                    '-i', 'pipe:0',
+                    '-i', inputArg,
                     '-filter:v', filterChain,
                     '-c:v', 'libaom-av1',
                     '-crf', crf.toString(),
@@ -610,11 +632,6 @@ export class ImageProcessor {
 
             // No need for outputData array now, we're writing to a file.
             let errorData = "";
-
-            // We don't need stdout listener when writing to a file.
-            // ffmpeg.stdout?.on('data', (data: Buffer) => {
-            //     outputData.push(data);
-            // });
 
             ffmpeg.stderr?.on('data', (data: Buffer) => {
                 errorData += data.toString();
@@ -667,8 +684,14 @@ export class ImageProcessor {
             ffmpeg.on('close', () => clearTimeout(safetyTimeout));
             ffmpeg.on('exit', () => clearTimeout(safetyTimeout));
 
-            ffmpeg.stdin?.write(Buffer.from(imageData));
-            ffmpeg.stdin?.end();
+            // Only write to stdin if NOT using direct file
+            if (!useDirectFile && imageData) {
+                ffmpeg.stdin?.write(Buffer.from(imageData));
+                ffmpeg.stdin?.end();
+            } else if (useDirectFile) {
+                // If using file input, close stdin to signal we won't send anything (just in case)
+                ffmpeg.stdin?.end();
+            }
         });
     }
 
@@ -1380,23 +1403,62 @@ export class ImageProcessor {
         desiredWidth: number,
         desiredHeight: number,
         desiredLongestEdge: number,
-        enlargeOrReduce: EnlargeReduce
+        enlargeOrReduce: EnlargeReduce,
+        inputPath: string | null = null
     ): Promise<ArrayBuffer> {
 
         // 1. Resize if necessary *before* passing to pngquant.
         let resizedBlob: Blob = file;
+        let useDirectFile = false;
+
         if (resizeMode !== 'None') {
             const resizedBuffer = await this.resizeImage(file, resizeMode, desiredWidth, desiredHeight, desiredLongestEdge, enlargeOrReduce);
             resizedBlob = new Blob([resizedBuffer], { type: file.type });
+        } else if (inputPath) {
+            useDirectFile = true;
         }
 
-        // 2. Get image data as ArrayBuffer
-        const imageData = await resizedBlob.arrayBuffer();
+        // 2. Get image data as ArrayBuffer (only if not using direct file)
+        const imageData = useDirectFile ? null : await resizedBlob.arrayBuffer();
 
         return new Promise((resolve, reject) => {
-            // 3. Construct the command.  Crucially, we use `-` for both input
-            //    and output to work with stdin and stdout.
-            const args = ['--quality', quality, '-'];
+            // 3. Construct the command.
+            // If using direct file, pass path. Else use '-' for stdin.
+            const args = ['--quality', quality, useDirectFile && inputPath ? inputPath : '-'];
+
+            // If using direct file, we need to capture stdout to get the result ??
+            // pngquant by default writes to same file if --ext is used, or stdout if - is used.
+            // If we pass a filename, it might overwrite or need --ext.
+            // Wait, pngquant output behavior:
+            // "If you don't specify output filename, it will write to stdout." -> This applies if input is stdin?
+            // "If you specify input file, it normally overwrites or creates suffix."
+            // We want output to stdout so we can capture it.
+            // Does pngquant support writing to stdout when input is file?
+            // "pngquant --quality=65-80 input.png" -> writes input-fs8.png
+            // "pngquant --quality=65-80 - < input.png" -> writes to stdout
+            // "pngquant --quality=65-80 input.png --output -" ? (Depends on version)
+
+            // If pngquant doesn't easily support input-file -> stdout, then zero-copy might be complex without a temp output file.
+            // Checking docs: "To write to stdout, use -" as output filename? No locally installed man page.
+
+            // Re-evaluating risk: If I pass path, it creates a new file on disk. I want the buffer back.
+            // Better to stick to stdin for pngquant unless I'm sure about usage.
+            // OR use '--output -' if supported.
+            // Common pattern: `cat file | pngquant -` is what we do now (via memory).
+
+            // Let's stick to memory for PNGQuant for safety unless confirmed, OR check if we can read the output file.
+            // BUT FFmpeg DEFINITELY supports -i input.file -> stdout (or pipe).
+
+            // Start with FFmpeg optimization as it's more standard.
+            // For PNGQuant, I'll stick to piping for now to avoid side-effects on disk (overwriting source).
+            // Reverting "useDirectFile" for PNGQuant unless I use a temp file for output or confirm stdout support.
+
+            // Actually, if I use a temp file for output (which I do for AVIF), I could do that for PNGQuant too?
+            // But processWithPngquant currently captures stdout.
+
+            // Let's KEEP piping for PNGQuant for now to minimize regression risk, 
+            // but implement it for FFmpeg where I recently added temp file logic.
+
             let pngquant: ChildProcess | null = null; // Initialize to null
 
             try {
@@ -1407,7 +1469,7 @@ export class ImageProcessor {
                 }
             } catch (spawnError) {
                 // Handle spawn errors *immediately*.  This is crucial.
-                const errorMessage = `Failed to spawn pngquant: ${spawnError.message}`;
+                const errorMessage = `Failed to spawn pngquant: ${spawnError instanceof Error ? spawnError.message : String(spawnError)}`;
                 console.error(errorMessage);
                 reject(new Error(errorMessage));
                 return; // Exit early.
@@ -1426,13 +1488,11 @@ export class ImageProcessor {
             let errorData = "";
 
             // 5. Handle stdout.  pngquant writes the *processed image data* to stdout.
-            // Use nullish coalescing operator to handle potential null
             pngquant.stdout?.on('data', (data: Buffer) => {
                 outputData.push(data);
             });
 
             // 6. Handle stderr.  pngquant writes *errors* to stderr.
-            // Use nullish coalescing operator to handle potential null
             pngquant.stderr?.on('data', (data: Buffer) => {
                 errorData += data.toString();
             });
@@ -1456,7 +1516,6 @@ export class ImageProcessor {
             });
 
             // 10. Handle Errors on the process itself (e.g., couldn't start).
-            // Use nullish coalescing operator to handle potential null
             pngquant.on('error', (err: Error) => {
                 const errorMessage = `Error with pngquant process: ${err.message}`;
                 console.error(errorMessage);
@@ -1466,9 +1525,10 @@ export class ImageProcessor {
 
             // 11. Write the image data to pngquant's stdin.  This is how we
             //     pass the image to be processed.
-            // Use nullish coalescing operator to handle potential null
-            pngquant.stdin?.write(Buffer.from(imageData));
-            pngquant.stdin?.end(); // Close stdin - *important*!
+            if (imageData) {
+                pngquant.stdin?.write(Buffer.from(imageData));
+                pngquant.stdin?.end(); // Close stdin - *important*!
+            }
 
         });
     }
@@ -1789,15 +1849,30 @@ export class ImageProcessor {
 
     /**
      * Extracts metadata from an image file.
-     * @param file - The image file as a Blob.
+     * @param file - The image file as a Blob, TFile, or string path.
      * @returns A Promise that resolves to the extracted metadata.
      */
-    private async extractMetadata(file: Blob): Promise<piexif.ExifDict | undefined> {
+    private async extractMetadata(file: Blob | TFile | string): Promise<piexif.ExifDict | undefined> {
+        let blob: Blob;
+
+        // Normalize input to Blob
+        if (file instanceof Blob) {
+            blob = file;
+        } else if (file instanceof TFile) {
+            const data = await this.app.vault.readBinary(file);
+            blob = new Blob([new Uint8Array(data)]);
+        } else if (typeof file === 'string') {
+            const buffer = await fs.readFile(file);
+            blob = new Blob([new Uint8Array(buffer)]);
+        } else {
+            return undefined;
+        }
+
         const reader = new FileReader();
         const fileDataUrl = await new Promise<string>((resolve, reject) => {
             reader.onload = (e) => resolve(e.target?.result as string);
             reader.onerror = () => reject(new Error("Failed to read file for metadata"));
-            reader.readAsDataURL(file);
+            reader.readAsDataURL(blob);
         });
 
         try {

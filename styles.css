@@ -4369,3 +4369,88 @@ body:not(.image-assistant-wrap-in-edit-mode) .cm-scroller .image-position-right.
     float: none;
     display: block;
 }
+
+/* ========================================================================== */
+/*               GENERIC SETTINGS SECTION STYLES (Refactored)                  */
+/* ========================================================================== */
+
+/* --- Main Section Container --- */
+.image-converter-settings-section {
+    margin-bottom: 20px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    padding: 10px;
+    background-color: var(--background-primary-alt);
+}
+
+/* --- Collapsible Header --- */
+.image-converter-settings-section .settings-section-header {
+    margin: -10px -10px 10px -10px; /* Offset padding to fill width */
+    padding: 10px 15px;
+    /* border-bottom: 1px solid transparent; */
+    border-bottom: 1px solid var(--background-modifier-border); /* Always show border */
+    transition: background-color 0.2s ease;
+}
+
+/* Only add border if content is visible (not collapsed) */
+.image-converter-settings-section.settings-section-collapsed .settings-section-header {
+    border-bottom-color: transparent;
+    margin-bottom: -10px; /* pull bottom up when collapsed */
+}
+
+/* Hover effect for header */
+.image-converter-settings-section .settings-section-header:hover {
+    background-color: var(--background-modifier-hover);
+}
+
+/* --- Header Flex Alignment (Fix for Chevron + Title) --- */
+.image-converter-settings-section .settings-section-header .setting-item-info {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center; /* Vertical center alignment */
+}
+
+/* Ensure Name element (containing chevron + text) wraps nicely */
+.image-converter-settings-section .settings-section-header .setting-item-name {
+    display: inline-flex;
+    align-items: center;
+    font-size: 1.1em;
+    font-weight: 600;
+}
+
+/* --- Chevron Container --- */
+.image-converter-settings-section .settings-chevron-container {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    margin-right: 8px;
+}
+
+.image-converter-settings-section .settings-chevron-container .settings-section-chevron-icon {
+    /* Style defaults for setIcon result */
+    display: flex;
+}
+
+
+/* --- Content Wrapper & Indentation --- */
+.image-converter-settings-section .settings-section-content {
+    padding-left: 5px; /* Slight indent for better hierarchy */
+    margin-top: 10px;
+}
+
+/* Clean up child settings items */
+.image-converter-settings-section .settings-section-content .setting-item {
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+.image-converter-settings-section .settings-section-content .setting-item:last-child {
+    border-bottom: none;
+}
+
+/* --- SPECIFIC FIXES (Overriding previous disparate styles) --- */
+.other-settings-section,
+.unused-file-cleaner-settings-section,
+.ocr-settings-section {
+    /* Ensure they share the common styles */
+}

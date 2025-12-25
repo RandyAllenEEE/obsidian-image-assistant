@@ -5,7 +5,7 @@ import { normalizePath, FileSystemAdapter } from "obsidian";
 
 import type ImageConverterPlugin from "../../main";
 import type { Image } from "./types";
-import type { CloudUploadSettings } from "../../settings/ImageAssistantSettings";
+import type { CloudUploadSettings } from "../../settings/types";
 import type { Uploader } from "./types";
 
 export default class PicGoCoreUploader implements Uploader {
@@ -13,7 +13,7 @@ export default class PicGoCoreUploader implements Uploader {
   plugin: ImageConverterPlugin;
 
   constructor(plugin: ImageConverterPlugin) {
-    this.settings = plugin.settings.cloudUploadSettings;
+    this.settings = plugin.settings.pasteHandling.cloud;
     this.plugin = plugin;
   }
 

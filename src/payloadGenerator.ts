@@ -30,10 +30,8 @@ export async function payloadGenerator(
       } else if (value instanceof File) {
         chunks.push(
           new TextEncoder().encode(
-            `Content-Disposition: form-data; name="${key}"; filename="${
-              value.name
-            }"\r\nContent-Type: ${
-              value.type || "application/octet-stream"
+            `Content-Disposition: form-data; name="${key}"; filename="${value.name
+            }"\r\nContent-Type: ${value.type || "application/octet-stream"
             }\r\n\r\n`
           )
         );
@@ -42,8 +40,7 @@ export async function payloadGenerator(
       } else if (value instanceof Blob) {
         chunks.push(
           new TextEncoder().encode(
-            `Content-Disposition: form-data; name="${key}"; filename="blob"\r\nContent-Type: ${
-              value.type || "application/octet-stream"
+            `Content-Disposition: form-data; name="${key}"; filename="blob"\r\nContent-Type: ${value.type || "application/octet-stream"
             }\r\n\r\n`
           )
         );
@@ -58,8 +55,21 @@ export async function payloadGenerator(
 
   chunks.push(new TextEncoder().encode(`${boundary}--\r\n`));
 
-  const payload = new Blob(chunks as any, {
-    type: "multipart/form-data; boundary=" + boundary_string,
-  });
-  return [await payload.arrayBuffer(), boundary_string];
+  chunks.push(new TextEncoder().encode(`${boundary}--\r\n`));
+
+  // Calculate total length
+  let totalLength = 0;
+  for (const chunk of chunks) {
+    totalLength += chunk.length;
+  }
+
+  // Merge chunks into a single Uint8Array
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return [result.buffer, boundary_string];
 }
