@@ -6,6 +6,7 @@ import { ImageResizer } from './ImageResizer';
 import { ImageCaption } from './ImageCaption';
 import { pipeSyntaxParser, AlignType, PipeSyntaxData } from '../utils/PipeSyntaxParser';
 import { RefinedImageUtils } from '../utils/RefinedImageUtils';
+import { debounce } from 'obsidian';
 
 
 export interface ImageState {
@@ -22,7 +23,7 @@ export class ImageStateManager {
 
     // Delegates
     public alignment: ImageAlignment;
-    public resizer: ImageResizer;
+    public resizer: ImageResizer | null;
     public caption: ImageCaption;
 
     constructor(
@@ -35,7 +36,7 @@ export class ImageStateManager {
         // Dependencies are injected via initialize() to avoid circular references during plugin load.
     }
 
-    public initialize(alignment: ImageAlignment, resizer: ImageResizer, caption: ImageCaption) {
+    public initialize(alignment: ImageAlignment, resizer: ImageResizer | null, caption: ImageCaption) {
         this.alignment = alignment;
         this.resizer = resizer;
         this.caption = caption;
@@ -78,8 +79,15 @@ export class ImageStateManager {
         // Handle view switching
         this.plugin.registerEvent(
             this.app.workspace.on('active-leaf-change', () => {
-                this.startObserving();
-                this.refreshAllImages();
+                // Determine if we need a longer delay on startup
+                // @ts-ignore
+                if (!this.app.workspace.layoutReady) return;
+
+                // Add a small delay to allow other plugins/Obsidian to settle state
+                setTimeout(() => {
+                    this.startObserving();
+                    this.refreshAllImages();
+                }, 200);
             })
         );
     }
@@ -99,16 +107,20 @@ export class ImageStateManager {
         });
     }
 
-    public refreshAllImages() {
+    public refreshAllImages = debounce(() => {
         const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!markdownView) return;
+
+        // Extra safety check for layout readiness
+        // @ts-ignore
+        if (this.app.workspace.layoutReady === false) return;
 
         markdownView.contentEl.findAll('img').forEach((img) => {
             if (img instanceof HTMLImageElement) {
                 this.processImage(img);
             }
         });
-    }
+    }, 300, true);
 
     /**
      * Coordinator method: Gets state from markdown and calls delegates to apply it.
@@ -137,7 +149,7 @@ export class ImageStateManager {
             this.alignment.applyAlignmentToImage(img, positionData);
 
             // 4. Delegate: Size
-            if (state.width || state.height) {
+            if ((state.width || state.height) && this.resizer) {
                 this.resizer.applySize(img, state.width ?? undefined, state.height ?? undefined);
             }
 
@@ -192,7 +204,7 @@ export class ImageStateManager {
         // 5. Delegate: Size
         // IMPORTANT: Native Obsidian fails to resize URL images in Markdown links.
         // We explicitly apply it here.
-        if (parsed.size?.width || parsed.size?.height) {
+        if ((parsed.size?.width || parsed.size?.height) && this.resizer) {
             this.resizer.applySize(img, parsed.size.width, parsed.size.height);
         }
 
@@ -236,7 +248,7 @@ export class ImageStateManager {
             wrap,
             width: parsed.size?.width,
             height: parsed.size?.height,
-            caption: parsed.alt
+            caption: parsed.alt ? parsed.alt.replace(/\\\|/g, '|') : undefined
         };
     }
 
@@ -285,7 +297,8 @@ export class ImageStateManager {
 
         // 3. Caption
         if (changes.caption !== undefined) {
-            parsed.alt = changes.caption;
+            // Escape pipes to prevent breaking the pipe syntax
+            parsed.alt = changes.caption.replace(/\|/g, '\\|');
         }
 
         // Rebuild and Write

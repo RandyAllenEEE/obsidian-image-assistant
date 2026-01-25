@@ -85,7 +85,8 @@ export class PipeSyntaxParser {
         }
 
         const content = match[1]; // path|attr1|attr2|...
-        const parts = content.split('|');
+        // Split by unescaped pipes
+        const parts = content.split(/(?<!\\)\|/);
 
         if (parts.length === 0) {
             return null;
@@ -154,7 +155,7 @@ export class PipeSyntaxParser {
             // 完全缺省：![](path)
             alt = ' ';
         } else {
-            const parts = bracketContent.split('|');
+            const parts = bracketContent.split(/(?<!\\)\|/);
 
             if (parts.length === 1 && parts[0].trim() === '') {
                 // 单个 | 的情况：![|...](path)
@@ -269,9 +270,10 @@ export class PipeSyntaxParser {
             return { path: '', alt: ' ', linkType: 'markdown' };
         }
 
-        // Truncate at the first pipe |
-        const pipeIndex = altText.indexOf('|');
-        let cleanAlt = (pipeIndex !== -1 ? altText.substring(0, pipeIndex) : altText).trim();
+        // Truncate at the first unescaped pipe |
+        // We can't easily use indexOf for regex, so we use split
+        const parts = altText.split(/(?<!\\)\|/);
+        let cleanAlt = parts[0].trim();
 
         // Robustness fallback: if empty/missing (e.g. "![|100]"), use a space
         if (cleanAlt === '') {

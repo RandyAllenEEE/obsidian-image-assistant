@@ -545,6 +545,8 @@ export default {
     "CMD_OCR_LATEX_INLINE": "Generate inline LaTeX from clipboard image",
     "CMD_OCR_MARKDOWN": "Generate markdown from clipboard image",
     "CMD_RELOAD_PLUGIN": "Reload plugin",
+    "CMD_UPLOAD_ALL_VAULT": "Upload all images in vault to cloud",
+    "CMD_UPLOAD_CURRENT_NOTE": "Upload all images in current note to cloud",
 
     // Main Plugin Messages
     "MSG_PLUGIN_INITIALIZING": "Please wait, plugin is initializing...",

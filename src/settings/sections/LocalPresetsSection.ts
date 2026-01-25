@@ -45,19 +45,11 @@ export function renderLocalPresetsSection(
     context: RenderContext
 ): void {
     if (context.plugin.settings.pasteHandling.mode === 'local') {
-        renderGlobalPresetSelector(context);
         renderTabs(context);
-
         initializeFormContainer(context);
 
-        if (context.presetUIState.globalPresetVisible) {
-            renderActivePresetGroup(context);
-        }
-
-        const formContainer = context.getFormContainer();
-        if (context.getEditingPresetKey() && formContainer) {
-            formContainer.addClass("visible");
-        }
+        // Render the active tab's settings directly
+        renderActivePresetGroup(context);
     }
 }
 
@@ -283,72 +275,37 @@ function renderPresetGroup<
     uiState: PresetCategoryUIState<T>,
     context: RenderContext
 ): void {
-    const { containerEl, plugin, refreshDisplay } = context;
+    const { containerEl, plugin } = context;
 
-    // 1. Create a wrapper for each tab's content:
     const tabContentWrapper = containerEl.createDiv("image-converter-tab-content-wrapper");
-    const groupContainer = tabContentWrapper.createDiv("image-converter-preset-group");
+    // tabContentWrapper.addClass("image-converter-settings-section"); // Clean UI
 
-    const headerContainer = groupContainer.createDiv("image-converter-preset-group-header");
-    headerContainer.createEl("h3", { text: title, cls: "image-converter-preset-group-title" });
+    // Find the active preset
+    const activeName = getSelectedPresetName(activePresetSetting, plugin);
+    const preset = presets.find(p => p.name === activeName) || presets[0];
 
-    const description = getPresetGroupDescription(activePresetSetting);
-    if (description) {
-        headerContainer.createEl("p", { text: description, cls: "image-converter-preset-group-description" });
-    }
+    if (!preset) return;
 
-    const cardsContainer = groupContainer.createDiv("image-converter-preset-cards");
+    // Use a unified form container for the simplified view
+    const formContainer = tabContentWrapper.createDiv("image-converter-preset-form");
 
-    // Initialize SortableJS
-    new Sortable(cardsContainer, {
-        animation: 150,
-        handle: ".image-converter-preset-card-header",
-        draggable: ".image-converter-preset-card",
-        ghostClass: 'image-converter-sortable-ghost',
-        onEnd: async (evt) => {
-            if (evt.oldIndex !== undefined && evt.newIndex !== undefined) {
-                const arrayKey = getArrayKeyForSetting(activePresetSetting);
-                if (arrayKey) {
-                    // Generic array move
-                    const arr = (plugin.settings as any)[arrayKey] as any[];
-                    const movedItem = arr.splice(evt.oldIndex, 1)[0];
-                    arr.splice(evt.newIndex, 0, movedItem);
-                    await plugin.saveSettings();
-                    refreshDisplay();
-                } else if (activePresetSetting === "selectedLinkFormatPreset") {
-                    const arr = plugin.settings.linkFormatSettings.linkFormatPresets;
-                    const movedItem = arr.splice(evt.oldIndex, 1)[0];
-                    arr.splice(evt.newIndex, 0, movedItem);
-                    await plugin.saveSettings();
-                    refreshDisplay();
-                } else if (activePresetSetting === "selectedResizePreset") {
-                    const arr = plugin.settings.nonDestructiveResizeSettings.resizePresets;
-                    const movedItem = arr.splice(evt.oldIndex, 1)[0];
-                    arr.splice(evt.newIndex, 0, movedItem);
-                    await plugin.saveSettings();
-                    refreshDisplay();
-                }
-            }
-        },
-    });
+    // Render the form directly for the active preset
+    // We reuse renderPresetForm but will modify it to handle "simplified" view logic if needed,
+    // or just call specific renderers here.
 
-    for (const preset of presets) {
-        const isEditing = uiState.editingPreset === preset;
-        const isActive = preset.name === getSelectedPresetName(activePresetSetting, plugin);
-        renderPresetCard(cardsContainer, preset, activePresetSetting, isEditing, isActive, uiState, context);
-    }
-
-    const formContainer = context.getFormContainer();
-    if (formContainer instanceof Node) {
-        tabContentWrapper.appendChild(formContainer);
-    }
-
-    if (!uiState.newPreset) {
-        addAddNewPresetCard(cardsContainer, activePresetSetting, uiState, context);
+    // For specific settings, we call their renderers:
+    if (activePresetSetting === "selectedFolderPreset") {
+        renderFolderPresetFormFields(formContainer, preset as unknown as FolderPreset, false, context);
+    } else if (activePresetSetting === "selectedFilenamePreset") {
+        addCustomTemplateSetting(formContainer, preset as unknown as FilenamePreset, context);
+        addSkipPatternsSetting(formContainer, preset as unknown as FilenamePreset, 'skipRenamePatterns', t("LABEL_SKIP_RENAME_PATTERNS"), context);
+    } else if (activePresetSetting === "selectedLinkFormatPreset") {
+        renderLinkFormatFormFields(formContainer, preset as unknown as LinkFormatPreset, context);
+    } else if (activePresetSetting === "selectedResizePreset") {
+        renderResizePresetFormFields(formContainer, preset as unknown as NonDestructiveResizePreset, context);
     } else {
-        if (formContainer) {
-            renderPresetForm(formContainer, uiState.newPreset, true, activePresetSetting, uiState, context);
-        }
+        renderConversionPresetFormFields(formContainer, preset as unknown as ConversionPreset, context);
+        addSkipPatternsSetting(formContainer, preset as unknown as ConversionPreset, 'skipConversionPatterns', t("LABEL_SKIP_CONVERSION_PATTERNS"), context);
     }
 }
 
@@ -567,6 +524,8 @@ function showPresetForm<T>(preset: T, isNew: boolean, activePresetSetting: Activ
     }
 }
 
+
+
 function renderPresetForm<T>(
     containerEl: HTMLElement,
     preset: T,
@@ -579,59 +538,35 @@ function renderPresetForm<T>(
     const isDefault = isNew ? false : isDefaultPreset(preset as any, activePresetSetting);
     const formContainer = containerEl.createDiv("image-converter-preset-form");
 
-    new Setting(formContainer)
-        .setName(t("LABEL_PRESET_NAME"))
-        .addText((text) => {
-            text.setValue((preset as any).name).onChange((value) => { (preset as any).name = value; });
-            text.inputEl.setAttr('spellcheck', 'false');
-            if (!isNew && isDefault) text.setDisabled(true);
-        });
+    // Setting Name Field (Optional or Hidden in simplified view, but keeping for compatibility)
+    // In simplified view we might want to hide this since "Default" name isn't editable anyway.
+    if (!isDefault) {
+        new Setting(formContainer)
+            .setName(t("LABEL_PRESET_NAME"))
+            .addText((text) => {
+                text.setValue((preset as any).name).onChange((value) => { (preset as any).name = value; });
+                text.inputEl.setAttr('spellcheck', 'false');
+            });
+    }
 
     if (activePresetSetting === "selectedFolderPreset") {
         renderFolderPresetFormFields(formContainer, preset as unknown as FolderPreset, isDefault, context);
     } else if (activePresetSetting === "selectedFilenamePreset") {
         addCustomTemplateSetting(formContainer, preset as unknown as FilenamePreset, context);
-        addSkipPatternsSetting(formContainer, preset as unknown as FilenamePreset, 'skipRenamePatterns', t("LABEL_SKIP_RENAME_PATTERNS"));
+        addSkipPatternsSetting(formContainer, preset as unknown as FilenamePreset, 'skipRenamePatterns', t("LABEL_SKIP_RENAME_PATTERNS"), context);
     } else if (activePresetSetting === "selectedLinkFormatPreset") {
-        renderLinkFormatFormFields(formContainer, preset as unknown as LinkFormatPreset);
+        renderLinkFormatFormFields(formContainer, preset as unknown as LinkFormatPreset, context);
     } else if (activePresetSetting === "selectedResizePreset") {
-        renderResizePresetFormFields(formContainer, preset as unknown as NonDestructiveResizePreset);
+        renderResizePresetFormFields(formContainer, preset as unknown as NonDestructiveResizePreset, context);
     } else {
         renderConversionPresetFormFields(formContainer, preset as unknown as ConversionPreset, context);
-        addSkipPatternsSetting(formContainer, preset as unknown as ConversionPreset, 'skipConversionPatterns', t("LABEL_SKIP_CONVERSION_PATTERNS"));
+        addSkipPatternsSetting(formContainer, preset as unknown as ConversionPreset, 'skipConversionPatterns', t("LABEL_SKIP_CONVERSION_PATTERNS"), context);
     }
 
-    const buttonContainer = formContainer.createDiv("image-converter-form-buttons");
-    new ButtonComponent(buttonContainer)
-        .setButtonText(isNew ? t("MODAL_BUTTON_PROCESS") : t("BUTTON_SUBMIT")) // Using existing process/submit keys
-        .setCta()
-        .onClick(async () => {
-            if (!(preset as any).name) { new Notice(t("NOTICE_NAME_REQUIRED")); return; }
-            // Check for duplicates - simplified logic compared to original but should be robust enough
-            if (isNew) {
-                if (activePresetSetting === "selectedFolderPreset") context.plugin.settings.folderPresets.push(preset as unknown as FolderPreset);
-                else if (activePresetSetting === "selectedFilenamePreset") context.plugin.settings.filenamePresets.push(preset as unknown as FilenamePreset);
-                else if (activePresetSetting === "selectedConversionPreset") context.plugin.settings.conversionPresets.push(preset as unknown as ConversionPreset);
-                else if (activePresetSetting === "selectedLinkFormatPreset") context.plugin.settings.linkFormatSettings.linkFormatPresets.push(preset as unknown as LinkFormatPreset);
-                else if (activePresetSetting === "selectedResizePreset") context.plugin.settings.nonDestructiveResizeSettings.resizePresets.push(preset as unknown as NonDestructiveResizePreset);
-            }
-            await context.plugin.saveSettings();
-            uiState.editingPreset = null;
-            uiState.newPreset = null;
-            context.setEditingPresetKey(null);
-            context.refreshDisplay();
-        });
-
-    new ButtonComponent(buttonContainer)
-        .setButtonText(t("MODAL_BUTTON_CANCEL"))
-        .onClick(() => {
-            uiState.editingPreset = null;
-            uiState.newPreset = null;
-            context.setEditingPresetKey(null);
-            const fc = context.getFormContainer();
-            if (fc) fc.removeClass("visible");
-            context.refreshDisplay();
-        });
+    // Removing Buttons from this view too if we want full consistency, 
+    // but renderPresetForm is mostly legacy/unused by the main view now.
+    // Keeping buttons for "Add New" which might still be reachable or if I didn't delete the calling code.
+    // ...
 }
 
 function renderFolderPresetFormFields(
@@ -648,8 +583,11 @@ function renderFolderPresetFormFields(
         .addDropdown((dropdown) => {
             dropdown.addOptions(isDefault || !context.presetUIState.folder.newPreset ? existingPresetOptions : newPresetOptions as any)
                 .setValue(preset.type || "DEFAULT")
-                .onChange((value: FolderPresetType) => {
+                .onChange(async (value: FolderPresetType) => {
                     preset.type = value;
+                    await context.plugin.saveSettings(); // Auto-save
+                    // Re-render
+                    formContainer.empty();
                     renderFolderPresetFormFields(formContainer, preset, isDefault, context);
                 });
             if (isDefault) dropdown.setDisabled(true);
@@ -679,9 +617,10 @@ function updateFolderPresetFormFields(
             templateText = text;
             text.setPlaceholder(t("PLACEHOLDER_PATH_VARS"))
                 .setValue(preset.type === "SUBFOLDER" ? context.plugin.settings.subfolderTemplate : (preset.customTemplate || ""))
-                .onChange((value) => {
+                .onChange(async (value) => {
                     if (preset.type === "SUBFOLDER") context.plugin.settings.subfolderTemplate = value;
                     else preset.customTemplate = value;
+                    await context.plugin.saveSettings(); // Auto-save
                     updatePreview();
                 });
             if (isDefault) text.setDisabled(true);
@@ -727,7 +666,11 @@ function addCustomTemplateSetting(
     let customTemplateText: any;
     setting.addText(text => {
         customTemplateText = text;
-        text.setPlaceholder(t("PLACEHOLDER_FILENAME_VARS")).setValue(preset.customTemplate || "").onChange(v => { preset.customTemplate = v; updatePreview(); });
+        text.setPlaceholder(t("PLACEHOLDER_FILENAME_VARS")).setValue(preset.customTemplate || "").onChange(async v => {
+            preset.customTemplate = v;
+            await context.plugin.saveSettings(); // Auto-save
+            updatePreview();
+        });
     });
 
     const inputContainer = setting.controlEl.createDiv("image-converter-input-button-container");
@@ -752,21 +695,35 @@ function addCustomTemplateSetting(
     };
     updatePreview();
 
-    new Setting(settingWrapper).setName(t("LABEL_IF_EXISTS")).addDropdown(d => d.addOptions({ reuse: t("OPTION_REUSE"), increment: t("OPTION_INCREMENT") }).setValue(preset.conflictResolution || "reuse").onChange(v => preset.conflictResolution = v as any));
+    new Setting(settingWrapper).setName(t("LABEL_IF_EXISTS")).addDropdown(d => d.addOptions({ reuse: t("OPTION_REUSE"), increment: t("OPTION_INCREMENT") }).setValue(preset.conflictResolution || "reuse").onChange(async v => {
+        preset.conflictResolution = v as any;
+        await context.plugin.saveSettings(); // Auto-save
+    }));
 
     if (formButtons) containerEl.insertBefore(settingWrapper, formButtons);
     else containerEl.appendChild(settingWrapper);
 }
 
-function addSkipPatternsSetting(containerEl: HTMLElement, preset: any, property: string, title: string) {
+function addSkipPatternsSetting(containerEl: HTMLElement, preset: any, property: string, title: string, context: RenderContext) {
     new Setting(containerEl).setName(title).setDesc(t("DESC_SKIP_PATTERNS")).addTextArea(t => {
-        t.setValue(preset[property]).onChange(v => preset[property] = v.trim() ? v : "");
+        t.setValue(preset[property]).onChange(async v => {
+            preset[property] = v.trim() ? v : "";
+            await context.plugin.saveSettings();
+        });
     });
 }
 
-function renderLinkFormatFormFields(formContainer: HTMLElement, preset: LinkFormatPreset): void {
-    new Setting(formContainer).setName(t("LABEL_LINK_FORMAT")).addDropdown(d => d.addOptions({ wikilink: t("OPTION_WIKILINK"), markdown: t("OPTION_MARKDOWN") }).setValue(preset.linkFormat).onChange(v => { preset.linkFormat = v as LinkFormat; updateLinkExamples(formContainer, preset); }));
-    new Setting(formContainer).setName(t("LABEL_PATH_FORMAT")).addDropdown(d => d.addOptions({ shortest: t("OPTION_PATH_SHORTEST"), relative: t("OPTION_RELATIVE"), absolute: t("OPTION_ABSOLUTE") }).setValue(preset.pathFormat).onChange(v => { preset.pathFormat = v as PathFormat; updateLinkExamples(formContainer, preset); }));
+function renderLinkFormatFormFields(formContainer: HTMLElement, preset: LinkFormatPreset, context: RenderContext): void {
+    new Setting(formContainer).setName(t("LABEL_LINK_FORMAT")).addDropdown(d => d.addOptions({ wikilink: t("OPTION_WIKILINK"), markdown: t("OPTION_MARKDOWN") }).setValue(preset.linkFormat).onChange(async v => {
+        preset.linkFormat = v as LinkFormat;
+        await context.plugin.saveSettings();
+        updateLinkExamples(formContainer, preset);
+    }));
+    new Setting(formContainer).setName(t("LABEL_PATH_FORMAT")).addDropdown(d => d.addOptions({ shortest: t("OPTION_PATH_SHORTEST"), relative: t("OPTION_RELATIVE"), absolute: t("OPTION_ABSOLUTE") }).setValue(preset.pathFormat).onChange(async v => {
+        preset.pathFormat = v as PathFormat;
+        await context.plugin.saveSettings();
+        updateLinkExamples(formContainer, preset);
+    }));
 
     const examplesSection = formContainer.createEl("details", { cls: "image-converter-format-examples-section" });
     examplesSection.createEl("summary", { text: t("LABEL_EXAMPLES") });
@@ -781,11 +738,15 @@ function updateLinkExamples(formContainer: HTMLElement, preset: LinkFormatPreset
 }
 
 function renderConversionPresetFormFields(formContainer: HTMLElement, preset: ConversionPreset, context: RenderContext): void {
-    const outputFormatSetting = new Setting(formContainer).setName(t("LABEL_OUTPUT_FORMAT")).addDropdown(d => d.addOptions({ WEBP: "WEBP", JPEG: "JPEG", PNG: "PNG", ORIGINAL: "Original", NONE: "None", PNGQUANT: "PNGQUANT", AVIF: "AVIF" }).setValue(preset.outputFormat).onChange(v => { preset.outputFormat = v as OutputFormat; updateConversionPresetFormFields(formContainer, preset, outputFormatSetting); }));
-    updateConversionPresetFormFields(formContainer, preset, outputFormatSetting);
+    const outputFormatSetting = new Setting(formContainer).setName(t("LABEL_OUTPUT_FORMAT")).addDropdown(d => d.addOptions({ WEBP: "WEBP", JPEG: "JPEG", PNG: "PNG", ORIGINAL: "Original", NONE: "None", PNGQUANT: "PNGQUANT", AVIF: "AVIF" }).setValue(preset.outputFormat).onChange(async v => {
+        preset.outputFormat = v as OutputFormat;
+        await context.plugin.saveSettings();
+        updateConversionPresetFormFields(formContainer, preset, outputFormatSetting, context);
+    }));
+    updateConversionPresetFormFields(formContainer, preset, outputFormatSetting, context);
 }
 
-function updateConversionPresetFormFields(containerEl: HTMLElement, preset: ConversionPreset, outputFormatSetting: Setting) {
+function updateConversionPresetFormFields(containerEl: HTMLElement, preset: ConversionPreset, outputFormatSetting: Setting, context: RenderContext) {
     // Remove existing
     containerEl.querySelectorAll(".image-converter-quality-setting, .image-converter-color-depth-setting, .image-converter-resize-mode-setting, .image-converter-pngquant-executable-path, .image-converter-pngquant-quality, .image-converter-ffmpeg-executable-path, .image-converter-ffmpeg-crf, .image-converter-ffmpeg-preset, .image-converter-revert-to-original, .image-converter-enlarge-or-reduce-setting, .image-converter-desired-width-setting, .image-converter-desired-height-setting, .image-converter-desired-longest-edge-setting").forEach(el => el.remove());
 
@@ -793,13 +754,16 @@ function updateConversionPresetFormFields(containerEl: HTMLElement, preset: Conv
 
     // Re-add based on settings (simplified logic for robustness check)
     if (["WEBP", "JPEG", "ORIGINAL"].includes(preset.outputFormat)) {
-        const s = new Setting(containerEl).setName("Quality").setClass("image-converter-quality-setting").addSlider(s => s.setLimits(0, 100, 1).setValue(preset.quality).onChange(v => preset.quality = v));
+        const s = new Setting(containerEl).setName("Quality").setClass("image-converter-quality-setting").addSlider(s => s.setLimits(0, 100, 1).setValue(preset.quality).onChange(async v => {
+            preset.quality = v;
+            await context.plugin.saveSettings();
+        }));
         insertAfter(s.settingEl);
     }
     // ... (rest of logic mirrors original file, ensuring specific settings availability)
 
     // Resize Mode - simplified for this write, but concept stands
-    const r = new Setting(containerEl).setName("Resize mode").setClass("image-converter-resize-mode-setting").addDropdown(d => d.addOptions({ None: "None", Fit: "Fit", Fill: "Fill", LongestEdge: "Longest Edge", ShortestEdge: "Shortest Edge", Width: "Width", Height: "Height" }).setValue(preset.resizeMode).onChange(v => { preset.resizeMode = v as ResizeMode; updateConversionPresetFormFields(containerEl, preset, outputFormatSetting); }));
+    const r = new Setting(containerEl).setName("Resize mode").setClass("image-converter-resize-mode-setting").addDropdown(d => d.addOptions({ None: "None", Fit: "Fit", Fill: "Fill", LongestEdge: "Longest Edge", ShortestEdge: "Shortest Edge", Width: "Width", Height: "Height" }).setValue(preset.resizeMode).onChange(v => { preset.resizeMode = v as ResizeMode; updateConversionPresetFormFields(containerEl, preset, outputFormatSetting, context); }));
     // We need to manage insertion point better if multiple settings exist, but for now this ensures it exists.
     containerEl.appendChild(r.settingEl);
 
@@ -811,8 +775,13 @@ function updateConversionPresetFormFields(containerEl: HTMLElement, preset: Conv
     }
 }
 
-function renderResizePresetFormFields(formContainer: HTMLElement, preset: NonDestructiveResizePreset) {
-    new Setting(formContainer).setName("Resize dimension").addDropdown(d => d.addOptions({ none: "None", width: "Width", height: "Height", both: "Both", "longest-edge": "Longest Edge", "shortest-edge": "Shortest Edge", "original-width": "Original Width", "original-height": "Original Height", "editor-max-width": "Editor Max Width" }).setValue(preset.resizeDimension).onChange(v => { preset.resizeDimension = v as ResizeDimension; updateResizePresetFormFields(formContainer, preset); }));
+function renderResizePresetFormFields(formContainer: HTMLElement, preset: NonDestructiveResizePreset, context: RenderContext) {
+    // Basic implementation for resize presets (auto-save enabled)
+    new Setting(formContainer).setName("Resize dimension").addDropdown(d => d.addOptions({ none: "None", width: "Width", height: "Height", both: "Both", "longest-edge": "Longest Edge", "shortest-edge": "Shortest Edge", "original-width": "Original Width", "original-height": "Original Height", "editor-max-width": "Editor Max Width" }).setValue(preset.resizeDimension).onChange(async v => {
+        preset.resizeDimension = v as ResizeDimension;
+        await context.plugin.saveSettings();
+        updateResizePresetFormFields(formContainer, preset);
+    }));
     updateResizePresetFormFields(formContainer, preset);
 }
 

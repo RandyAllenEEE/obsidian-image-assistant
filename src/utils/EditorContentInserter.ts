@@ -33,6 +33,19 @@ export class EditorContentInserter {
      * @param res The final content to insert
      */
     insertResponseToEditor(res: string): void {
+        // [Safety Check] 1. Check if line is still valid
+        if (this.cursor.line >= this.editor.lineCount()) {
+            console.warn("EditorContentInserter: Cursor line no longer exists. Aborting insertion.");
+            return;
+        }
+
+        // [Safety Check] 2. Check if column is within bounds (prevents crash if line was truncated)
+        const currentLineLength = this.editor.getLine(this.cursor.line).length;
+        if (this.cursor.ch > currentLineLength) {
+            console.warn("EditorContentInserter: Cursor column out of bounds. Aborting insertion.");
+            return;
+        }
+
         // Use cached cursor position to calculate the end of the placeholder
         this.editor.replaceRange(res, this.cursor, {
             line: this.cursor.line,
@@ -45,6 +58,9 @@ export class EditorContentInserter {
      * Remove loading text (used for cleanup on error)
      */
     removeLoadingText(): void {
+        // [Safety Check]
+        if (this.cursor.line >= this.editor.lineCount()) return;
+
         this.editor.replaceRange("", this.cursor, {
             line: this.cursor.line,
             ch: this.cursor.ch + this.loadingTextLength,

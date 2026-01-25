@@ -220,14 +220,18 @@ export default class ImageConverterPlugin extends Plugin {
         this.imageStateManager = new ImageStateManager(this.app, this);
         this.imageAlignment = new ImageAlignment(this.app, this);
         this.imageCaption = new ImageCaption(this);
+        if (this.settings.interactiveResize.enabled) {
+            this.imageResizer = new ImageResizer(this);
+        }
 
         // Register StateManager refresh events
+        // Note: ImageStateManager handles its own 'active-leaf-change' observation in setupObserver.
+        // We only register 'file-open' here as a backup for same-leaf file switches, but debounced.
         if (this.settings.alignment.enabled || this.settings.captions.enabled) {
             this.registerEvent(
                 this.app.workspace.on('file-open', (file) => {
                     if (file) {
                         this.imageStateManager?.refreshAllImages();
-                        // this.imageCaption?.refresh(); // StateManager handles this now via processImage
                     }
                 })
             );
@@ -235,62 +239,37 @@ export default class ImageConverterPlugin extends Plugin {
 
         /* Deprecated Managers (Removed) */
 
-        // // REDUNDANT - Below already initializes on layout change and for applying alignemnt "file-open" is much better option as it fires much less often
-        // // NOTE: For alignment to be set this must be outside `this.app.workspace.onLayoutReady(() => {`
-        // // Initialize DRAG/SCROLL rESIZING and apply alignments- when opening into the note or swithing notes 
-        // this.registerEvent(
-        //     this.app.workspace.on('active-leaf-change', (leaf) => {
-        //         console.count("active-leaf-change triggered")
-        //         // const markdownView = leaf?.view instanceof MarkdownView ? leaf.view : null;
-        //         // if (markdownView && this.imageResizer && this.settings.isImageResizeEnbaled) {
-        //         //     this.imageResizer.onload(markdownView);
-        //         // }
-        //         // // Delay the execution slightly to ensure the new window's DOM is ready
-        //         // setTimeout(() => {
-        //         //     this.ImageAlignmentManager!.setupImageObserver();
-        //         // }, 500);
-        //         const currentFile = this.app.workspace.getActiveFile();
-        //         if (currentFile) {
-        //             // console.log("current file path:", currentFile.path)
-        //             void this.ImageAlignmentManager!.applyAlignmentsToNote(currentFile.path);
-        //         }
-        //     })
-        // );
-
-
         // Wait for layout to be ready before initializing view-dependent components
         this.app.workspace.onLayoutReady(() => {
             this.initializeComponents();
 
             // Apply Image Alignment and Resizing when switching Live to Reading mode etc.
-            if (this.settings.alignment.enabled || this.settings.interactiveResize.enabled || this.settings.captions.enabled) {
-                this.registerEvent(
-                    this.app.workspace.on('layout-change', () => {
-                        this.imageStateManager?.refreshAllImages();
+            // ImageStateManager observes active-leaf-change internally now.
+            // For ImageResizer, we should also hook into active-leaf-change via main or let it handle itself.
+            // To prevent layout thrashing during init, we minimize listeners here.
 
-                        if (this.settings.interactiveResize.enabled) {
-                            const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-                            if (activeView) {
-                                this.imageResizer?.onLayoutChange(activeView);
-                            }
+            if (this.settings.interactiveResize.enabled) {
+                this.registerEvent(
+                    this.app.workspace.on('active-leaf-change', (leaf) => {
+                        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+                        if (activeView) {
+                            this.imageResizer?.onLayoutChange(activeView);
                         }
                     })
                 );
             }
-
-            // // Prevent link from showing up
-            // const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-            // if (!activeView) return;
-
-            // this.registerDomEvent(activeView.contentEl, 'click', (evt: MouseEvent) => {
-            //     const target = evt.target as HTMLElement;
-            //     if (target.tagName === 'IMG') {
-            //         evt.preventDefault();
-            //         evt.stopPropagation();
-            //     }
-            // }, true);
-
         });
+        // const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        // if (!activeView) return;
+
+        // this.registerDomEvent(activeView.contentEl, 'click', (evt: MouseEvent) => {
+        //     const target = evt.target as HTMLElement;
+        //     if (target.tagName === 'IMG') {
+        //         evt.preventDefault();
+        //         evt.stopPropagation();
+        //     }
+        // }, true);
+
 
         // Register MarkdownPostProcessor for Reading Mode Image Handling
         this.registerMarkdownPostProcessor((element, context) => {
@@ -478,6 +457,40 @@ export default class ImageConverterPlugin extends Plugin {
             callback: async () => {
                 new FolderSelectorModal(this.app, async (folder: TFolder) => {
                     new UnifiedBatchProcessModal(this.app, this, "folder", folder, "local_process").open();
+                }).open();
+            }
+        });
+
+        // Cloud Batch Commands (New)
+        // --------------------------
+
+        this.addCommand({
+            id: 'upload-all-vault-images',
+            name: t("CMD_UPLOAD_ALL_VAULT" as any) || "Upload all images in vault", // Fallback if key missing
+            callback: async () => {
+                new UnifiedBatchProcessModal(this.app, this, "vault", null, "upload").open();
+            }
+        });
+
+        this.addCommand({
+            id: 'upload-all-images-current-note',
+            name: t("CMD_UPLOAD_CURRENT_NOTE" as any) || "Upload all images in current note",
+            callback: async () => {
+                const activeFile = this.app.workspace.getActiveFile();
+                if (activeFile) {
+                    new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "upload").open();
+                } else {
+                    new Notice(t("MSG_NO_ACTIVE_FILE"));
+                }
+            }
+        });
+
+        this.addCommand({
+            id: 'upload-folder-images',
+            name: t("MENU_UPLOAD_FOLDER_IMAGES"),
+            callback: async () => {
+                new FolderSelectorModal(this.app, async (folder: TFolder) => {
+                    new UnifiedBatchProcessModal(this.app, this, "folder", folder, "upload").open();
                 }).open();
             }
         });

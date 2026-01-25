@@ -133,13 +133,17 @@ export class RefinedImageUtils {
      * @returns 
      */
     public findLinkLineNumber(editor: Editor, linkText: string): number {
-        const lineCount = editor.lineCount();
+        try {
+            const lineCount = editor.lineCount();
 
-        for (let i = 0; i < lineCount; i++) {
-            const line = editor.getLine(i);
-            if (line.includes(linkText)) {
-                return i;
+            for (let i = 0; i < lineCount; i++) {
+                const line = editor.getLine(i);
+                if (line.includes(linkText)) {
+                    return i;
+                }
             }
+        } catch (error) {
+            console.warn("RefinedImageUtils: Error finding link line number:", error);
         }
         return -1;
     }

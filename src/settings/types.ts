@@ -83,6 +83,7 @@ export interface ConversionPreset {
     ffmpegExecutablePath?: string;
     ffmpegCrf?: number;
     ffmpegPreset?: string;
+    minimumCompressionSavingsInKB?: number;
 }
 
 export interface PresetUIState {
@@ -166,6 +167,7 @@ export interface ImageAssistantSettings {
         enableContextMenu: boolean;
         showSpaceSavedNotification: boolean;
         revertToOriginalIfLarger: boolean;
+        minimumCompressionSavingsInKB: number;
         useSystemPathForBinary: boolean;
     };
 

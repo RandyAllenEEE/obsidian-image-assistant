@@ -532,6 +532,8 @@ export default {
     "CMD_OCR_LATEX_INLINE": "剪贴板图片转行内 LaTeX",
     "CMD_OCR_MARKDOWN": "剪贴板图片转 Markdown",
     "CMD_RELOAD_PLUGIN": "重载插件",
+    "CMD_UPLOAD_ALL_VAULT": "将库中所有图片上传到图床",
+    "CMD_UPLOAD_CURRENT_NOTE": "将当前笔记中的所有图片上传到图床",
 
     // Main Plugin Messages
     "MSG_PLUGIN_INITIALIZING": "请稍候，插件正在初始化...",

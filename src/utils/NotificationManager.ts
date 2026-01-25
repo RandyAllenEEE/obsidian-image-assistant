@@ -19,6 +19,10 @@ export interface BatchOperationError {
 export class NotificationManager {
     private errors: BatchOperationError[] = [];
 
+    static showInfo(message: string, duration?: number) { new Notice(message, duration); }
+    static showWarning(message: string, duration?: number) { new Notice("⚠️ " + message, duration); }
+    static showError(message: string, duration?: number) { new Notice("❌ " + message, duration); }
+
     /**
      * Collect a batch operation error
      * 收集批量操作错误
@@ -130,9 +134,9 @@ export class NotificationManager {
         // Only show progress at certain intervals to avoid notification spam
         // 仅在特定间隔显示进度，避免通知刷屏
         const shouldShow = current === 1 || current === total || current % 5 === 0;
-        
+
         if (shouldShow) {
-            const message = itemName 
+            const message = itemName
                 ? `🔄 处理中 (${current}/${total}): ${itemName}`
                 : `🔄 处理中 (${current}/${total})`;
             new Notice(message, 1000);

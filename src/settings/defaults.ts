@@ -50,6 +50,7 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
         enableContextMenu: true,
         showSpaceSavedNotification: true,
         revertToOriginalIfLarger: false,
+        minimumCompressionSavingsInKB: 30,
         useSystemPathForBinary: true,
     },
 
