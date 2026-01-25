@@ -75,7 +75,15 @@ export class ImageCaption {
 
         // Clean alt text using parser
         const parsedState = pipeSyntaxParser.parseAltText(rawAlt);
-        const cleanAlt = parsedState.alt || '';
+        let cleanAlt = parsedState.alt || '';
+
+        // Fix: Strip trailing backslash from alt text
+        // This occurs when Obsidian escapes pipes in wikilinks inside tables (e.g., ![[path\|caption\|450]])
+        // Obsidian's rendering incorrectly includes the backslash in the caption (alt="sample\")
+        const isInTable = container.closest('table, .table-cell-wrapper, .cm-table-widget') !== null;
+        if (isInTable && cleanAlt.endsWith('\\')) {
+            cleanAlt = cleanAlt.slice(0, -1);
+        }
 
         // Handle caption visibility
         if (excludedExtensions.includes(extension)) {
@@ -110,7 +118,32 @@ export class ImageCaption {
 
         if (enableImageCaptions) {
             document.body.classList.add('image-captions-enabled');
-            // Initial sweep logic could remain here or be handled by Manager's refreshAllImages
+
+            // Perform an initial sweep of existing images to apply captions
+            // (Note: This is mostly for Reading Mode on load, Live Preview images are handled by Observer)
+            const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+            if (activeView) {
+                activeView.contentEl.querySelectorAll('img').forEach((img: HTMLImageElement) => {
+                    const embed = img.closest('.internal-embed.image-embed, .external-embed, .external-image-container, .image-resize-container') as HTMLElement;
+                    if (embed) {
+                        const rawAlt = img.getAttribute('alt') || '';
+                        const parsed = pipeSyntaxParser.parseAltText(rawAlt);
+                        let cleanAlt = parsed.alt || '';
+
+                        // Fix: Strip trailing backslash from alt text in tables
+                        const isInTable = embed.closest('table, .table-cell-wrapper, .cm-table-widget') !== null;
+                        if (isInTable && cleanAlt.endsWith('\\')) {
+                            cleanAlt = cleanAlt.slice(0, -1);
+                        }
+
+                        // Apply to DOM attributes for CSS pseudo-elements
+                        if (cleanAlt && cleanAlt !== ' ') {
+                            embed.setAttribute('alt', cleanAlt);
+                            img.setAttribute('alt', cleanAlt);
+                        }
+                    }
+                });
+            }
         } else {
             document.body.classList.remove('image-captions-enabled');
         }

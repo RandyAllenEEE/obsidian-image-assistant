@@ -4454,3 +4454,50 @@ body:not(.image-assistant-wrap-in-edit-mode) .cm-scroller .image-position-right.
 .ocr-settings-section {
     /* Ensure they share the common styles */
 }
+
+/* --- Context Menu Alignment Buttons --- */
+.image-converter-alignment-group {
+    /* padding-top: 5px; */
+}
+
+.image-converter-alignment-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    width: 100%;
+    margin-top: 4px;
+}
+
+.image-converter-alignment-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: all 0.15s ease;
+    border: 1px solid transparent;
+}
+
+.image-converter-alignment-button svg {
+    width: 18px;
+    height: 18px;
+}
+
+.image-converter-alignment-button:hover {
+    background-color: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
+.image-converter-alignment-button.active {
+    background-color: var(--interactive-accent);
+    color: var(--text-on-accent);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.image-converter-alignment-button.active:hover {
+    /* active state hover usually stays active, maybe slightly brighter */
+    opacity: 0.9;
+}

@@ -117,4 +117,41 @@ describe('PipeSyntaxParser Exhaustive Tests', () => {
             verify(`![[img.png|right|image at right|200x]]`, { path: 'img.png', align: 'right', alt: 'image at right', size: { width: 200, format: 'Wx' } });
         });
     });
+
+    describe('4. parsePipeAttributes & Reading Mode Simulations', () => {
+        it('should parse raw attributes (Markdown style)', () => {
+            const res = parser.parsePipeAttributes('My Caption|left-wrap|300', true);
+            expect(res.alt).toBe('My Caption');
+            expect(res.align).toBe('left-wrap');
+            expect(res.size).toEqual({ width: 300, format: 'W' });
+        });
+
+        it('should parse raw attributes (Wiki style)', () => {
+            const res = parser.parsePipeAttributes('My Caption|right|x200', false);
+            expect(res.alt).toBe('My Caption');
+            expect(res.align).toBe('right');
+            expect(res.size).toEqual({ height: 200, format: 'xH' });
+        });
+
+        it('should handle missing alt in attributes (Markdown style)', () => {
+            const res = parser.parsePipeAttributes('|center|400x300', true);
+            expect(res.alt).toBe(' ');
+            expect(res.align).toBe('center');
+            expect(res.size).toEqual({ width: 400, height: 300, format: 'WxH' });
+        });
+
+        it('should handle only size/align in attributes (Wiki style)', () => {
+            // This simulates what Obsidian often does in Reading Mode for ![[img.png|100]]
+            const res = parser.parsePipeAttributes('100', false);
+            expect(res.alt).toBe(' ');
+            expect(res.size).toEqual({ width: 100, format: 'W' });
+        });
+
+        it('should handle mixed order in Markdown style attributes', () => {
+            const res = parser.parsePipeAttributes('Caption|300|right', true);
+            expect(res.alt).toBe('Caption');
+            expect(res.align).toBe('right');
+            expect(res.size).toEqual({ width: 300, format: 'W' });
+        });
+    });
 });

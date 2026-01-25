@@ -219,6 +219,9 @@ export class ContextMenu extends Component {
 		// Check if image is network image
 		const isNetwork = ImagePathUtils.isNetworkImage(img);
 
+		// 1. TOP SECTION: Inputs & Pipe Syntax Controls
+		// =========================================================
+
 		// Build rename/move/caption/dimension inputs
 		const inputs = this.renameInputBuilder.buildInputs(menu, img, activeFile, isNetwork);
 
@@ -248,6 +251,7 @@ export class ContextMenu extends Component {
 						inputs.captionInput,
 						inputs.widthInput,
 						inputs.heightInput,
+						inputs.getAlignment(), // Pass alignment
 						img,
 						activeFile,
 						inputs.isImageResolvable || isNetwork
@@ -256,22 +260,24 @@ export class ContextMenu extends Component {
 			});
 		}
 
-		menu.addSeparator();
+
+		// 2. MIDDLE SECTION: Tools & Management (Consolidated)
+		// =========================================================
 
 		if (!Platform.isMobile) {
 			this.addOpenInNewWindowMenuItem(menu, img);
 			menu.addSeparator();
+
+			// Start of Consolidated Tool Block (No internal separators)
 			this.addCutImageMenuItem(menu, event);
+		} else {
+			// Mobile start of tool block
 		}
 
-		this.addCopyImageMenuItem(menu, event);
-		this.addCopyBase64ImageMenuItem(menu, event);
-
-		menu.addSeparator();
-
-		// Add alignment options if enabled
-		if (this.plugin.settings.alignment.enabled && this.plugin.imageStateManager) {
-			this.addAlignmentOptions(menu, img);
+		// Hide Copy operations for network images (CORS issues)
+		if (!isNetwork) {
+			this.addCopyImageMenuItem(menu, event);
+			this.addCopyBase64ImageMenuItem(menu, event);
 		}
 
 		// Network images: only show download option
@@ -285,64 +291,23 @@ export class ContextMenu extends Component {
 			this.addUploadToCloudMenuItem(menu, img, event);
 		}
 
+		// Delete option (Moved to Middle Section, end of tool block)
+		this.addDeleteImageAndLinkMenuItem(menu, event);
+
 		menu.addSeparator();
 
-		if (!Platform.isMobile) {
+
+		// 3. BOTTOM SECTION: Navigation
+		// =========================================================
+
+		if (!Platform.isMobile && !isNetwork) {
 			this.addShowInNavigationMenuItem(menu, img);
 			this.addShowInSystemExplorerMenuItem(menu, img);
 		}
 
-		menu.addSeparator();
-		this.addDeleteImageAndLinkMenuItem(menu, event);
-
 		return true;
 	}
 
-	/**
-	 * Adds alignment options to the context menu.
-	 * @param menu - The Menu object.
-	 * @param img - The HTMLImageElement.
-	 */
-	addAlignmentOptions(menu: Menu, img: HTMLImageElement) {
-		menu.addItem((item) => {
-			item
-				.setTitle(t("MENU_ALIGN_IMAGE"))
-				.setIcon('align-center')
-				.setSubmenu()
-				.addItem((subItem) => {
-					subItem
-						.setTitle(t("ALIGN_LEFT"))
-						.setIcon('align-left')
-						.onClick(async () => {
-							await this.plugin.imageStateManager?.updateState(img, { align: 'left' });
-						});
-				})
-				.addItem((subItem) => {
-					subItem
-						.setTitle(t("ALIGN_CENTER"))
-						.setIcon('align-center')
-						.onClick(async () => {
-							await this.plugin.imageStateManager?.updateState(img, { align: 'center' });
-						});
-				})
-				.addItem((subItem) => {
-					subItem
-						.setTitle(t("ALIGN_RIGHT"))
-						.setIcon('align-right')
-						.onClick(async () => {
-							await this.plugin.imageStateManager?.updateState(img, { align: 'right' });
-						});
-				})
-				.addItem((subItem) => {
-					subItem
-						.setTitle(t("OPTION_NONE"))
-						.setIcon('x')
-						.onClick(async () => {
-							await this.plugin.imageStateManager?.updateState(img, { align: 'center' });
-						});
-				});
-		});
-	}
 
 	/*-----------------------------------------------------------------*/
 	/*                       MENU ITEM ADDERS                          */

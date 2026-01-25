@@ -516,6 +516,7 @@ export default {
     "ALIGN_RIGHT": "右对齐",
     "ALIGN_WRAP": "文字环绕",
     "ALIGN_REMOVE": "移除对齐",
+    "LABEL_ALIGNMENT": "对齐:",
 
     // Batch Operations
     "MENU_BATCH_PROCESS_NOTE": "批量处理笔记内所有图片",

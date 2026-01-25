@@ -59,13 +59,22 @@ export class RefinedImageUtils {
             } else {
                 // Local/Internal
                 const [cleanSrc] = src.split('?');
+                let encodedImageName = '';
                 try {
                     decodedSrc = decodeURIComponent(cleanSrc);
                 } catch (e) {
                     decodedSrc = cleanSrc;
                 }
-                const imageName = decodedSrc.split(/[/\\]/).pop();
-                if (imageName) searchTerms.push(imageName);
+
+                // Get the decoded image name
+                const decodedImageName = decodedSrc.split(/[/\\]/).pop();
+                if (decodedImageName) searchTerms.push(decodedImageName);
+
+                // Also add the encoded image name to handle URL-encoded paths in markdown
+                encodedImageName = cleanSrc.split(/[/\\]/).pop() || '';
+                if (encodedImageName && encodedImageName !== decodedImageName) {
+                    searchTerms.push(encodedImageName);
+                }
             }
 
             if (searchTerms.length === 0) return null;
@@ -102,17 +111,18 @@ export class RefinedImageUtils {
                     }
 
                 } else {
-                    // Local Image
-                    const imageName = searchTerms[0];
-                    const escapedImageName = this.escapeRegexCharacters(imageName);
+                    // Local Image - try all search terms (decoded and encoded names)
+                    for (const imageName of searchTerms) {
+                        const escapedImageName = this.escapeRegexCharacters(imageName);
 
-                    const wikiRegex = createWikiLinkRegex(escapedImageName);
-                    let match = wikiRegex.exec(line);
-                    if (match) return match[0];
+                        const wikiRegex = createWikiLinkRegex(escapedImageName);
+                        let match = wikiRegex.exec(line);
+                        if (match) return match[0];
 
-                    const markdownRegex = createMarkdownLinkRegex(escapedImageName);
-                    match = markdownRegex.exec(line);
-                    if (match) return match[0];
+                        const markdownRegex = createMarkdownLinkRegex(escapedImageName);
+                        match = markdownRegex.exec(line);
+                        if (match) return match[0];
+                    }
                 }
             }
 

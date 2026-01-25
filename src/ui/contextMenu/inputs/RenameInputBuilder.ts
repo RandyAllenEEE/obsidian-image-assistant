@@ -3,6 +3,7 @@ import * as path from 'path';
 import { t } from '../../../lang/helpers';
 import { FolderAndFilenameManagement } from '../../../local/FolderAndFilenameManagement';
 import ImageConverterPlugin from '../../../main';
+import { ImageState } from '../../ImageStateManager';
 
 export interface RenameInputs {
     nameInput: HTMLInputElement;
@@ -17,6 +18,7 @@ export interface RenameInputs {
     obsidianVaultPathForRename: string | undefined;
     file: TFile | File;
     isImageResolvable: boolean;
+    getAlignment: () => string;
 }
 
 /**
@@ -25,6 +27,8 @@ export interface RenameInputs {
 export class RenameInputBuilder extends Component {
     private readonly stopPropagationHandler = (e: Event) => e.stopPropagation();
     private documentClickHandler: ((e: MouseEvent) => void) | null = null;
+
+    // ... constructor ... (implicit from context)
 
     constructor(
         private app: any,
@@ -43,6 +47,7 @@ export class RenameInputBuilder extends Component {
      * @returns RenameInputs object if inputs were created, null if skipped
      */
     buildInputs(menu: Menu, img: HTMLImageElement, activeFile: TFile, isNetwork: boolean = false): RenameInputs | null {
+        // ... (lines 46-73: check native menus, resolve basic info) ...
         const isNativeMenus = (this.app.vault as any).getConfig('nativeMenus');
 
         if (!isNativeMenus && !Platform.isMobile) {
@@ -128,6 +133,7 @@ export class RenameInputBuilder extends Component {
         directoryPath: string,
         img: HTMLImageElement
     ) {
+        // ... (lines 131-253: name, path, caption, dimensions setup) ...
         // Create main container
         const inputContainer = document.createElement('div');
         inputContainer.className = 'image-converter-contextmenu-info-container';
@@ -251,6 +257,9 @@ export class RenameInputBuilder extends Component {
             heightInput.value = currentStateSize.height?.toString() || "";
         }
 
+        // --- NEW: Create Alignment Control ---
+        const { group: alignmentGroup, getAlignment } = this.createAlignmentControl(img);
+
         // Add all groups to container
         if (!isNetwork) {
             inputContainer.appendChild(nameGroup);
@@ -258,6 +267,7 @@ export class RenameInputBuilder extends Component {
         }
         inputContainer.appendChild(captionGroup);
         inputContainer.appendChild(dimensionsGroup);
+        inputContainer.appendChild(alignmentGroup); // Add alignment group
 
         // Add single confirm button
         const confirmButton = document.createElement('div');
@@ -280,8 +290,76 @@ export class RenameInputBuilder extends Component {
                 captionInput,
                 widthInput,
                 heightInput,
-                confirmButton
-            }
+                confirmButton,
+                getAlignment
+            },
+            isImageResolvable // Ensure this is returned at the top level of RenameInputs
+        };
+    }
+
+    private createAlignmentControl(img: HTMLImageElement): { group: HTMLElement, getAlignment: () => string } {
+        const group = document.createElement('div');
+        group.className = 'image-converter-contextmenu-input-group image-converter-alignment-group';
+
+        // Icon for label
+        const icon = document.createElement('div');
+        icon.className = 'image-converter-contextmenu-icon-container';
+        setIcon(icon, 'align-center');
+        group.appendChild(icon);
+
+        // Label
+        const label = document.createElement('label');
+        label.textContent = t("LABEL_ALIGNMENT");
+        group.appendChild(label);
+
+        const buttonsContainer = document.createElement('div');
+        buttonsContainer.className = 'image-converter-alignment-buttons';
+
+        const alignOptions = [
+            { id: 'left', icon: 'align-left', title: t("ALIGN_LEFT") },
+            { id: 'left-wrap', icon: 'wrap-text', title: t("ALIGN_LEFT") + ' (Wrap)' },
+            { id: 'center', icon: 'align-center', title: t("ALIGN_CENTER") },
+            { id: 'right-wrap', icon: 'wrap-text', title: t("ALIGN_RIGHT") + ' (Wrap)' },
+            { id: 'right', icon: 'align-right', title: t("ALIGN_RIGHT") },
+        ];
+
+        // Get current alignment
+        let currentAlign = this.plugin.imageStateManager?.getImageState(img)?.align || 'none';
+
+        const buttons: HTMLElement[] = [];
+
+        alignOptions.forEach(opt => {
+            const btn = document.createElement('div');
+            btn.className = `image-converter-alignment-button ${currentAlign === opt.id ? 'active' : ''}`;
+            btn.title = opt.title;
+            setIcon(btn, opt.icon);
+
+            // Click Handler
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+
+                // Toggle Logic
+                if (currentAlign === opt.id) {
+                    // Deselect if already selected
+                    currentAlign = 'none';
+                    btn.classList.remove('active');
+                } else {
+                    // Select new option
+                    currentAlign = opt.id as ImageState['align'];
+                    buttons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                }
+            });
+
+            buttons.push(btn);
+            buttonsContainer.appendChild(btn);
+        });
+
+        group.appendChild(buttonsContainer);
+
+        return {
+            group,
+            getAlignment: () => currentAlign
         };
     }
 }

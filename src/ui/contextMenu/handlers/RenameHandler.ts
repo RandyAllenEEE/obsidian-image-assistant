@@ -123,6 +123,7 @@ export class RenameHandler {
      * @param captionInput - The HTMLInputElement for caption.
      * @param widthInput - The HTMLInputElement for width.
      * @param heightInput - The HTMLInputElement for height.
+     * @param align - The alignment string.
      * @param img - The HTMLImageElement.
      * @param activeFile - The active TFile.
      * @param isResolvableOrNetwork - Whether the image is resolvable or network image.
@@ -132,6 +133,7 @@ export class RenameHandler {
         captionInput: HTMLInputElement,
         widthInput: HTMLInputElement,
         heightInput: HTMLInputElement,
+        align: string,
         img: HTMLImageElement,
         activeFile: TFile,
         isResolvableOrNetwork: boolean
@@ -150,7 +152,8 @@ export class RenameHandler {
             await this.plugin.imageStateManager.updateState(img, {
                 caption: newCaption,
                 width: widthStr ? parseInt(widthStr) : undefined,
-                height: heightStr ? parseInt(heightStr) : undefined
+                height: heightStr ? parseInt(heightStr) : undefined,
+                align: align as any
             });
             new Notice(t("MSG_CAPTION_UPDATED"));
         }

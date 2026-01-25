@@ -10,7 +10,7 @@ import { debounce } from 'obsidian';
 
 
 export interface ImageState {
-    align: 'left' | 'center' | 'right' | 'none';
+    align: 'left' | 'center' | 'right' | 'left-wrap' | 'right-wrap' | 'none';
     wrap: boolean;
     width?: number | null;
     height?: number | null;
@@ -175,46 +175,72 @@ export class ImageStateManager {
 
         // 2. Parse State from Alt Text (Source of Truth in Reading Mode)
         const altText = img.getAttribute('alt') || '';
-        const parsed = pipeSyntaxParser.parsePipeSyntax(altText);
 
-        if (!parsed) return;
+        // Obsidian's Reading Mode 'alt' attribute varies based on link type:
+        // Wiki: ![[img.png|left|100]] -> alt="100" (Wait, actually it depends on the LAST attribute that is not a size/align?)
+        // Markdown: ![alt|left|100](img.png) -> alt="alt|left|100"
 
-        // 3. Construct Data for Delegates
-        // Align
-        let align: 'left' | 'center' | 'right' | 'none' = 'none';
-        let wrap = false;
-        if (parsed.align) {
-            if (parsed.align.includes('left')) align = 'left';
-            else if (parsed.align.includes('right')) align = 'right';
-            else if (parsed.align.includes('center')) align = 'center';
-            if (parsed.align.includes('wrap')) wrap = true;
-        }
+        // Robust strategy: Try parsing as Markdown style first (common for external/local md links).
+        // If it looks like Wiki style (path is actually an attribute), the parser handles it.
+        // We use 'true' for firstPartIsAlt because Obsidian's DOM 'alt' usually strips the path and starts with attributes.
+        const parsed = pipeSyntaxParser.parsePipeAttributes(altText, true);
 
-        const positionData = {
-            position: align,
-            wrap: wrap,
-            width: parsed.size?.width?.toString(),
-            height: parsed.size?.height?.toString()
-        };
+        // 3. Map to State
+        const state = this.mapPipeDataToState(parsed as any);
 
         // 4. Delegate: Alignment & Layout Fix
+        // For Reading Mode, we MUST ensure the image has correct layout (inline-block) 
+        // to allow side-by-side positioning when aligned.
+        const alignPosition = state.align === 'none' ? this.plugin.settings.alignment.default : state.align;
+        const positionData = {
+            position: alignPosition,
+            wrap: state.wrap,
+            width: state.width?.toString(),
+            height: state.height?.toString()
+        };
         this.alignment.applyAlignmentToImage(img, positionData as any);
-        this.alignment.ensureReadingModeLayout(img, align);
+        this.alignment.ensureReadingModeLayout(img, alignPosition);
 
         // 5. Delegate: Size
-        // IMPORTANT: Native Obsidian fails to resize URL images in Markdown links.
-        // We explicitly apply it here.
-        if ((parsed.size?.width || parsed.size?.height) && this.resizer) {
-            this.resizer.applySize(img, parsed.size.width, parsed.size.height);
+        if ((state.width || state.height) && this.resizer) {
+            this.resizer.applySize(img, state.width ?? undefined, state.height ?? undefined);
         }
 
-        // 6. Delegate: Caption (Optional - Obsidian usually handles alt text, but we might want style)
-        // For now, we trust Obsidian's native alt-text display or our CSS for captions.
-        // We do typically hide the raw pipe syntax from the alt text visually via CSS or
-        // by modifying the alt attribute (but that changes source of truth for next run?).
-        // Better to NOT modify the alt attribute in Reading Mode to preserve idempotency 
-        // unless we store original in data attribute.
-        // Let's rely on CSS to hide pipe syntax if possible, or just leave it for now.
+        if (state.caption) {
+            this.caption.applyCaption(img, state.caption);
+        }
+    }
+
+    /**
+     * Helper to map raw PipeSyntaxData to ImageState
+     */
+    private mapPipeDataToState(parsed: PipeSyntaxData): ImageState {
+        let align: ImageState['align'] = 'none';
+        let wrap = false;
+
+        if (parsed.align) {
+            const baseAlign = parsed.align.includes('left') ? 'left'
+                : parsed.align.includes('right') ? 'right'
+                    : parsed.align.includes('center') ? 'center'
+                        : 'none';
+
+            wrap = parsed.align.includes('wrap');
+
+            // Combine base and wrap into single align value for UI
+            if (baseAlign !== 'none' && baseAlign !== 'center' && wrap) {
+                align = `${baseAlign}-wrap` as ImageState['align'];
+            } else {
+                align = baseAlign;
+            }
+        }
+
+        return {
+            align,
+            wrap,
+            width: parsed.size?.width,
+            height: parsed.size?.height,
+            caption: parsed.alt ? parsed.alt.replace(/\\\|/g, '|') : undefined
+        };
     }
 
     /**
@@ -230,26 +256,7 @@ export class ImageStateManager {
         const parsed = pipeSyntaxParser.parsePipeSyntax(linkText);
         if (!parsed) return null;
 
-        // Map parsed data to ImageState
-        // Align
-        let align: 'left' | 'center' | 'right' | 'none' = 'none';
-        let wrap = false;
-
-        if (parsed.align) {
-            if (parsed.align.includes('left')) align = 'left';
-            else if (parsed.align.includes('right')) align = 'right';
-            else if (parsed.align.includes('center')) align = 'center';
-
-            if (parsed.align.includes('wrap')) wrap = true;
-        }
-
-        return {
-            align,
-            wrap,
-            width: parsed.size?.width,
-            height: parsed.size?.height,
-            caption: parsed.alt ? parsed.alt.replace(/\\\|/g, '|') : undefined
-        };
+        return this.mapPipeDataToState(parsed);
     }
 
     /**
@@ -269,16 +276,18 @@ export class ImageStateManager {
         // Merge Changes
         // 1. Align & Wrap
         if (changes.align !== undefined || changes.wrap !== undefined) {
-            const currentAlignStr = parsed.align || '';
-            let newAlignStr = changes.align || (currentAlignStr.includes('left') ? 'left' : currentAlignStr.includes('right') ? 'right' : currentAlignStr.includes('center') ? 'center' : 'none');
+            let newAlignStr = changes.align ?? 'none';
 
-            if (newAlignStr !== 'none') {
-                // Determine wrap state: use new wrap if provided, else keep existing wrap if present
-                const shouldWrap = changes.wrap !== undefined ? changes.wrap : currentAlignStr.includes('wrap');
-                if (shouldWrap) newAlignStr += '-wrap';
-                parsed.align = newAlignStr as AlignType;
-            } else {
+            // If align is 'none', no alignment attribute needed
+            if (newAlignStr === 'none') {
                 parsed.align = null;
+            } else {
+                // For combined values like 'left-wrap', use directly
+                // For simple values like 'left', check if wrap should be appended
+                if (!newAlignStr.includes('wrap') && changes.wrap === true) {
+                    newAlignStr = `${newAlignStr}-wrap` as typeof newAlignStr;
+                }
+                parsed.align = newAlignStr as AlignType;
             }
         }
 
@@ -310,8 +319,7 @@ export class ImageStateManager {
             const newLine = line.replace(linkText, newLinkText);
             editor.setLine(lineNumber, newLine);
 
-            // Mark as processed to help observer ignore strict echoes if needed, 
-            // though our logic is robust enough to re-process identicals safely.
+            // Mark as processed to help observer ignore strict echoes if needed
             img.setAttribute('data-state-processed', 'true');
         } else {
             new Notice("Could not find image link in editor to update.");

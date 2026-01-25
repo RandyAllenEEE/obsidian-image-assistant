@@ -523,6 +523,7 @@ export default {
     "ALIGN_CENTER": "Center",
     "ALIGN_RIGHT": "Right",
     "ALIGN_WRAP": "Wrap Text",
+    "LABEL_ALIGNMENT": "Alignment:",
 
     // Batch Operations
     "MENU_BATCH_PROCESS_NOTE": "Batch process all images in note",

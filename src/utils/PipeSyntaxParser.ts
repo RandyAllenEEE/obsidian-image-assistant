@@ -76,7 +76,6 @@ export class PipeSyntaxParser {
 
     /**
      * 解析 Wiki 格式链接：![[path|attr1|attr2|...]]
-     * 从后向前识别 size 和 align，剩余片段合并为 alt
      */
     private parseWikiLink(linkText: string): PipeSyntaxData | null {
         const match = linkText.match(PipeSyntaxParser.WIKI_LINK_PATTERN);
@@ -94,40 +93,13 @@ export class PipeSyntaxParser {
 
         // 第一个片段是路径
         const path = parts[0].trim();
-        let segments = parts.slice(1); // 不要对片段 trim，保留原始空格
+        const attrContent = parts.slice(1).join('|');
 
-        let size: SizeData | undefined;
-        let align: AlignType = null;
-        let alt: string | undefined;
-
-        // 步骤1：从后向前识别 size（最多一个）
-        for (let i = segments.length - 1; i >= 0; i--) {
-            if (this.isSizeAttribute(segments[i].trim())) {
-                size = this.parseSizeAttribute(segments[i].trim());
-                segments.splice(i, 1);
-                break;
-            }
-        }
-
-        // 步骤2：从后向前识别 align（最多一个）
-        for (let i = segments.length - 1; i >= 0; i--) {
-            if (this.isAlignAttribute(segments[i].trim())) {
-                align = segments[i].trim() as AlignType;
-                segments.splice(i, 1);
-                break;
-            }
-        }
-
-        // 步骤3：剩余所有片段用 | 连接作为 alt
-        if (segments.length > 0) {
-            alt = segments.join('|');
-        } else {
-            alt = ' '; // 缺省时为空格
-        }
+        const { alt, align, size } = this.parsePipeAttributes(attrContent, false);
 
         return {
             path,
-            alt,
+            alt: alt || ' ',
             align,
             size,
             linkType: 'wiki'
@@ -136,7 +108,6 @@ export class PipeSyntaxParser {
 
     /**
      * 解析 Markdown 格式链接：![alt|attr1|attr2](path)
-     * 首位是 alt（或缺省），后续识别 size 和 align
      */
     private parseMarkdownLink(linkText: string): PipeSyntaxData | null {
         const match = linkText.match(PipeSyntaxParser.MARKDOWN_LINK_PATTERN);
@@ -147,49 +118,11 @@ export class PipeSyntaxParser {
         const bracketContent = match[1]; // alt|attr1|attr2
         const path = match[2].trim();
 
-        let alt: string | undefined;
-        let size: SizeData | undefined;
-        let align: AlignType = null;
-
-        if (!bracketContent || bracketContent.trim() === '') {
-            // 完全缺省：![](path)
-            alt = ' ';
-        } else {
-            const parts = bracketContent.split(/(?<!\\)\|/);
-
-            if (parts.length === 1 && parts[0].trim() === '') {
-                // 单个 | 的情况：![|...](path)
-                alt = ' ';
-            } else if (parts[0].trim() === '') {
-                // 首位是 |，说明 alt 缺省：![|attr1|attr2](path)
-                alt = ' ';
-                // 从第二个片段开始识别
-                for (let i = 1; i < parts.length; i++) {
-                    const segment = parts[i].trim();
-                    if (this.isSizeAttribute(segment) && !size) {
-                        size = this.parseSizeAttribute(segment);
-                    } else if (this.isAlignAttribute(segment) && !align) {
-                        align = segment as AlignType;
-                    }
-                }
-            } else {
-                // 首位不是 |，首个片段是 alt
-                alt = parts[0];
-                // 从第二个片段开始识别
-                for (let i = 1; i < parts.length; i++) {
-                    const segment = parts[i].trim();
-                    if (this.isSizeAttribute(segment) && !size) {
-                        size = this.parseSizeAttribute(segment);
-                    } else if (this.isAlignAttribute(segment) && !align) {
-                        align = segment as AlignType;
-                    }
-                }
-            }
-        }
+        const { alt, align, size } = this.parsePipeAttributes(bracketContent, true);
 
         return {
             path,
-            alt,
+            alt: alt || ' ',
             align,
             size,
             linkType: 'markdown'
@@ -266,25 +199,87 @@ export class PipeSyntaxParser {
      * @param altText The raw alt text (e.g. "Title|100")
      */
     public parseAltText(altText: string): PipeSyntaxData {
-        if (!altText || altText.trim() === '') {
-            return { path: '', alt: ' ', linkType: 'markdown' };
-        }
-
-        // Truncate at the first unescaped pipe |
-        // We can't easily use indexOf for regex, so we use split
-        const parts = altText.split(/(?<!\\)\|/);
-        let cleanAlt = parts[0].trim();
-
-        // Robustness fallback: if empty/missing (e.g. "![|100]"), use a space
-        if (cleanAlt === '') {
-            cleanAlt = ' ';
-        }
+        const { alt, align, size } = this.parsePipeAttributes(altText, true);
 
         return {
             path: '',
-            alt: cleanAlt,
+            alt: alt || ' ',
+            align,
+            size,
             linkType: 'markdown' // arbitrary
         };
+    }
+
+    /**
+     * 核心解析逻辑：从 Pipe Syntax 字符串中提取 alt, align, size
+     * @param content 管道符分隔的内容片段 (不含 ![[ ]] 或 ![ ]() 外壳)
+     * @param firstPartIsAlt 是否强制首个片段为 alt (Markdown 风格)
+     */
+    public parsePipeAttributes(content: string, firstPartIsAlt: boolean): {
+        alt?: string;
+        align?: AlignType;
+        size?: SizeData;
+    } {
+        if (!content || content.trim() === '') {
+            return { alt: ' ' };
+        }
+
+        const parts = content.split(/(?<!\\)\|/);
+        let segments = [...parts];
+
+        let alt: string | undefined;
+        let size: SizeData | undefined;
+        let align: AlignType = null;
+
+        if (firstPartIsAlt) {
+            // Markdown 风格：首位是 alt
+            if (segments[0].trim() === '') {
+                alt = ' ';
+            } else {
+                alt = segments[0];
+            }
+            segments = segments.slice(1);
+
+            // 后续属性顺序不限制
+            for (const segment of segments) {
+                const trimmed = segment.trim();
+                if (this.isSizeAttribute(trimmed) && !size) {
+                    size = this.parseSizeAttribute(trimmed);
+                } else if (this.isAlignAttribute(trimmed) && !align) {
+                    align = trimmed as AlignType;
+                }
+            }
+        } else {
+            // Wiki 风格：从后向前识别 size 和 align，剩余合并为 alt
+            // 步骤1：从后向前识别 size (最多一个)
+            for (let i = segments.length - 1; i >= 0; i--) {
+                const trimmed = segments[i].trim();
+                if (this.isSizeAttribute(trimmed)) {
+                    size = this.parseSizeAttribute(trimmed);
+                    segments.splice(i, 1);
+                    break;
+                }
+            }
+
+            // 步骤2：从后向前识别 align (最多一个)
+            for (let i = segments.length - 1; i >= 0; i--) {
+                const trimmed = segments[i].trim();
+                if (this.isAlignAttribute(trimmed)) {
+                    align = trimmed as AlignType;
+                    segments.splice(i, 1);
+                    break;
+                }
+            }
+
+            // 步骤3：剩余片段合并
+            if (segments.length > 0) {
+                alt = segments.join('|');
+            } else {
+                alt = ' ';
+            }
+        }
+
+        return { alt, align, size };
     }
 
     /**
