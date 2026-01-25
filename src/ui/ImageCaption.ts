@@ -29,8 +29,22 @@ export class ImageCaption {
 
         if (!container) {
             // Fallback for bare network images: Create a dedicated wrapper
-            // We MUST create a dedicated wrapper instead of hijacking the parent (like a <p>)
-            // to avoid display:flex affecting broad text content.
+
+            // CRITICAL FIX: Do NOT wrap in Live Preview (Source View).
+            // Manipulating the DOM structure inside CodeMirror (inserting a span wrapper parent)
+            // causes CM6 to lose track of line boundaries, leading to the "Eating Next Line" bug (data loss).
+            // In Live Preview, we simply accept that we cannot show text captions below bare <img> tags
+            // without a dedicated CM6 Widget. We fall back to a tooltip.
+            if (img.closest('.markdown-source-view')) {
+                const { enabled: enableImageCaptions, skipExtensions: skipCaptionExtensions } = this.plugin.settings.captions;
+                if (enableImageCaptions && captionText) {
+                    img.setAttribute('title', captionText);
+                    img.setAttribute('alt', captionText);
+                }
+                return;
+            }
+
+            // For Reading View (static render), safe to wrap
             if (img.parentElement) {
                 const wrapper = document.createElement('span');
                 wrapper.addClass('external-image-container');
@@ -98,8 +112,10 @@ export class ImageCaption {
             // Set to space to ensure container is rendered but empty (avoiding native tooltips)
             if (container.getAttribute('alt') !== ' ') container.setAttribute('alt', ' ');
         } else {
-            // Genuine caption
-            if (container.getAttribute('alt') !== cleanAlt) {
+            // Genuine caption, ensure attribute is synced
+            // We force update if the attribute is missing or different
+            const currentContainerAlt = container.getAttribute('alt');
+            if (currentContainerAlt !== cleanAlt && (cleanAlt || currentContainerAlt !== null)) {
                 container.setAttribute('alt', cleanAlt);
             }
             if (img.getAttribute('alt') !== cleanAlt) {

@@ -589,6 +589,11 @@ export class FolderAndFilenameManagement {
             const srcAttribute = img.getAttribute('src');
             if (!srcAttribute) return null;
 
+            // Handle network URLs - return the URL directly
+            if (srcAttribute.startsWith('http://') || srcAttribute.startsWith('https://')) {
+                return srcAttribute;
+            }
+
             // 1. Try to resolve the path directly using Obsidian's Vault API
             let abstractFile = this.app.vault.getAbstractFileByPath(srcAttribute);
             if (abstractFile instanceof TFile) {

@@ -143,19 +143,24 @@ export class RefinedImageUtils {
      * @returns 
      */
     public findLinkLineNumber(editor: Editor, linkText: string): number {
+        const range = this.findLinkRange(editor, linkText);
+        return range ? range.line : -1;
+    }
+
+    public findLinkRange(editor: Editor, linkText: string): { line: number, start: number, end: number } | null {
         try {
             const lineCount = editor.lineCount();
-
             for (let i = 0; i < lineCount; i++) {
                 const line = editor.getLine(i);
-                if (line.includes(linkText)) {
-                    return i;
+                const index = line.indexOf(linkText);
+                if (index !== -1) {
+                    return { line: i, start: index, end: index + linkText.length };
                 }
             }
         } catch (error) {
-            console.warn("RefinedImageUtils: Error finding link line number:", error);
+            console.warn("RefinedImageUtils: Error finding link range:", error);
         }
-        return -1;
+        return null;
     }
 
     private escapeRegexCharacters(text: string): string {

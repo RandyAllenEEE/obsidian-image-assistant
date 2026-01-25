@@ -44,13 +44,14 @@ export class ImageStateManager {
         this.setupObserver();
     }
 
-    private isProcessing = false;
+    private processingImages = new Set<HTMLImageElement>();
 
     private setupObserver() {
         if (this.observer) this.observer.disconnect();
 
         this.observer = new MutationObserver((mutations) => {
-            if (this.isProcessing) return; // Prevent recursive loops
+            // Check if we are already processing this specific image to prevent loops
+            // Global lock is removed to allow parallel processing of different images
 
             mutations.forEach((mutation) => {
                 if (mutation.type === 'childList') {
@@ -64,9 +65,8 @@ export class ImageStateManager {
                         }
                     });
                 } else if (mutation.type === 'attributes' && mutation.target instanceof HTMLImageElement) {
-                    // Re-process on attribute change (like src change), but be careful of infinite loops
                     const img = mutation.target as HTMLImageElement;
-                    if (!img.hasClass('is-resizing')) {
+                    if (!this.processingImages.has(img) && !img.hasClass('is-resizing')) {
                         this.processImage(img);
                     }
                 }
@@ -108,14 +108,20 @@ export class ImageStateManager {
     }
 
     public refreshAllImages = debounce(() => {
+        console.log('[ImageStateManager] refreshAllImages called');
         const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!markdownView) return;
+        if (!markdownView) {
+            console.log('[ImageStateManager] No markdown view found');
+            return;
+        }
 
         // Extra safety check for layout readiness
         // @ts-ignore
         if (this.app.workspace.layoutReady === false) return;
 
-        markdownView.contentEl.findAll('img').forEach((img) => {
+        const images = markdownView.contentEl.findAll('img');
+        console.log('[ImageStateManager] Found', images.length, 'images to process');
+        images.forEach((img) => {
             if (img instanceof HTMLImageElement) {
                 this.processImage(img);
             }
@@ -126,23 +132,40 @@ export class ImageStateManager {
      * Coordinator method: Gets state from markdown and calls delegates to apply it.
      */
     public processImage(img: HTMLImageElement) {
-        if (this.isProcessing) return;
+        if (this.processingImages.has(img)) return;
 
         // 1. Check for conflicts
         if (img.hasClass('is-resizing')) return;
 
         try {
-            this.isProcessing = true;
+            this.processingImages.add(img);
 
             // 2. Get State
             const state = this.getImageState(img);
             if (!state) return;
 
+            // 2.5 Clean alt text immediately for all images
+            if (state.caption) {
+                const currentAlt = img.getAttribute('alt') || '';
+                if (currentAlt !== state.caption && currentAlt.includes('|')) {
+                    img.setAttribute('alt', state.caption);
+                }
+            }
+
             // 3. Delegate: Alignment
-            const alignPosition = state.align === 'none' ? this.plugin.settings.alignment.default : state.align;
+            // Extract base position and wrap from combined align value (e.g., 'left-wrap' -> 'left' + wrap=true)
+            let alignPosition = state.align === 'none' ? this.plugin.settings.alignment.default : state.align;
+            let wrap = state.wrap;
+
+            // Handle combined values like 'left-wrap', 'right-wrap'
+            if (alignPosition.includes('-wrap')) {
+                alignPosition = alignPosition.replace('-wrap', '') as typeof alignPosition;
+                wrap = true;
+            }
+
             const positionData: any = {
                 position: alignPosition,
-                wrap: state.wrap,
+                wrap: wrap,
                 width: state.width?.toString(),
                 height: state.height?.toString()
             };
@@ -160,7 +183,7 @@ export class ImageStateManager {
             // Short timeout to allow DOM updates to settle before re-enabling observer
             // This prevents immediate re-trigger by the very changes we just made
             setTimeout(() => {
-                this.isProcessing = false;
+                this.processingImages.delete(img);
             }, 0);
         }
     }
@@ -188,13 +211,29 @@ export class ImageStateManager {
         // 3. Map to State
         const state = this.mapPipeDataToState(parsed as any);
 
+        // 3.5 Immediately clean the alt attribute to prevent raw pipe text from showing
+        if (state.caption && state.caption !== altText) {
+            img.setAttribute('alt', state.caption);
+        } else if (!state.caption && altText.includes('|')) {
+            // If no caption but altText contains pipes, clear it (it's all attributes)
+            img.setAttribute('alt', '');
+        }
+
         // 4. Delegate: Alignment & Layout Fix
         // For Reading Mode, we MUST ensure the image has correct layout (inline-block) 
         // to allow side-by-side positioning when aligned.
-        const alignPosition = state.align === 'none' ? this.plugin.settings.alignment.default : state.align;
+        let alignPosition = state.align === 'none' ? this.plugin.settings.alignment.default : state.align;
+        let wrap = state.wrap;
+
+        // Handle combined values like 'left-wrap', 'right-wrap'
+        if (alignPosition.includes('-wrap')) {
+            alignPosition = alignPosition.replace('-wrap', '') as typeof alignPosition;
+            wrap = true;
+        }
+
         const positionData = {
             position: alignPosition,
-            wrap: state.wrap,
+            wrap: wrap,
             width: state.width?.toString(),
             height: state.height?.toString()
         };
@@ -311,13 +350,24 @@ export class ImageStateManager {
         }
 
         // Rebuild and Write
+        // Rebuild and Write
         const newLinkText = pipeSyntaxParser.buildPipeSyntax(parsed);
-        const lineNumber = this.refinedImageUtils.findLinkLineNumber(editor, linkText);
 
-        if (lineNumber !== -1) {
-            const line = editor.getLine(lineNumber);
-            const newLine = line.replace(linkText, newLinkText);
-            editor.setLine(lineNumber, newLine);
+        // Use findLinkRange for surgical replacement to avoid "Eating Next Line" issues
+        // and ensure we only touch the exact characters of the link.
+        const range = this.refinedImageUtils.findLinkRange(editor, linkText);
+
+        if (range) {
+            // Check if content actually changed to avoid unnecessary writes
+            if (linkText !== newLinkText) {
+                this.app.workspace.onLayoutReady(() => {
+                    editor.replaceRange(
+                        newLinkText,
+                        { line: range.line, ch: range.start },
+                        { line: range.line, ch: range.end }
+                    );
+                });
+            }
 
             // Mark as processed to help observer ignore strict echoes if needed
             img.setAttribute('data-state-processed', 'true');
