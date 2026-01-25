@@ -52,7 +52,7 @@ export class ProcessingHandler {
             const matchingFiles = this.app.vault.getFiles().filter((file) => file.name === filename);
             if (matchingFiles.length === 0) {
                 console.error("No matching files found for:", filename);
-                new Notice(t("MSG_NO_MATCHING_FILES").replace("{0}", filename));
+                new Notice(t("MSG_NO_MATCHING_FILES", [filename]));
                 return;
             }
 
@@ -114,7 +114,7 @@ export class ProcessingHandler {
 
         if (matchingFiles.length === 0) {
             console.error('No matching files found for:', filename);
-            new Notice(t("MSG_NO_MATCHING_FILES").replace("{0}", filename));
+            new Notice(t("MSG_NO_MATCHING_FILES", [filename]));
             return;
         }
 
@@ -173,7 +173,7 @@ export class ProcessingHandler {
 
             if (matchingFiles.length === 0) {
                 console.error('No matching files found for:', filename);
-                new Notice(t("MSG_NO_MATCHING_FILES").replace("{0}", filename));
+                new Notice(t("MSG_NO_MATCHING_FILES", [filename]));
                 return;
             }
 

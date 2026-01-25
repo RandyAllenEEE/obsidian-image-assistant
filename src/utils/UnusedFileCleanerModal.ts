@@ -125,7 +125,7 @@ export class UnusedFileCleanerModal extends Modal {
         if (this.statusEl) {
             this.statusEl.empty();
             this.statusEl.createEl("p", {
-                text: t("CLEANER_STATUS_SCANNING").replace("{0}", folderPath),
+                text: t("CLEANER_STATUS_SCANNING", [folderPath]),
                 cls: "status-info"
             });
         }
@@ -144,12 +144,12 @@ export class UnusedFileCleanerModal extends Modal {
             this.showResults();
         } catch (error) {
             console.error("Scan error:", error);
-            new Notice(t("CLEANER_SCAN_ERROR").replace("{0}", error.message));
+            new Notice(t("CLEANER_SCAN_ERROR", [error.message]));
 
             if (this.statusEl) {
                 this.statusEl.empty();
                 this.statusEl.createEl("p", {
-                    text: t("CLEANER_SCAN_ERROR").replace("{0}", error.message),
+                    text: t("CLEANER_SCAN_ERROR", [error.message]),
                     cls: "status-error"
                 });
             }
@@ -168,8 +168,8 @@ export class UnusedFileCleanerModal extends Modal {
         this.progressEl.empty();
 
         const progressInfo = this.progressEl.createDiv({ cls: "progress-info" });
-        progressInfo.createEl("p", { text: t("CLEANER_PROGRESS_CHECKING").replace("{0}", currentFile) });
-        progressInfo.createEl("p", { text: t("CLEANER_PROGRESS_RATIO").replace("{0}", current.toString()).replace("{1}", total.toString()) });
+        progressInfo.createEl("p", { text: t("CLEANER_PROGRESS_CHECKING", [currentFile]) });
+        progressInfo.createEl("p", { text: t("CLEANER_PROGRESS_RATIO", [current.toString(), total.toString()]) });
 
         // 进度条
         const progressBarContainer = this.progressEl.createDiv({ cls: "progress-bar-container" });
@@ -192,13 +192,13 @@ export class UnusedFileCleanerModal extends Modal {
         // 汇总信息
         const summaryEl = this.resultEl.createDiv({ cls: "result-summary" });
         summaryEl.createEl("h3", { text: t("CLEANER_RESULT_TITLE") });
-        summaryEl.createEl("p", { text: t("CLEANER_RESULT_SCANNED").replace("{0}", scannedFiles.toString()) });
+        summaryEl.createEl("p", { text: t("CLEANER_RESULT_SCANNED", [scannedFiles.toString()]) });
         summaryEl.createEl("p", {
-            text: t("CLEANER_RESULT_UNREF").replace("{0}", unreferencedFiles.length.toString()),
+            text: t("CLEANER_RESULT_UNREF", [unreferencedFiles.length.toString()]),
             cls: "unreferenced-count"
         });
         summaryEl.createEl("p", {
-            text: t("CLEANER_RESULT_REF").replace("{0}", referencedFiles.length.toString()),
+            text: t("CLEANER_RESULT_REF", [referencedFiles.length.toString()]),
             cls: "referenced-count"
         });
 
@@ -308,7 +308,7 @@ export class UnusedFileCleanerModal extends Modal {
                 const totalRefCount = fileInfo.references.length;
 
                 refsEl.createEl("p", {
-                    text: t("CLEANER_REF_INFO").replace("{0}", noteCount.toString()).replace("{1}", totalRefCount.toString()),
+                    text: t("CLEANER_REF_INFO", [noteCount.toString(), totalRefCount.toString()]),
                     cls: "references-title"
                 });
 
@@ -376,7 +376,7 @@ export class UnusedFileCleanerModal extends Modal {
 
         const warningEl = this.actionButtonsEl.createDiv({ cls: "delete-warning" });
         warningEl.createEl("p", {
-            text: t("CLEANER_WARNING_DELETE").replace("{0}", unreferencedCount.toString()),
+            text: t("CLEANER_WARNING_DELETE", [unreferencedCount.toString()]),
             cls: "warning-text"
         });
 
@@ -387,10 +387,10 @@ export class UnusedFileCleanerModal extends Modal {
         } else if (trashMode === "obsidian") {
             modeText = t("CLEANER_DELETE_MODE_OBSIDIAN");
         } else if (trashMode === "custom") {
-            modeText = t("CLEANER_DELETE_MODE_CUSTOM").replace("{0}", this.plugin.settings.cleanerSettings.customTrashPath);
+            modeText = t("CLEANER_DELETE_MODE_CUSTOM", [this.plugin.settings.cleanerSettings.customTrashPath]);
         }
 
-        warningEl.createEl("p", { text: t("CLEANER_DELETE_MODE_LABEL").replace("{0}", modeText) });
+        warningEl.createEl("p", { text: t("CLEANER_DELETE_MODE_LABEL", [modeText]) });
 
         const buttonContainer = this.actionButtonsEl.createDiv({ cls: "button-container" });
 
@@ -434,13 +434,13 @@ export class UnusedFileCleanerModal extends Modal {
                 customTrashPath
             );
 
-            new Notice(t("CLEANER_MSG_DELETE_SUCCESS").replace("{0}", successCount.toString()));
+            new Notice(t("CLEANER_MSG_DELETE_SUCCESS", [successCount.toString()]));
 
             // 更新状态
             if (this.statusEl) {
                 this.statusEl.empty();
                 this.statusEl.createEl("p", {
-                    text: t("CLEANER_STATUS_DELETE_SUCCESS").replace("{0}", successCount.toString()),
+                    text: t("CLEANER_STATUS_DELETE_SUCCESS", [successCount.toString()]),
                     cls: "status-success"
                 });
             }
@@ -458,12 +458,12 @@ export class UnusedFileCleanerModal extends Modal {
             }
         } catch (error) {
             console.error("Delete error:", error);
-            new Notice(t("CLEANER_DELETE_ERROR").replace("{0}", error.message));
+            new Notice(t("CLEANER_DELETE_ERROR", [error.message]));
 
             if (this.statusEl) {
                 this.statusEl.empty();
                 this.statusEl.createEl("p", {
-                    text: t("CLEANER_STATUS_DELETE_ERROR").replace("{0}", error.message),
+                    text: t("CLEANER_STATUS_DELETE_ERROR", [error.message]),
                     cls: "status-error"
                 });
             }

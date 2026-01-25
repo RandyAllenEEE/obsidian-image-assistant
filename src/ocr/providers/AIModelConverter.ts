@@ -1,3 +1,4 @@
+import { App } from "obsidian";
 import { OCRProvider, OCRSettings } from "../OCRSettings";
 
 /**
@@ -7,8 +8,10 @@ export class AIModelConverter implements OCRProvider {
     private isMultiline: boolean;
     private settings: OCRSettings;
     private promptType: "latex" | "markdown";
+    private app: App;
 
-    constructor(isMultiline: boolean, settings: OCRSettings, promptType: "latex" | "markdown") {
+    constructor(app: App, isMultiline: boolean, settings: OCRSettings, promptType: "latex" | "markdown") {
+        this.app = app;
         this.isMultiline = isMultiline;
         this.settings = settings;
         this.promptType = promptType;
@@ -25,6 +28,10 @@ export class AIModelConverter implements OCRProvider {
         } else {
             prompt = this.settings.aiModel.prompts.markdown;
         }
+
+        // Retrieve API Key using linked ID in settings
+        const secretStorage = (this.app as any).secretStorage;
+        const apiKey = secretStorage && this.settings.aiModel.apiKeySecretId ? secretStorage.getSecret(this.settings.aiModel.apiKeySecretId) : null;
 
         const payload = {
             model: this.settings.aiModel.model,
@@ -52,7 +59,7 @@ export class AIModelConverter implements OCRProvider {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "Authorization": `Bearer ${this.settings.aiModel.apiKey}`
+                "Authorization": `Bearer ${apiKey}`
             },
             body: JSON.stringify(payload)
         });

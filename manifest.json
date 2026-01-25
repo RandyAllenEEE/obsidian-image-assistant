@@ -1,8 +1,8 @@
 {
   "id": "image-assistant",
   "name": "Image Assistant",
-  "version": "3.1.1",
-  "minAppVersion": "0.15.0",
+  "version": "4.0.0",
+  "minAppVersion": "1.11.4",
   "description": "This help you convert, compress images or upload images automatically when pasted from clipboard.",
   "author": "RandyAllen",
   "authorUrl": "https://github.com/RandyAllenEEE/obsidian-image-assistant",

@@ -5,11 +5,13 @@ export interface OCRProvider {
 
 // OCR 设置接口
 export interface OCRSettings {
-    simpleTexToken: string;
-    simpleTexAppId: string;  // 新增：SimpleTex App ID
-    simpleTexAppSecret: string;  // 新增：SimpleTex App Secret
     latexProvider: "SimpleTex" | "Pix2Tex" | "Texify" | "LLM";
     markdownProvider: "Texify" | "LLM";
+    simpleTex: {
+        appIdSecretId: string;
+        appSecretSecretId: string;
+        tokenSecretId: string;
+    };
     texify: {
         url: string;
         username: string;
@@ -23,8 +25,8 @@ export interface OCRSettings {
     aiModel: {
         endpoint: string;
         model: string;
-        apiKey: string;
         maxTokens: number;
+        apiKeySecretId: string;
         prompts: {
             latex: string;
             markdown: string;
@@ -34,11 +36,13 @@ export interface OCRSettings {
 
 // 默认 OCR 设置
 export const DEFAULT_OCR_SETTINGS: OCRSettings = {
-    simpleTexToken: "",
-    simpleTexAppId: "",  // 新增：SimpleTex App ID默认值
-    simpleTexAppSecret: "",  // 新增：SimpleTex App Secret默认值
     latexProvider: "SimpleTex",
     markdownProvider: "Texify",
+    simpleTex: {
+        appIdSecretId: "",
+        appSecretSecretId: "",
+        tokenSecretId: ""
+    },
     texify: {
         url: "http://127.0.0.1:5000/predict",
         username: "",
@@ -52,8 +56,8 @@ export const DEFAULT_OCR_SETTINGS: OCRSettings = {
     aiModel: {
         endpoint: "",
         model: "",
-        apiKey: "",
         maxTokens: 300,
+        apiKeySecretId: "",
         prompts: {
             latex: "Convert the math equation in the image to LaTeX format. Output only the LaTeX code without wrapping $ or $$.",
             markdown: "Convert the content in the image to Markdown format."

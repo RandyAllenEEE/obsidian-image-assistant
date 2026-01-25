@@ -121,7 +121,7 @@ export class DeleteHandler {
 
                 // Add introductory text
                 const introText = document.createElement('p');
-                introText.textContent = t("MSG_FOUND_IMAGE_REFS").replace("{0}", uniqueMatches.length.toString()); // Updated message
+                introText.textContent = t("MSG_FOUND_IMAGE_REFS", [uniqueMatches.length.toString()]); // Updated message
                 messageContainer.appendChild(introText);
 
                 // Add details to the message container
@@ -208,7 +208,7 @@ export class DeleteHandler {
                     if (uploader === 'PicList') {
                         new Notice(t("MSG_CLOUD_DELETE_FAIL_HISTORY"));
                     } else {
-                        new Notice(t("MSG_CLOUD_DELETE_UNSUPPORTED").replace("{0}", uploader));
+                        new Notice(t("MSG_CLOUD_DELETE_UNSUPPORTED", [uploader]));
                     }
                 }
             };
@@ -223,7 +223,7 @@ export class DeleteHandler {
                     await this.linkRemover.removeImageLink(editor, match.lineNumber, match.line, match.fullMatch, false);
                 }
 
-                new Notice(t("MSG_REMOVED_CLOUD_LINKS").replace("{0}", uniqueMatches.length.toString()));
+                new Notice(t("MSG_REMOVED_CLOUD_LINKS", [uniqueMatches.length.toString()]));
 
                 // Try to delete from cloud storage (PicList only)
                 const cloudDeleteSuccess = await this.cloudDeleter.deleteImage({ url: cloudUrl });
@@ -238,7 +238,7 @@ export class DeleteHandler {
                     if (uploader === 'PicList') {
                         new Notice(t("MSG_CLOUD_DELETE_FAIL"));
                     } else {
-                        new Notice(t("MSG_CLOUD_MANUAL_DELETE").replace("{0}", uploader));
+                        new Notice(t("MSG_CLOUD_MANUAL_DELETE", [uploader]));
                     }
                 }
             };
@@ -253,7 +253,7 @@ export class DeleteHandler {
                 detailsFragment.appendChild(messageContainer);
 
                 const introText = document.createElement('p');
-                introText.textContent = t("MSG_FOUND_CLOUD_REFS").replace("{0}", uniqueMatches.length.toString());
+                introText.textContent = t("MSG_FOUND_CLOUD_REFS", [uniqueMatches.length.toString()]);
                 messageContainer.appendChild(introText);
 
                 // 列出所有引用位置
@@ -294,7 +294,7 @@ export class DeleteHandler {
                 });
 
                 // "Delete All" 按钮
-                const deleteAllBtn = buttonContainer.createEl('button', { text: t("BUTTON_DELETE_ALL").replace("{0}", uniqueMatches.length.toString()), cls: 'mod-warning' });
+                const deleteAllBtn = buttonContainer.createEl('button', { text: t("BUTTON_DELETE_ALL", [uniqueMatches.length.toString()]), cls: 'mod-warning' });
                 deleteAllBtn.addEventListener('click', async () => {
                     modal.close();
                     await deleteAllImages();

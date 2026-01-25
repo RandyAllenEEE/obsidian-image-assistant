@@ -4,6 +4,7 @@ export default {
     "LOADING_OCR_MARKDOWN": "Loading markdown...", // New key
     "LOADING_UPLOAD": "Uploading", // New key
     "LOADING_PROCESS": "Processing", // New key
+    "LOADING": "Loading...",
 
     // Settings
     "SETTING_PASTE_MODE_HEADER": "Image Processing",
@@ -183,24 +184,20 @@ export default {
 
     // Other Settings
     "SETTING_OTHER_SECTION": "Other Settings",
-    "SETTING_CONTEXT_MENU": "Context Menu",
-    "SETTING_CONTEXT_MENU_DESC": "Enable context menu on right click",
+    "SETTING_ENABLE_CONTEXT_MENU_NAME": "Context Menu",
+    "SETTING_ENABLE_CONTEXT_MENU_DESC": "Enable context menu on right click",
     "SETTING_CONTEXT_MENU_TOOLTIP": "Need to restart Obsidian to take effect",
     "SETTING_PASTE_CURSOR_LOC": "Paste/Drop Cursor Location",
     "SETTING_PASTE_CURSOR_LOC_DESC": "Where to place cursor after inserting image",
     "SETTING_NEVER_PROCESS": "Ignored Filenames",
     "SETTING_NEVER_PROCESS_DESC": "Filenames or patterns to ignore (comma separated)",
-    "SETTING_SPACE_SAVED_NOTIFY": "Show Space Saved Notification",
-    "SETTING_SPACE_SAVED_NOTIFY_DESC": "Show how much space was saved after processing",
+    "SETTING_SHOW_NOTIFICATION_NAME": "Show Space Saved Notification",
+    "SETTING_SHOW_NOTIFICATION_DESC": "Show how much space was saved after processing",
     "SETTING_MODAL_BEHAVIOR_NAME": "Modal Behavior",
     "SETTING_MODAL_BEHAVIOR_DESC": "When to show options when pasting/dropping",
     "SETTING_MODAL_BEHAVIOR_ALWAYS": "Always",
     "SETTING_MODAL_BEHAVIOR_NEVER": "Never",
     "SETTING_MODAL_BEHAVIOR_ASK": "Ask every time",
-    "SETTING_ENABLE_CONTEXT_MENU_NAME": "Enable context menu",
-    "SETTING_ENABLE_CONTEXT_MENU_DESC": "Add 'Image Assistant' options to the right-click menu",
-    "SETTING_SHOW_NOTIFICATION_NAME": "Show space saved notification",
-    "SETTING_SHOW_NOTIFICATION_DESC": "Show a notification with space saved statistics after compression",
     "SETTING_REVERT_IF_LARGER_NAME": "Revert to original if larger",
     "SETTING_REVERT_IF_LARGER_DESC": "If the processed image is larger than the original, use the original image instead.",
 
@@ -239,6 +236,7 @@ export default {
     "SETTING_OCR_PROMPTS_LATEX_DESC": "Prompt for LaTeX conversion",
     "SETTING_OCR_PROMPTS_MARKDOWN": "Markdown Prompt",
     "SETTING_OCR_PROMPTS_MARKDOWN_DESC": "Prompt for Markdown conversion",
+    "SETTING_OCR_LINKED_ID": "Linked Secret ID",
 
     // Modals
     "MODAL_UPLOAD_SUCCESS": "Uploaded successfully",
@@ -713,7 +711,7 @@ export default {
     "BATCH_NO_ITEMS": "No items found.",
     "BATCH_ITEMS_FOUND": "{0} Items Found",
     "BATCH_SELECT_ALL_NONE": "Select All/None",
-    "BATCH_START_PROCESSING": "Start Processing",
+    "BATCH_START_PROCESS": "Start Process",
     "BATCH_PROCESSING_TITLE": "Processing...",
     "BATCH_LOG_UPLOAD_START": "Starting upload for {0} images...",
     "BATCH_LOG_DOWNLOAD_START": "Starting download for {0} images...",
@@ -902,6 +900,8 @@ export default {
     "TOOLTIP_REPLACE_CURRENT_DOWNLOAD": "Download and replace links only in the current note",
     "TOOLTIP_REPLACE_ALL_DOWNLOAD": "Download and replace links across all notes in the vault",
     "TOOLTIP_REPLACE_CURRENT_MULTI": "Replace all occurrences in the current note",
+    "LABEL_LOCAL": "Local",
+    "LABEL_CLOUD": "Cloud",
     "SETTING_YES": "Yes",
     "SETTING_NO": "No",
 };

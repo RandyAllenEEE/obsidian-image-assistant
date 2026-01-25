@@ -82,15 +82,15 @@ export class UnifiedBatchProcessModal extends Modal {
 
     private renderHeader(container: HTMLElement) {
         const header = container.createDiv("batch-modal-header");
-        header.createEl("h1", { text: t("BATCH_PROCESS_TITLE" as any) });
+        header.createEl("h1", { text: t("BATCH_MODAL_TITLE") });
 
         let subtitle = "";
         if (this.batchScope === "note" && this.target instanceof TFile) {
-            subtitle = t("BATCH_SCOPE_NOTE" as any).replace("{0}", this.target.basename);
+            subtitle = t("BATCH_SCOPE_NOTE", [this.target.basename]);
         } else if (this.batchScope === "folder" && this.target instanceof TFolder) {
-            subtitle = t("BATCH_SCOPE_FOLDER" as any).replace("{0}", this.target.name);
+            subtitle = t("BATCH_SCOPE_FOLDER", [this.target.name]);
         } else if (this.batchScope === "vault") {
-            subtitle = t("BATCH_SCOPE_VAULT" as any);
+            subtitle = t("BATCH_SCOPE_VAULT");
         }
         header.createEl("div", { text: subtitle, cls: "batch-scope-indicator" });
     }
@@ -98,9 +98,9 @@ export class UnifiedBatchProcessModal extends Modal {
     private renderModeSelector(container: HTMLElement) {
         const modeContainer = container.createDiv("batch-mode-selector");
         const modes: { id: BatchMode, name: string }[] = [
-            { id: "local_process", name: t("BATCH_MODE_LOCAL" as any) },
-            { id: "upload", name: t("BATCH_MODE_UPLOAD" as any) },
-            { id: "download", name: t("BATCH_MODE_DOWNLOAD" as any) }
+            { id: "local_process", name: t("BATCH_MODE_LOCAL") },
+            { id: "upload", name: t("BATCH_MODE_UPLOAD") },
+            { id: "download", name: t("BATCH_MODE_DOWNLOAD") }
         ];
 
         /*
@@ -144,7 +144,7 @@ export class UnifiedBatchProcessModal extends Modal {
 
     private async loadTasks() {
         this.taskListContainer.empty();
-        this.taskListContainer.createDiv({ text: t("LOADING" as any), cls: "loading-spinner" }); // Simple loading text
+        this.taskListContainer.createDiv({ text: t("LOADING"), cls: "loading-spinner" }); // Simple loading text
 
         this.tasks = await this.currentMode.loadTasks();
 
@@ -159,7 +159,7 @@ export class UnifiedBatchProcessModal extends Modal {
             .onClick(() => this.close());
 
         new ButtonComponent(footer)
-            .setButtonText(t("BATCH_START_PROCESS" as any))
+            .setButtonText(t("BATCH_START_PROCESS"))
             .setCta()
             .onClick(() => this.executeBatch());
     }
@@ -175,7 +175,7 @@ export class UnifiedBatchProcessModal extends Modal {
         this.taskListContainer.hide();
 
         const progressContainer = this.contentContainer.createDiv("batch-progress-container");
-        progressContainer.createEl("h3", { text: t("BATCH_PROCESSING_TITLE" as any) });
+        progressContainer.createEl("h3", { text: t("BATCH_PROCESSING_TITLE") });
         const progressBar = progressContainer.createDiv("batch-progress-bar");
         const progressFill = progressBar.createDiv("batch-progress-fill");
         progressFill.style.width = "0%";

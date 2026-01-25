@@ -194,7 +194,7 @@ export class NetworkImageDownloader {
         });
 
         if (filteredImages.length < networkImages.length) {
-            new Notice(t("MSG_FILTERED_BLACKLISTED").replace("{0}", (networkImages.length - filteredImages.length).toString()));
+            new Notice(t("MSG_FILTERED_BLACKLISTED", [(networkImages.length - filteredImages.length).toString()]));
         }
 
         if (filteredImages.length === 0) {
@@ -365,7 +365,7 @@ export class NetworkImageDownloader {
                                     console.error('[Folder Download] Failed to replace links in:', noteFile.path, error);
                                     notificationManager.collectError(
                                         noteFile.name,
-                                        t("MSG_REPLACE_FAILED").replace("{0}", error.message)
+                                        t("MSG_REPLACE_FAILED", [error.message])
                                     );
                                 }
                             }
@@ -394,17 +394,9 @@ export class NetworkImageDownloader {
             // Show completion notice
             const totalSelected = selectedTasks.length;
             if (mode === "download-and-replace") {
-                new Notice(
-                    t("MSG_DOWNLOAD_REPLACE_COMPLETE")
-                        .replace("{0}", successCount.toString())
-                        .replace("{1}", totalSelected.toString())
-                );
+                new Notice(t("MSG_DOWNLOAD_REPLACE_COMPLETE", [successCount.toString(), totalSelected.toString()]));
             } else if (mode === "download-only") {
-                new Notice(
-                    t("MSG_DOWNLOAD_COMPLETE")
-                        .replace("{0}", successCount.toString())
-                        .replace("{1}", totalSelected.toString())
-                );
+                new Notice(t("MSG_DOWNLOAD_COMPLETE", [successCount.toString(), totalSelected.toString()]));
             }
 
             // Show batch summary if there were errors
@@ -424,7 +416,7 @@ export class NetworkImageDownloader {
 
         } catch (error) {
             console.error('[Folder Download] Download failed:', error);
-            new Notice(t("MSG_BATCH_DOWNLOAD_FAILED").replace("{0}", error.message));
+            new Notice(t("MSG_BATCH_DOWNLOAD_FAILED", [error.message]));
         } finally {
             // this.plugin.clearMemory();
         }

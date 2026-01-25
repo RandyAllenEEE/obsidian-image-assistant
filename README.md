@@ -13,6 +13,12 @@
 
 ### 1. 自动化粘贴处理 (Auto Paste Handling)
 当您在笔记中粘贴或拖入图片时，插件会根据设置自动执行处理。
+> **🚀 v4.0.0 Major Update**:
+> 1. **Modular Architecture**: Complete refactoring of core handlers and UI modals for better performance and extensibility.
+> 2. **i18n Refinement**: Standardized internationalization with parametric translation support across the entire plugin.
+> 3. **Secret Storage**: Migrated sensitive API keys to Obsidian's native Secret Storage (requires Obsidian v1.11.4+).
+> 4. **Stability**: Improved link reference management and concurrent processing reliability.
+>
 > **🔥 v3.1.1 Patch Update**:
 > 1. **Fixed**: Layout leakage issues where image alignment affected surrounding text.
 > 2. **Refined**: Robust caption extraction (truncates at first `|` pipe, handles empty captions with space fallback).

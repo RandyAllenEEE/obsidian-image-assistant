@@ -11,8 +11,10 @@ import {
     requestUrl,
     Modal,
     FuzzySuggestModal,
-    normalizePath
+    normalizePath,
+    App // Ensure App is imported
 } from "obsidian";
+
 import { SupportedImageFormats } from "./local/SupportedImageFormats";
 import { FolderAndFilenameManagement } from "./local/FolderAndFilenameManagement";
 import { ImageProcessor } from "./local/ImageProcessor";
@@ -181,8 +183,13 @@ export default class ImageConverterPlugin extends Plugin {
         }
     }
 
+
+
     async onload() {
         await this.loadSettings();
+
+
+
         this.addSettingTab(new ImageConverterSettingTab(this.app, this));
 
         // Initialize concurrent queue with settings
@@ -763,12 +770,12 @@ export default class ImageConverterPlugin extends Plugin {
             editorInteract = new EditorContentInserter(view);
             editorInteract.insertLoadingText(t("LOADING_OCR_LATEX") || "Loading latex...");
 
-            const provider = getLatexProvider(isMultiline, this.settings.ocrSettings);
+            const provider = getLatexProvider(this.app, isMultiline, this.settings.ocrSettings);
             const parsedLatex = await provider.sendRequest(image);
             editorInteract.insertResponseToEditor(parsedLatex);
         } catch (error) {
             console.error('[OCR] LaTeX conversion error:', error);
-            new Notice(t("MSG_OCR_FAILED").replace("{0}", error.message));
+            new Notice(t("MSG_OCR_FAILED", [error.message]));
             // Remove loading text on error
             if (editorInteract) editorInteract.removeLoadingText();
         } finally {
@@ -795,12 +802,12 @@ export default class ImageConverterPlugin extends Plugin {
             editorInteract = new EditorContentInserter(view);
             editorInteract.insertLoadingText(t("LOADING_OCR_MARKDOWN") || "Loading markdown...");
 
-            const provider = getMarkdownProvider(this.settings.ocrSettings);
+            const provider = getMarkdownProvider(this.app, this.settings.ocrSettings);
             const result = await provider.sendRequest(image);
             editorInteract.insertResponseToEditor(result);
         } catch (error) {
             console.error('[OCR] Markdown conversion error:', error);
-            new Notice(t("MSG_OCR_FAILED").replace("{0}", error.message));
+            new Notice(t("MSG_OCR_FAILED", [error.message]));
             // Remove loading text on error
             if (editorInteract) editorInteract.removeLoadingText();
         } finally {

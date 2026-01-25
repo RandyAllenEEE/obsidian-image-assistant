@@ -44,7 +44,7 @@ export class NetworkImageDownloadModal extends Modal {
         // 统计信息
         const statsDiv = contentEl.createDiv("download-stats");
         statsDiv.createEl("p", {
-            text: t("NET_DL_STATS").replace("{0}", this.tasks.length.toString()),
+            text: t("NET_DL_STATS", [this.tasks.length.toString()]),
             cls: "download-stats-text"
         });
 

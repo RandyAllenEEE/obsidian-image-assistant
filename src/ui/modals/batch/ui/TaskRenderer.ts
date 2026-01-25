@@ -19,7 +19,7 @@ export class TaskRenderer {
         let masterToggle: any = null;
 
         new Setting(listHeader)
-            .setName(t("BATCH_ITEMS_FOUND").replace("{0}", tasks.length.toString()))
+            .setName(t("BATCH_ITEMS_FOUND", [tasks.length.toString()]))
             .addToggle(toggle => {
                 masterToggle = toggle;
                 toggle

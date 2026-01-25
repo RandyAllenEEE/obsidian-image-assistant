@@ -182,7 +182,7 @@ export class SingleReferenceUploadDialog extends Modal {
             cls: "upload-cloud-url-text"
         });
         content.createEl("p", {
-            text: t("MODAL_REF_LOCATION").replace("{0}", basename(this.referenceInfo.file)).replace("{1}", this.referenceInfo.line.toString()),
+            text: t("MODAL_REF_LOCATION", [basename(this.referenceInfo.file), this.referenceInfo.line.toString()]),
             cls: "upload-reference-info"
         });
 
@@ -283,16 +283,16 @@ export class MultiReferenceUploadDialog extends Modal {
                 cls: "upload-stats-title"
             });
             statsDiv.createEl("p", {
-                text: t("MSG_REF_COUNT_CURRENT").replace("{0}", basename(this.currentNotePath)).replace("{1}", currentCount.toString()),
+                text: t("MSG_REF_COUNT_CURRENT", [basename(this.currentNotePath), currentCount.toString()]),
                 cls: "upload-current-note-stat"
             });
             statsDiv.createEl("p", {
-                text: t("MSG_REF_COUNT_OTHER").replace("{0}", otherCount.toString()).replace("{1}", otherFilesCount.toString()),
+                text: t("MSG_REF_COUNT_OTHER", [otherCount.toString(), otherFilesCount.toString()]),
                 cls: "upload-other-notes-stat"
             });
         } else {
             statsDiv.createEl("p", {
-                text: t("MSG_STATS_TOTAL").replace("{0}", this.matches.totalCount.toString()).replace("{1}", this.matches.files.length.toString()),
+                text: t("MSG_STATS_TOTAL", [this.matches.totalCount.toString(), this.matches.files.length.toString()]),
                 cls: "upload-stats-title"
             });
         }
@@ -308,7 +308,7 @@ export class MultiReferenceUploadDialog extends Modal {
         this.matches.files.slice(0, 10).forEach(file => {
             const itemEl = listEl.createEl("li");
             const isCurrent = file.path === this.currentNotePath;
-            itemEl.setText(`${isCurrent ? '✓ ' : '  '}${t("MSG_FILE_REFS").replace("{0}", basename(file.path)).replace("{1}", file.matches.length.toString())}`);
+            itemEl.setText(`${isCurrent ? '✓ ' : '  '}${t("MSG_FILE_REFS", [basename(file.path), file.matches.length.toString()])}`);
             if (isCurrent) {
                 itemEl.addClass("upload-current-note-item");
             }
@@ -316,7 +316,7 @@ export class MultiReferenceUploadDialog extends Modal {
 
         if (this.matches.files.length > 10) {
             listEl.createEl("li", {
-                text: t("MSG_MORE_FILES").replace("{0}", (this.matches.files.length - 10).toString()),
+                text: t("MSG_MORE_FILES", [(this.matches.files.length - 10).toString()]),
                 cls: "upload-more-files"
             });
         }
@@ -330,7 +330,7 @@ export class MultiReferenceUploadDialog extends Modal {
             const currentCount = currentMatches?.matches.length || 0;
 
             buttonSetting.addButton(btn => btn
-                .setButtonText(t("MODAL_REPLACE_CURRENT_EXT").replace("{0}", currentCount.toString()))
+                .setButtonText(t("MODAL_REPLACE_CURRENT_EXT", [currentCount.toString()]))
                 .setTooltip(t("TOOLTIP_REPLACE_CURRENT"))
                 .onClick(() => {
                     this.close();
@@ -341,7 +341,7 @@ export class MultiReferenceUploadDialog extends Modal {
 
         buttonSetting
             .addButton(btn => btn
-                .setButtonText(t("MODAL_REPLACE_ALL_EXT").replace("{0}", this.matches.totalCount.toString()))
+                .setButtonText(t("MODAL_REPLACE_ALL_EXT", [this.matches.totalCount.toString()]))
                 .setCta()
                 .setTooltip(t("TOOLTIP_REPLACE_ALL"))
                 .onClick(() => {
@@ -412,7 +412,7 @@ export class BatchUploadConfirmDialog extends Modal {
 
         const content = contentEl.createDiv();
         content.createEl("p", {
-            text: t("MODAL_UPLOAD_SUCCESS_COUNT").replace("{0}", this.totalImages.toString()),
+            text: t("MODAL_UPLOAD_SUCCESS_COUNT", [this.totalImages.toString()]),
             cls: "upload-success-text"
         });
 
@@ -420,7 +420,7 @@ export class BatchUploadConfirmDialog extends Modal {
             // 有多引用图片,显示警告
             const warningDiv = content.createDiv({ cls: "upload-warning-box" });
             warningDiv.createEl("p", {
-                text: t("MODAL_MULTI_REF_WARNING").replace("{0}", this.multiReferenceImages.length.toString()),
+                text: t("MODAL_MULTI_REF_WARNING", [this.multiReferenceImages.length.toString()]),
                 cls: "upload-warning-text"
             });
 
@@ -435,13 +435,13 @@ export class BatchUploadConfirmDialog extends Modal {
             this.multiReferenceImages.slice(0, 10).forEach(info => {
                 const itemEl = listEl.createEl("li");
                 itemEl.setText(
-                    t("MSG_BATCH_REF_INFO").replace("{0}", info.imageName).replace("{1}", info.currentNoteReferences.toString()).replace("{2}", info.otherNotesReferences.toString())
+                    t("MSG_BATCH_REF_INFO", [info.imageName, info.currentNoteReferences.toString(), info.otherNotesReferences.toString()])
                 );
             });
 
             if (this.multiReferenceImages.length > 10) {
                 listEl.createEl("li", {
-                    text: t("MSG_MORE_IMAGES").replace("{0}", (this.multiReferenceImages.length - 10).toString()),
+                    text: t("MSG_MORE_IMAGES", [(this.multiReferenceImages.length - 10).toString()]),
                     cls: "upload-more-files"
                 });
             }
@@ -557,7 +557,7 @@ export class BatchDownloadPreviewDialog extends Modal {
 
         // 统计信息
         content.createEl("p", {
-            text: t("MODAL_FOUND_IMAGES").replace("{0}", this.tasks.length.toString()),
+            text: t("MODAL_FOUND_IMAGES", [this.tasks.length.toString()]),
             cls: "download-stats-text"
         });
 
@@ -565,7 +565,7 @@ export class BatchDownloadPreviewDialog extends Modal {
         if (this.multiReferenceTasks.length > 0) {
             const warningBox = content.createDiv({ cls: "download-multi-reference-warning" });
             warningBox.createEl("p", {
-                text: t("MODAL_MULTI_REF_WARNING").replace("{0}", this.multiReferenceTasks.length.toString()),
+                text: t("MODAL_MULTI_REF_WARNING", [this.multiReferenceTasks.length.toString()]),
                 cls: "upload-warning-text"
             });
 
@@ -579,7 +579,7 @@ export class BatchDownloadPreviewDialog extends Modal {
 
             if (this.multiReferenceTasks.length > 5) {
                 detailsList.createEl("li", {
-                    text: t("MSG_MORE_IMAGES").replace("{0}", (this.multiReferenceTasks.length - 5).toString()),
+                    text: t("MSG_MORE_IMAGES", [(this.multiReferenceTasks.length - 5).toString()]),
                     cls: "upload-more-files"
                 });
             }
@@ -639,7 +639,7 @@ export class BatchDownloadPreviewDialog extends Modal {
 
         if (this.tasks.length > 10) {
             imageList.createEl("p", {
-                text: t("MSG_MORE_IMAGES").replace("{0}", (this.tasks.length - 10).toString()),
+                text: t("MSG_MORE_IMAGES", [(this.tasks.length - 10).toString()]),
                 cls: "upload-more-files"
             });
         }

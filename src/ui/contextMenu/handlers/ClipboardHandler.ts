@@ -72,7 +72,7 @@ export class ClipboardHandler extends Component {
                 new ConfirmDialog(
                     this.app,
                     t("DIALOG_CUT_TITLE"),
-                    t("DIALOG_CUT_MSG").replace("{0}", matches.length.toString()),
+                    t("DIALOG_CUT_MSG", [matches.length.toString()]),
                     t("BUTTON_CUT"),
                     async () => { // Callback for confirmation
                         for (const match of matches) {

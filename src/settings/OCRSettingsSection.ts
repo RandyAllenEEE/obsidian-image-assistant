@@ -1,3 +1,4 @@
+import * as obsidian from "obsidian";
 import { Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../main";
 import { t } from "../lang/helpers";
@@ -20,6 +21,9 @@ export function renderOCRSettingsSection(
     ocrSection.addClass("image-converter-settings-section");
 
     const settingsContentWrapper = ocrSection.createDiv("settings-section-content");
+
+    // @ts-ignore
+    const SecretComponent = (obsidian as any).SecretComponent;
 
     // --- Collapsible Header ---
     const headerSetting = new Setting(ocrSection)
@@ -105,45 +109,93 @@ export function renderOCRSettingsSection(
     // --- SimpleTex Config ---
     settingsContentWrapper.createEl("div", { text: t("SETTING_OCR_SIMPLETEX_SETTINGS"), cls: "setting-item-heading" });
 
-    // App ID
-    new Setting(settingsContentWrapper)
+    const appIdSecretId = plugin.settings.ocrSettings.simpleTex.appIdSecretId;
+    const appIdSetting = new Setting(settingsContentWrapper)
         .setName(t("SETTING_OCR_APP_ID"))
-        .setDesc(t("SETTING_OCR_APP_ID_DESC"))
-        .addText(text => text
-            .setPlaceholder("Your SimpleTex App ID")
-            .setValue(plugin.settings.ocrSettings.simpleTexAppId)
-            .onChange(async (v) => {
-                plugin.settings.ocrSettings.simpleTexAppId = v;
-                await plugin.saveSettings();
-            })
-        );
+        .setDesc(t("SETTING_OCR_APP_ID_DESC") + (appIdSecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + appIdSecretId + ")" : ""));
 
-    // App Secret
-    new Setting(settingsContentWrapper)
+    if ((plugin.app as any).secretStorage && SecretComponent) {
+        try {
+            const sc = new SecretComponent(plugin.app, appIdSetting.controlEl);
+            sc.setValue(plugin.settings.ocrSettings.simpleTex.appIdSecretId || "");
+            sc.onChange(async (id: string) => {
+                plugin.settings.ocrSettings.simpleTex.appIdSecretId = id;
+                await plugin.saveSettings();
+            });
+        } catch (e) {
+            console.error("Failed to initialize SecretComponent for App ID", e);
+        }
+    } else if ((plugin.app as any).secretStorage) {
+        // Fallback to password text if SecretComponent is missing (e.g. older Obsidian)
+        // But still use SecretStorage to avoid data.json leakage
+        appIdSetting.addText(text => {
+            text.setPlaceholder(t("SETTING_OCR_APP_ID"))
+                .setValue(plugin.settings.ocrSettings.simpleTex.appIdSecretId || "")
+                .onChange(async (v) => {
+                    plugin.settings.ocrSettings.simpleTex.appIdSecretId = v;
+                    await plugin.saveSettings();
+                });
+            text.inputEl.type = "password";
+        });
+    }
+
+    const appSecretSecretId = plugin.settings.ocrSettings.simpleTex.appSecretSecretId;
+    const appSecretSetting = new Setting(settingsContentWrapper)
         .setName(t("SETTING_OCR_APP_SECRET"))
-        .setDesc(t("SETTING_OCR_APP_SECRET_DESC"))
-        .addText(text => text
-            .setPlaceholder("Your SimpleTex App Secret")
-            .setValue(plugin.settings.ocrSettings.simpleTexAppSecret)
-            .onChange(async (v) => {
-                plugin.settings.ocrSettings.simpleTexAppSecret = v;
-                await plugin.saveSettings();
-            })
-        );
+        .setDesc(t("SETTING_OCR_APP_SECRET_DESC") + (appSecretSecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + appSecretSecretId + ")" : ""));
 
-    // Token (Optional/Legacy)
-    new Setting(settingsContentWrapper)
+    if ((plugin.app as any).secretStorage && SecretComponent) {
+        try {
+            const sc = new SecretComponent(plugin.app, appSecretSetting.controlEl);
+            sc.setValue(plugin.settings.ocrSettings.simpleTex.appSecretSecretId || "");
+            sc.onChange(async (id: string) => {
+                plugin.settings.ocrSettings.simpleTex.appSecretSecretId = id;
+                await plugin.saveSettings();
+            });
+        } catch (e) {
+            console.error("Failed to initialize SecretComponent for App Secret", e);
+        }
+    } else if ((plugin.app as any).secretStorage) {
+        appSecretSetting.addText(text => {
+            text.setPlaceholder(t("SETTING_OCR_APP_SECRET"))
+                .setValue(plugin.settings.ocrSettings.simpleTex.appSecretSecretId || "")
+                .onChange(async (v) => {
+                    plugin.settings.ocrSettings.simpleTex.appSecretSecretId = v;
+                    await plugin.saveSettings();
+                });
+            text.inputEl.type = "password";
+        });
+    }
+
+    const tokenSecretId = plugin.settings.ocrSettings.simpleTex.tokenSecretId;
+    const tokenSetting = new Setting(settingsContentWrapper)
         .setName(t("SETTING_OCR_TOKEN"))
-        .setDesc(t("SETTING_OCR_TOKEN_DESC"))
-        .addText(text => text
-            .setPlaceholder("Optional Token")
-            .setValue(plugin.settings.ocrSettings.simpleTexToken)
-            .onChange(async (v) => {
-                plugin.settings.ocrSettings.simpleTexToken = v;
-                await plugin.saveSettings();
-            })
-        );
+        .setDesc(t("SETTING_OCR_TOKEN_DESC") + (tokenSecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + tokenSecretId + ")" : ""));
 
+    if ((plugin.app as any).secretStorage && SecretComponent) {
+        try {
+            const sc = new SecretComponent(plugin.app, tokenSetting.controlEl);
+            sc.setValue(plugin.settings.ocrSettings.simpleTex.tokenSecretId || "");
+            sc.onChange(async (id: string) => {
+                plugin.settings.ocrSettings.simpleTex.tokenSecretId = id;
+                await plugin.saveSettings();
+            });
+        } catch (e) {
+            console.error("Failed to initialize SecretComponent for Token", e);
+        }
+    } else if ((plugin.app as any).secretStorage) {
+        tokenSetting.addText(text => {
+            text.setPlaceholder(t("SETTING_OCR_TOKEN"))
+                .setValue(plugin.settings.ocrSettings.simpleTex.tokenSecretId || "")
+                .onChange(async (v) => {
+                    plugin.settings.ocrSettings.simpleTex.tokenSecretId = v;
+                    await plugin.saveSettings();
+                });
+            text.inputEl.type = "password";
+        });
+    }
+
+    // ... (Pix2Tex and Texify omitted - no secrets there) ...
     // --- Pix2Tex Config ---
     settingsContentWrapper.createEl("div", { text: t("SETTING_OCR_PIX2TEX_SETTINGS"), cls: "setting-item-heading" });
     new Setting(settingsContentWrapper)
@@ -166,6 +218,7 @@ export function renderOCRSettingsSection(
             .onChange(async v => { plugin.settings.ocrSettings.texify.url = v; await plugin.saveSettings(); })
         );
 
+
     // --- LLM Config ---
     settingsContentWrapper.createEl("div", { text: t("SETTING_OCR_LLM_SETTINGS"), cls: "setting-item-heading" });
     new Setting(settingsContentWrapper)
@@ -186,16 +239,33 @@ export function renderOCRSettingsSection(
             .onChange(async v => { plugin.settings.ocrSettings.aiModel.model = v; await plugin.saveSettings(); })
         );
 
-    new Setting(settingsContentWrapper)
+    const apiKeySecretId = plugin.settings.ocrSettings.aiModel.apiKeySecretId;
+    const matchSetting = new Setting(settingsContentWrapper)
         .setName(t("SETTING_OCR_LLM_KEY"))
-        .setDesc(t("SETTING_OCR_LLM_KEY_DESC"))
-        .addText(text => {
-            text
-                .setPlaceholder("sk-...")
-                .setValue(plugin.settings.ocrSettings.aiModel.apiKey)
-                .onChange(async v => { plugin.settings.ocrSettings.aiModel.apiKey = v; await plugin.saveSettings(); });
+        .setDesc(t("SETTING_OCR_LLM_KEY_DESC") + (apiKeySecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + apiKeySecretId + ")" : ""));
+
+    if ((plugin.app as any).secretStorage && SecretComponent) {
+        try {
+            const sc = new SecretComponent(plugin.app, matchSetting.controlEl);
+            sc.setValue(plugin.settings.ocrSettings.aiModel.apiKeySecretId || "");
+            sc.onChange(async (id: string) => {
+                plugin.settings.ocrSettings.aiModel.apiKeySecretId = id;
+                await plugin.saveSettings();
+            });
+        } catch (e) {
+            console.error("Failed to initialize SecretComponent for LLM Key", e);
+        }
+    } else if ((plugin.app as any).secretStorage) {
+        matchSetting.addText(text => {
+            text.setPlaceholder(t("SETTING_OCR_LLM_KEY"))
+                .setValue(plugin.settings.ocrSettings.aiModel.apiKeySecretId || "")
+                .onChange(async v => {
+                    plugin.settings.ocrSettings.aiModel.apiKeySecretId = v;
+                    await plugin.saveSettings();
+                });
             text.inputEl.type = "password";
         });
+    }
 
     new Setting(settingsContentWrapper)
         .setName(t("SETTING_OCR_LLM_MAX_TOKENS"))

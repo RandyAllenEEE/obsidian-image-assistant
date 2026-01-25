@@ -3,6 +3,8 @@ export default {
     "LOADING_OCR_LATEX": "正在加载 LaTeX...", // New key
     "LOADING_OCR_MARKDOWN": "正在加载 Markdown...", // New key
     "LOADING_UPLOAD": "正在上传", // New key
+    "LOADING_PROCESS": "正在处理", // New key
+    "LOADING": "正在加载...",
 
     // Settings
     "SETTING_PASTE_MODE_HEADER": "图片处理",
@@ -230,6 +232,8 @@ export default {
     "SETTING_OCR_PROMPTS_LATEX_DESC": "用于 LaTeX 转换的提示词",
     "SETTING_OCR_PROMPTS_MARKDOWN": "Markdown Prompt",
     "SETTING_OCR_PROMPTS_MARKDOWN_DESC": "用于 Markdown 转换的提示词",
+    "SETTING_OCR_LINKED_ID": "已链接的密钥 ID",
+    "MSG_CLOUD_DELETE_SUCCESS": "云端图片删除成功！",
 
     // Modals
     "MODAL_UPLOAD_SUCCESS": "上传成功",
@@ -701,7 +705,7 @@ export default {
     "BATCH_NO_ITEMS": "未找到项目。",
     "BATCH_ITEMS_FOUND": "找到 {0} 个项目",
     "BATCH_SELECT_ALL_NONE": "全选/取消全选",
-    "BATCH_START_PROCESSING": "开始处理",
+    "BATCH_START_PROCESS": "开始处理",
     "BATCH_PROCESSING_TITLE": "正在处理...",
     "BATCH_LOG_UPLOAD_START": "开始上传 {0} 张图片...",
     "BATCH_LOG_DOWNLOAD_START": "开始下载 {0} 张图片...",
@@ -888,6 +892,8 @@ export default {
     "TOOLTIP_REPLACE_CURRENT_DOWNLOAD": "下载并仅在当前笔记中替换链接",
     "TOOLTIP_REPLACE_ALL_DOWNLOAD": "下载并替换整个库中所有笔记的链接",
     "TOOLTIP_REPLACE_CURRENT_MULTI": "替换当前笔记中的所有出现",
+    "LABEL_LOCAL": "本地",
+    "LABEL_CLOUD": "图床",
     "SETTING_YES": "是",
     "SETTING_NO": "否",
 };

@@ -9,11 +9,20 @@ const localeMap: { [key: string]: Partial<typeof en> } = {
 
 const locale = window.moment.locale();
 
-export function t(str: keyof typeof en): string {
+export function t(str: keyof typeof en, vars?: any[]): string {
     const currentLocale = locale === 'zh-cn' ? 'zh-cn' : 'en';
     const dict = localeMap[currentLocale];
-    if (!dict) {
-        return (en as any)[str] || str;
+    let result: string = str;
+    if (dict && (dict as any)[str]) {
+        result = (dict as any)[str];
+    } else {
+        result = (en as any)[str] || str;
     }
-    return (dict as any)[str] || (en as any)[str] || str;
+
+    if (vars && vars.length > 0) {
+        vars.forEach((v, i) => {
+            result = result.replace(`{${i}}`, v);
+        });
+    }
+    return result;
 }

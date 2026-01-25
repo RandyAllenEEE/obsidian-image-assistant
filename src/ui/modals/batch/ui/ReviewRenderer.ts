@@ -21,9 +21,9 @@ export class ReviewRenderer {
         const successCount = result.successful.length;
         const failCount = result.failed.length;
 
-        summary.createDiv({ text: t("BATCH_SUCCESS_COUNT").replace("{0}", successCount.toString()), cls: "summary-item success" });
+        summary.createDiv({ text: t("BATCH_SUCCESS_COUNT", [successCount.toString()]), cls: "summary-item success" });
         if (failCount > 0) {
-            summary.createDiv({ text: t("BATCH_FAIL_COUNT").replace("{0}", failCount.toString()), cls: "summary-item error" });
+            summary.createDiv({ text: t("BATCH_FAIL_COUNT", [failCount.toString()]), cls: "summary-item error" });
 
             // Detailed Failure Log
             const details = container.createEl("details");

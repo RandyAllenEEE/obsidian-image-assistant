@@ -195,7 +195,7 @@ function renderGlobalPresetSelector(context: RenderContext): void {
                 new ConfirmDialog(
                     context.app,
                     t("CONFIRM_DELETE_TITLE"),
-                    t("CONFIRM_DELETE_GLOBAL_MSG").replace("{0}", plugin.settings.selectedGlobalPreset),
+                    t("CONFIRM_DELETE_GLOBAL_MSG", [plugin.settings.selectedGlobalPreset]),
                     t("BUTTON_DELETE"),
                     async () => {
                         plugin.settings.globalPresets = plugin.settings.globalPresets.filter(
@@ -414,7 +414,7 @@ function renderPresetCard<T extends FolderPreset | FilenamePreset | ConversionPr
                 new ConfirmDialog(
                     context.app,
                     t("CONFIRM_DELETE_TITLE"),
-                    t("CONFIRM_DELETE_PRESET_MSG").replace("{0}", preset.name),
+                    t("CONFIRM_DELETE_PRESET_MSG", [preset.name]),
                     t("BUTTON_DELETE"),
                     async () => {
                         if (activePresetSetting === "selectedFolderPreset") {

@@ -40,7 +40,7 @@ export class UploadDownloadHandler {
             await this.plugin.uploadSingleFile(file);
         } catch (error) {
             console.error('[Upload] Error uploading image:', error);
-            new Notice(t("MSG_UPLOAD_FAILED").replace("{0}", error.message));
+            new Notice(t("MSG_UPLOAD_FAILED", [error.message]));
         }
     }
 
@@ -80,11 +80,11 @@ export class UploadDownloadHandler {
             if (success) {
                 new Notice(t("MSG_DOWNLOAD_SUCCESS"));
             } else {
-                new Notice(t("MSG_DOWNLOAD_FAILED").replace("{0}", "Unknown error"));
+                new Notice(t("MSG_DOWNLOAD_FAILED", ["Unknown error"]));
             }
         } catch (error) {
             console.error('[Download] Error downloading network image:', error);
-            new Notice(t("MSG_DOWNLOAD_FAILED").replace("{0}", error.message));
+            new Notice(t("MSG_DOWNLOAD_FAILED", [error.message]));
         }
     }
 }

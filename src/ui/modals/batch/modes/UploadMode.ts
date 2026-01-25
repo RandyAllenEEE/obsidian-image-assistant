@@ -197,6 +197,6 @@ export class UploadMode implements IBatchMode {
             }
         }
 
-        new Notice(t("MSG_REPLACED_LINKS").replace("{0}", count.toString()));
+        new Notice(t("MSG_REPLACED_LINKS", [count.toString()]));
     }
 }

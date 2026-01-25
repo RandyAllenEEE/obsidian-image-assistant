@@ -65,8 +65,8 @@ export class PasteModeConfigModal extends Modal {
             fm["image_paste_mode"] = mode;
         });
 
-        const modeText = mode === "local" ? "Local" : "Cloud";
-        new Notice(t("NOTICE_PASTE_MODE_SET").replace("{0}", modeText));
+        const modeText = mode === "local" ? t("LABEL_LOCAL") : t("LABEL_CLOUD");
+        new Notice(t("NOTICE_PASTE_MODE_SET", [modeText]));
         this.close();
     }
 

@@ -889,7 +889,7 @@ export class ImageAnnotationModal extends Modal {
 		await this.plugin.saveSettings();
 
 		this.updatePresetButtons();
-		new Notice(t("MSG_ANNOTATION_PRESET_SAVED").replace("{0}", (index + 1).toString()));
+		new Notice(t("MSG_ANNOTATION_PRESET_SAVED", [(index + 1).toString()]));
 	}
 
 	private loadPreset(index: number) {

@@ -170,7 +170,7 @@ export class SaveGlobalPresetModal extends Modal {
             if (preset) {
                 const sectionEl = document.createElement("div");
                 sectionEl.classList.add("summary-section");
-                sectionEl.appendChild(createSectionTitle(t("MODAL_SECTION_PRESET").replace("{0}", presetType).replace("{1}", preset.name)));
+                sectionEl.appendChild(createSectionTitle(t("MODAL_SECTION_PRESET", [presetType, preset.name])));
 
                 switch (presetType) {
                     case "Folder":
@@ -411,7 +411,7 @@ export class AvailableVariablesModal extends Modal {
         if (searchTerm && this.contentContainer.children.length === 0) {
             this.contentContainer.createEl("div", {
                 cls: "variable-no-results",
-                text: t("MSG_NO_VARIABLES_FOUND").replace("{0}", searchTerm)
+                text: t("MSG_NO_VARIABLES_FOUND", [searchTerm])
             });
         }
     }

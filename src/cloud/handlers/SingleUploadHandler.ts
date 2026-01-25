@@ -125,7 +125,7 @@ export class SingleUploadHandler {
             if (success) new Notice(t("MSG_DELETE_CLOUD_SUCCESS"));
             else new Notice(t("MSG_DELETE_CLOUD_FAILED"));
         } catch (error) {
-            new Notice(t("MSG_DELETE_CLOUD_ERROR").replace("{0}", error.message));
+            new Notice(t("MSG_DELETE_CLOUD_ERROR", [error.message]));
         }
     }
 }
