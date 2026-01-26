@@ -115,6 +115,23 @@
 
 ---
 
-## 📜 协议与致谢 (License & Credits)
-MIT License.
-感谢 **xRyul**, **renmu123**, **Hugo Persson** 以及 **FabricJS** 的开源贡献。
+## 📜 协议与致谢 (License & Acknowledgments)
+
+### License
+MIT License
+
+### Acknowledgments
+
+**Image Assistant** 的诞生离不开以下优秀开源项目的启发与代码贡献。我们对其原始作者表示诚挚的感谢：
+
+1. **[xRyul](https://github.com/xRyul)** - **[obsidian-image-converter](https://github.com/xRyul/obsidian-image-converter)**
+   - 提供了核心的图片转换、压缩和重命名逻辑。
+
+2. **[renmu123](https://github.com/renmu123)** - **[obsidian-image-auto-upload-plugin](https://github.com/renmu123/obsidian-image-auto-upload-plugin)**
+   - 提供了 PicGo/PicList 自动上传和链接替换的实现基础。
+
+3. **[Hugo Persson](https://github.com/Hugo-Persson)** - **[obsidian-ocrlatex](https://github.com/Hugo-Persson/obsidian-ocrlatex)**
+   - 提供了 OCR 识别和 LaTeX 公式转换的功能灵感。
+
+4. **[Fabric.js](http://fabricjs.com/)**
+   - 提供了强大的图片标注和编辑功能的底层支持。
