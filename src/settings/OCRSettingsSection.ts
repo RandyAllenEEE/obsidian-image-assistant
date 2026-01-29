@@ -221,20 +221,41 @@ export function renderOCRSettingsSection(
 
     // --- LLM Config ---
     settingsContentWrapper.createEl("div", { text: t("SETTING_OCR_LLM_SETTINGS"), cls: "setting-item-heading" });
+
+    // Provider Type Setting
+    new Setting(settingsContentWrapper)
+        .setName("LLM Provider Type")
+        .setDesc("Choose between OpenAI-compatible API or Ollama Native API.")
+        .addDropdown(dropdown => {
+            dropdown
+                .addOption("openai", "OpenAI / Compatible")
+                .addOption("ollama", "Ollama Native")
+                .setValue(plugin.settings.ocrSettings.aiModel.providerType || "openai")
+                .onChange(async (value: "openai" | "ollama") => {
+                    plugin.settings.ocrSettings.aiModel.providerType = value;
+                    await plugin.saveSettings();
+                    refreshDisplay(); // Re-render to update placeholders
+                });
+        });
+
+    const isOllama = plugin.settings.ocrSettings.aiModel.providerType === "ollama";
+
+    // Endpoint Setting
     new Setting(settingsContentWrapper)
         .setName(t("SETTING_OCR_LLM_ENDPOINT"))
         .setDesc(t("SETTING_OCR_LLM_ENDPOINT_DESC"))
         .addText(text => text
-            .setPlaceholder("https://api.openai.com/v1/chat/completions")
+            .setPlaceholder(isOllama ? "http://localhost:11434/api/chat" : "https://api.openai.com/v1/chat/completions")
             .setValue(plugin.settings.ocrSettings.aiModel.endpoint)
             .onChange(async v => { plugin.settings.ocrSettings.aiModel.endpoint = v; await plugin.saveSettings(); })
         );
 
+    // Model Setting
     new Setting(settingsContentWrapper)
         .setName(t("SETTING_OCR_LLM_MODEL"))
         .setDesc(t("SETTING_OCR_LLM_MODEL_DESC"))
         .addText(text => text
-            .setPlaceholder("gpt-4-vision-preview")
+            .setPlaceholder(isOllama ? "llava" : "gpt-4-vision-preview")
             .setValue(plugin.settings.ocrSettings.aiModel.model)
             .onChange(async v => { plugin.settings.ocrSettings.aiModel.model = v; await plugin.saveSettings(); })
         );
@@ -242,7 +263,7 @@ export function renderOCRSettingsSection(
     const apiKeySecretId = plugin.settings.ocrSettings.aiModel.apiKeySecretId;
     const matchSetting = new Setting(settingsContentWrapper)
         .setName(t("SETTING_OCR_LLM_KEY"))
-        .setDesc(t("SETTING_OCR_LLM_KEY_DESC") + (apiKeySecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + apiKeySecretId + ")" : ""));
+        .setDesc(t("SETTING_OCR_LLM_KEY_DESC") + (apiKeySecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + apiKeySecretId + ")" : "") + (isOllama ? " (Optional for Ollama)" : ""));
 
     if ((plugin.app as any).secretStorage && SecretComponent) {
         try {

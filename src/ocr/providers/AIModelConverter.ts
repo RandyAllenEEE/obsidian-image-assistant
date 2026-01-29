@@ -33,6 +33,41 @@ export class AIModelConverter implements OCRProvider {
         const secretStorage = (this.app as any).secretStorage;
         const apiKey = secretStorage && this.settings.aiModel.apiKeySecretId ? secretStorage.getSecret(this.settings.aiModel.apiKeySecretId) : null;
 
+        if (this.settings.aiModel.providerType === "ollama") {
+            // Ollama Native API Payload
+            const payload = {
+                model: this.settings.aiModel.model,
+                messages: [
+                    {
+                        role: "user",
+                        content: prompt,
+                        images: [base64Image]
+                    }
+                ],
+                stream: false
+            };
+
+            const response = await fetch(this.settings.aiModel.endpoint, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(`Ollama request failed with status ${response.status}`);
+            }
+
+            const data = await response.json();
+            // Ollama /api/chat returns 'message': { 'content': ... }
+            let result = data.message?.content?.trim();
+            if (!result) throw new Error("Ollama returned empty content");
+
+            return this.processResult(result);
+        }
+
+        // OpenAI Compatible Payload (default)
         const payload = {
             model: this.settings.aiModel.model,
             messages: [
@@ -55,12 +90,16 @@ export class AIModelConverter implements OCRProvider {
             max_tokens: this.settings.aiModel.maxTokens
         };
 
+        const headers: any = {
+            "Content-Type": "application/json"
+        };
+        if (apiKey) {
+            headers["Authorization"] = `Bearer ${apiKey}`;
+        }
+
         const response = await fetch(this.settings.aiModel.endpoint, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`
-            },
+            headers: headers,
             body: JSON.stringify(payload)
         });
 
@@ -71,6 +110,10 @@ export class AIModelConverter implements OCRProvider {
         const data = await response.json();
         let result = data.choices[0].message.content.trim();
 
+        return this.processResult(result);
+    }
+
+    private processResult(result: string): string {
         // Data cleaning (prevent LLM from outputting $ or $$)
         // Remove possible markdown code blocks ```latex ... ```
         result = result.replace(/^```(latex)?|```$/g, '').trim();

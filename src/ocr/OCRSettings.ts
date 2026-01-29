@@ -23,6 +23,7 @@ export interface OCRSettings {
         password: string;
     };
     aiModel: {
+        providerType: "openai" | "ollama";
         endpoint: string;
         model: string;
         maxTokens: number;
@@ -54,6 +55,7 @@ export const DEFAULT_OCR_SETTINGS: OCRSettings = {
         password: ""
     },
     aiModel: {
+        providerType: "openai",
         endpoint: "",
         model: "",
         maxTokens: 300,
