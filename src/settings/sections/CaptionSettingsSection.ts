@@ -28,7 +28,7 @@ export function renderCaptionSettingsSection(
                     refreshDisplay();
 
                     if (!value) {
-                        new Notice("Image captions disabled.", 2000);
+                        new Notice(t("NOTICE_IMAGE_CAPTION_DISABLED"), 2000);
                     }
                 })
         );
@@ -76,7 +76,7 @@ export function renderCaptionSettingsSection(
             .setName(t("SETTING_CAPTION_SKIP_EXT"))
             .setDesc(t("SETTING_CAPTION_SKIP_EXT_DESC"))
             .addText(text => text
-                .setPlaceholder("pdf,svg")
+                .setPlaceholder(t("SETTING_CAPTION_SKIP_EXT_PLACEHOLDER"))
                 .setValue(plugin.settings.captions.skipExtensions)
                 .onChange(async (value) => {
                     plugin.settings.captions.skipExtensions = value;
@@ -87,7 +87,7 @@ export function renderCaptionSettingsSection(
         new Setting(settingsContentWrapper)
             .setName(t("SETTING_CAPTION_FONT_SIZE"))
             .addText(text => text
-                .setPlaceholder("12px")
+                .setPlaceholder(t("SETTING_CAPTION_FONT_SIZE_PLACEHOLDER"))
                 .setValue(plugin.settings.captions.fontSize)
                 .onChange(async (value) => {
                     plugin.settings.captions.fontSize = value;

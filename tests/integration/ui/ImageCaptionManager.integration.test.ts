@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import ImageConverterPlugin from '../../../src/main';
-import { ImageCaptionManager } from '../../../src/ImageCaptionManager';
+import { ImageCaptionManager } from '/ImageCaptionManager';
 import { fakeApp, fakePluginManifest } from '../../factories/obsidian';
 
 function setupEmbed(alt: string, src: string, inCallout = false) {

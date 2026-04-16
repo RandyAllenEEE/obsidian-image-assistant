@@ -8,8 +8,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // Mocks before imports
 vi.mock('child_process');
 
-import { ImageProcessor } from '../../../src/ImageProcessor';
-import { SupportedImageFormats } from '../../../src/SupportedImageFormats';
+import { ImageProcessor } from '../../../src/local/ImageProcessor';
+import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
 import { makeImageBlob } from '../../factories/image';
 import { fakeApp } from '../../factories/obsidian';
 

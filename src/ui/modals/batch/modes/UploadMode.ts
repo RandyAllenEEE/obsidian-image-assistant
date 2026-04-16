@@ -4,7 +4,9 @@ import { BatchTask, BatchItemResult, BatchResult, BatchScope } from "../../../..
 import { IBatchMode, ReviewAction } from "./IBatchMode";
 import { t } from "../../../../lang/helpers";
 import { CloudImageDeleter } from "../../../../cloud/CloudImageDeleter";
-import { CloudLinkFormatter } from "../../../../cloud/CloudLinkFormatter";
+import { ImageLinkPathReplacer } from "../../../../utils/ImageLinkPathReplacer";
+import { getAllImageLinks } from "../../../../utils/RegexPatterns";
+import { buildAllowedPathSet } from "../../../../utils/batch";
 
 export class UploadMode implements IBatchMode {
     id = "upload" as const;
@@ -32,16 +34,40 @@ export class UploadMode implements IBatchMode {
 
         // Identify files based on scope
         if (this.scope === "note" && this.target instanceof TFile) {
-            // Scan note for images
-            const cache = this.app.metadataCache.getFileCache(this.target);
-            if (cache && cache.embeds) {
-                for (const embed of cache.embeds) {
-                    const file = this.app.metadataCache.getFirstLinkpathDest(embed.link, this.target.path);
-                    if (file && this.plugin.supportedImageFormats.isSupported(file.extension, file.name)) {
-                        files.push(file);
+            const resolvedFiles: Map<string, TFile> = new Map();
+            const useContentScan = !!this.plugin.settings.global.codeBlockImageLinkIndexing;
+
+            if (useContentScan) {
+                // When enabled, include references in fenced code blocks/admonitions.
+                const content = await this.app.vault.read(this.target);
+                const links = getAllImageLinks(content);
+                for (const link of links) {
+                    const linkPath = (link.path ?? '').trim();
+                    if (!linkPath) continue;
+                    if (linkPath.startsWith('http://') || linkPath.startsWith('https://')) continue; // local upload only
+
+                    const dest = this.app.metadataCache.getFirstLinkpathDest(linkPath, this.target.path);
+                    if (!dest?.path) continue;
+
+                    const abstract = this.app.vault.getAbstractFileByPath(dest.path);
+                    if (!(abstract instanceof TFile)) continue;
+                    if (!this.plugin.supportedImageFormats.isSupported(abstract.extension, abstract.name)) continue;
+                    resolvedFiles.set(abstract.path, abstract);
+                }
+            } else {
+                // Default fast path: metadata cache embeds only.
+                const cache = this.app.metadataCache.getFileCache(this.target);
+                if (cache?.embeds) {
+                    for (const embed of cache.embeds) {
+                        const file = this.app.metadataCache.getFirstLinkpathDest(embed.link, this.target.path);
+                        if (file && this.plugin.supportedImageFormats.isSupported(file.extension, file.name)) {
+                            resolvedFiles.set(file.path, file);
+                        }
                     }
                 }
             }
+
+            files = Array.from(resolvedFiles.values());
         } else if (this.scope === "folder" && this.target instanceof TFolder) {
             // Simple recursive scan?
             // Reusing logic from FolderBatchUploader might be better, but we need tasks here
@@ -132,8 +158,6 @@ export class UploadMode implements IBatchMode {
     async handleReviewAction(action: string, result: BatchResult): Promise<void> {
         if (!result) return;
 
-        // This logic is moved from handleUploadAction in UnifiedBatchProcessModal.ts
-
         if (action === "undo") {
             const confirm = this.plugin.settings.pasteHandling.cloud.uploader === 'PicList';
             if (!confirm && !window.confirm(t("MSG_UNDO_CONFIRM_LOCAL"))) return;
@@ -149,46 +173,17 @@ export class UploadMode implements IBatchMode {
             return;
         }
 
-        // Calculate referencing notes (this logic was in modal, but we need it here)
-        // Ideally the Modal passes strict dependencies.
-        // The modal calculated 'referencingNotes'.
-        // Here we might need to recalculate or just process ALL successful items?
-        // The original logic filtered `referencingNotes`.
-        // Simplification: We will just update references globally for the processed items,
-        // OR we can implement a more robust reference finder here.
-
-        // LIMITATION: The original modal allowed selecting WHICH notes to update (referencingNotes).
-        // If we move this to Mode, the Mode needs access to that selection or the UI for it.
-        // But `ReviewRenderer` (which we will build) handles the UI.
-        // So `handleReviewAction` should probably receive the 'context' or 'selection'.
-
-        // For now, let's assume we update ALL references or rebuild the reference check.
-        // Re-implementing simplified reference update for now to keep it self-contained.
-
-        // Actually, `CloudImageHandler.updateLinksWithManager` does exactly this!
-        // It updates all references in the vault.
-        // The Modal had logic to "Check broken links in selected notes".
-        // Let's delegate to `CloudImageHandler.updateLinksWithManager` for each successful item.
-        // This mimics "Replace All" behavior which is standard.
-        // If the user wants granular note selection, that's complex to migrate without passing UI state.
-        // I will assume "Replace All" behavior for now as it's the most common and robust.
+        // Build scope boundary: collect files within the current scope
+        const allowedPathSet = buildAllowedPathSet(this.scope, this.target, this.app);
 
         let count = 0;
         for (const item of result.successful) {
             const file = item.item as TFile;
             const cloudUrl = item.output as string;
 
-            // Using existing helper to update all links
-            // We need to access SingleUploadHandler's logic? 
-            // We can replicate verify logic.
-            // Or use VaultReferenceManager directly.
-
             const updated = await this.plugin.vaultReferenceManager.updateReferences(file.path, (loc) => {
-                return CloudLinkFormatter.formatCloudLink(
-                    cloudUrl,
-                    this.plugin.settings.pasteHandling.cloud,
-                    loc.original
-                );
+                if (!allowedPathSet.has(loc.file.path)) return loc.original;
+                return ImageLinkPathReplacer.replacePath(loc.original, cloudUrl);
             });
             count += updated;
 

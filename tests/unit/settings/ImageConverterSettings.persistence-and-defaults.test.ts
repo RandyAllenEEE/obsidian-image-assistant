@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import ImageConverterPlugin from '../../../src/main';
-import { DEFAULT_SETTINGS } from '../../../src/ImageConverterSettings';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
 import { App } from 'obsidian';
 
 function makeAppWithStorage() {

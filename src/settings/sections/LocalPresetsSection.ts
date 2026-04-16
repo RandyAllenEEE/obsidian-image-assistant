@@ -738,7 +738,7 @@ function updateLinkExamples(formContainer: HTMLElement, preset: LinkFormatPreset
 }
 
 function renderConversionPresetFormFields(formContainer: HTMLElement, preset: ConversionPreset, context: RenderContext): void {
-    const outputFormatSetting = new Setting(formContainer).setName(t("LABEL_OUTPUT_FORMAT")).addDropdown(d => d.addOptions({ WEBP: "WEBP", JPEG: "JPEG", PNG: "PNG", ORIGINAL: "Original", NONE: "None", PNGQUANT: "PNGQUANT", AVIF: "AVIF" }).setValue(preset.outputFormat).onChange(async v => {
+    const outputFormatSetting = new Setting(formContainer).setName(t("LABEL_OUTPUT_FORMAT")).addDropdown(d => d.addOptions({ WEBP: t("SETTING_FORMAT_WEBP"), JPEG: t("SETTING_FORMAT_JPEG"), PNG: t("SETTING_FORMAT_PNG"), ORIGINAL: t("SETTING_FORMAT_ORIGINAL"), NONE: t("SETTING_FORMAT_NONE"), PNGQUANT: t("SETTING_FORMAT_PNGQUANT"), AVIF: t("SETTING_FORMAT_AVIF") }).setValue(preset.outputFormat).onChange(async v => {
         preset.outputFormat = v as OutputFormat;
         await context.plugin.saveSettings();
         updateConversionPresetFormFields(formContainer, preset, outputFormatSetting, context);
@@ -754,7 +754,7 @@ function updateConversionPresetFormFields(containerEl: HTMLElement, preset: Conv
 
     // Re-add based on settings (simplified logic for robustness check)
     if (["WEBP", "JPEG", "ORIGINAL"].includes(preset.outputFormat)) {
-        const s = new Setting(containerEl).setName("Quality").setClass("image-converter-quality-setting").addSlider(s => s.setLimits(0, 100, 1).setValue(preset.quality).onChange(async v => {
+        const s = new Setting(containerEl).setName(t("LABEL_QUALITY")).setClass("image-converter-quality-setting").addSlider(s => s.setLimits(0, 100, 1).setValue(preset.quality).onChange(async v => {
             preset.quality = v;
             await context.plugin.saveSettings();
         }));
@@ -763,21 +763,21 @@ function updateConversionPresetFormFields(containerEl: HTMLElement, preset: Conv
     // ... (rest of logic mirrors original file, ensuring specific settings availability)
 
     // Resize Mode - simplified for this write, but concept stands
-    const r = new Setting(containerEl).setName("Resize mode").setClass("image-converter-resize-mode-setting").addDropdown(d => d.addOptions({ None: "None", Fit: "Fit", Fill: "Fill", LongestEdge: "Longest Edge", ShortestEdge: "Shortest Edge", Width: "Width", Height: "Height" }).setValue(preset.resizeMode).onChange(v => { preset.resizeMode = v as ResizeMode; updateConversionPresetFormFields(containerEl, preset, outputFormatSetting, context); }));
+    const r = new Setting(containerEl).setName(t("SETTING_RESIZE_MODE")).setClass("image-converter-resize-mode-setting").addDropdown(d => d.addOptions({ None: t("SETTING_RESIZE_NONE"), Fit: t("SETTING_RESIZE_FIT"), Fill: t("SETTING_RESIZE_FILL"), LongestEdge: t("SETTING_RESIZE_LONGEST"), ShortestEdge: t("SETTING_RESIZE_SHORTEST"), Width: t("SETTING_RESIZE_WIDTH"), Height: t("SETTING_RESIZE_HEIGHT") }).setValue(preset.resizeMode).onChange(v => { preset.resizeMode = v as ResizeMode; updateConversionPresetFormFields(containerEl, preset, outputFormatSetting, context); }));
     // We need to manage insertion point better if multiple settings exist, but for now this ensures it exists.
     containerEl.appendChild(r.settingEl);
 
     if (["Fit", "Fill", "Width"].includes(preset.resizeMode)) {
-        new Setting(containerEl).setName("Width").setClass("image-converter-desired-width-setting").addText(t => t.setValue(String(preset.desiredWidth)).onChange(v => preset.desiredWidth = parseInt(v)));
+        new Setting(containerEl).setName(t("LABEL_WIDTH")).setClass("image-converter-desired-width-setting").addText(t => t.setValue(String(preset.desiredWidth)).onChange(v => preset.desiredWidth = parseInt(v)));
     }
     if (["Fit", "Fill", "Height"].includes(preset.resizeMode)) {
-        new Setting(containerEl).setName("Height").setClass("image-converter-desired-height-setting").addText(t => t.setValue(String(preset.desiredHeight)).onChange(v => preset.desiredHeight = parseInt(v)));
+        new Setting(containerEl).setName(t("LABEL_HEIGHT")).setClass("image-converter-desired-height-setting").addText(t => t.setValue(String(preset.desiredHeight)).onChange(v => preset.desiredHeight = parseInt(v)));
     }
 }
 
 function renderResizePresetFormFields(formContainer: HTMLElement, preset: NonDestructiveResizePreset, context: RenderContext) {
     // Basic implementation for resize presets (auto-save enabled)
-    new Setting(formContainer).setName("Resize dimension").addDropdown(d => d.addOptions({ none: "None", width: "Width", height: "Height", both: "Both", "longest-edge": "Longest Edge", "shortest-edge": "Shortest Edge", "original-width": "Original Width", "original-height": "Original Height", "editor-max-width": "Editor Max Width" }).setValue(preset.resizeDimension).onChange(async v => {
+    new Setting(formContainer).setName(t("SETTING_RESIZE_DIMENSIONS")).addDropdown(d => d.addOptions({ none: t("SETTING_RESIZE_DIM_NONE"), width: t("SETTING_RESIZE_DIM_WIDTH"), height: t("SETTING_RESIZE_DIM_HEIGHT"), both: t("SETTING_RESIZE_DIM_BOTH"), "longest-edge": t("SETTING_RESIZE_DIM_LONGEST"), "shortest-edge": t("SETTING_RESIZE_DIM_SHORTEST"), "original-width": t("SETTING_RESIZE_DIM_ORIG_WIDTH"), "original-height": t("SETTING_RESIZE_DIM_ORIG_HEIGHT"), "editor-max-width": t("SETTING_RESIZE_DIM_EDITOR_MAX") }).setValue(preset.resizeDimension).onChange(async v => {
         preset.resizeDimension = v as ResizeDimension;
         await context.plugin.saveSettings();
         updateResizePresetFormFields(formContainer, preset);
@@ -788,31 +788,31 @@ function renderResizePresetFormFields(formContainer: HTMLElement, preset: NonDes
 function updateResizePresetFormFields(formContainer: HTMLElement, preset: NonDestructiveResizePreset) {
     formContainer.querySelectorAll(".image-converter-resize-width-setting, .image-converter-resize-height-setting").forEach(el => el.remove());
     // Simplified: depending on dimension, add relevant fields.
-    if (preset.resizeDimension === "width") new Setting(formContainer).setName("Width").setClass("image-converter-resize-width-setting").addText(t => t.setValue(String(preset.width)).onChange(v => preset.width = parseFloat(v)));
-    if (preset.resizeDimension === "height") new Setting(formContainer).setName("Height").setClass("image-converter-resize-height-setting").addText(t => t.setValue(String(preset.height)).onChange(v => preset.height = parseFloat(v)));
+    if (preset.resizeDimension === "width") new Setting(formContainer).setName(t("LABEL_WIDTH")).setClass("image-converter-resize-width-setting").addText(t => t.setValue(String(preset.width)).onChange(v => preset.width = parseFloat(v)));
+    if (preset.resizeDimension === "height") new Setting(formContainer).setName(t("LABEL_HEIGHT")).setClass("image-converter-resize-height-setting").addText(t => t.setValue(String(preset.height)).onChange(v => preset.height = parseFloat(v)));
 }
 
 function getConversionPresetSummary(preset: ConversionPreset): DocumentFragment {
     const f = document.createDocumentFragment();
-    f.createEl("p", { text: `Format: ${preset.outputFormat}` });
+    f.createEl("p", { text: t("SUMMARY_FORMAT", [preset.outputFormat]) });
     if (preset.outputFormat !== "NONE") {
-        f.createEl("p", { text: `Quality: ${preset.quality}` });
-        f.createEl("p", { text: `Resize: ${preset.resizeMode}` });
+        f.createEl("p", { text: t("SUMMARY_QUALITY", [preset.quality.toString()]) });
+        f.createEl("p", { text: t("SUMMARY_RESIZE", [preset.resizeMode]) });
     }
     return f;
 }
 
 function getResizePresetSummary(preset: NonDestructiveResizePreset): DocumentFragment {
     const f = document.createDocumentFragment();
-    f.createEl("p", { text: `Dimension: ${preset.resizeDimension}` });
-    if (preset.resizeDimension === "width") f.createEl("p", { text: `Width: ${preset.width}` });
+    f.createEl("p", { text: t("SUMMARY_DIMENSION", [preset.resizeDimension]) });
+    if (preset.resizeDimension === "width" && preset.width !== undefined) f.createEl("p", { text: t("SUMMARY_WIDTH", [preset.width.toString()]) });
     return f;
 }
 
 async function generateFolderPresetSummary(containerEl: HTMLElement, preset: FolderPreset, context: RenderContext) {
     containerEl.empty();
     const f = document.createDocumentFragment();
-    f.createEl("p", { text: `Type: ${preset.type}` });
+    f.createEl("p", { text: t("SUMMARY_FOLDER_TYPE", [preset.type]) });
     // Add example path generation if desired, similar to other generate methods
     containerEl.appendChild(f);
 }

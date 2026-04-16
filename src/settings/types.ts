@@ -165,6 +165,7 @@ export interface ImageAssistantSettings {
         ffmpegPreset: string;
         modalBehavior: ModalBehavior;
         enableContextMenu: boolean;
+        codeBlockImageLinkIndexing: boolean;
         showSpaceSavedNotification: boolean;
         revertToOriginalIfLarger: boolean;
         minimumCompressionSavingsInKB: number;

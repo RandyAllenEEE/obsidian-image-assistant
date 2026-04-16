@@ -16,10 +16,22 @@ describe('PicGoUploader', () => {
     let mockHistoryManager: any;
 
     beforeEach(() => {
-        const cloudUploadSettings = {
+        const cloudSettings = {
+            uploader: 'PicGo',
             uploadServer: 'http://127.0.0.1:36677/upload',
+            deleteServer: 'http://127.0.0.1:36677/delete',
+            picgoCorePath: '',
             remoteServerMode: false,
-            // uploadedImages removed from settings
+            imageSizeWidth: undefined,
+            imageSizeHeight: undefined,
+            imageSizeSource: 'settings' as const,
+            workOnNetWork: false,
+            newWorkBlackDomains: '',
+            applyImage: true,
+            deleteSource: false,
+            downloadPath: 'attachments',
+            uploadConcurrency: 3,
+            cloudLinkFormat: 'markdown' as const,
         };
 
         mockHistoryManager = {
@@ -29,7 +41,12 @@ describe('PicGoUploader', () => {
 
         mockPlugin = {
             settings: {
-                cloudUploadSettings: cloudUploadSettings,
+                pasteHandling: {
+                    mode: 'cloud' as const,
+                    cursorLocation: 'back' as const,
+                    neverProcessFilenames: '',
+                    cloud: cloudSettings,
+                },
             },
             saveSettings: vi.fn(),
             historyManager: mockHistoryManager,

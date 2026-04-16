@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import ImageConverterPlugin from '../../../src/main';
-import { ImageResizer } from '../../../src/ImageResizer';
+import { ImageResizer } from '../../../src/ui/ImageResizer';
 import { fakeApp, fakeTFile, fakeVault, fakeWorkspace, fakePluginManifest } from '../../factories/obsidian';
 import { setupFakeTimers } from '../../helpers/test-setup';
 

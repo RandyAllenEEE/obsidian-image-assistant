@@ -2,6 +2,7 @@
 import { App, Modal, Notice, TFile, Setting, MarkdownView } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { createAnyLinkRegex } from "../../utils/RegexPatterns";
+import { ImageLinkPathReplacer } from "../../utils/ImageLinkPathReplacer";
 import { ImageAssistantSettings } from "../../settings/defaults";
 import { OutputFormat, ResizeMode, EnlargeReduce, ConversionPreset } from "../../settings/types";
 import { t } from "../../lang/helpers";
@@ -590,10 +591,10 @@ export class ProcessSingleImageModal extends Modal {
                 // Use centralized factory
                 const linkRegex = createAnyLinkRegex(this.imageFile.name);
 
-                // Use the new filename for the link
-                const newLinkText = `![[${newFilename}]]`;
-
-                const newContent = fileContent.replace(linkRegex, newLinkText);
+                // Use ImageLinkPathReplacer to preserve wiki/markdown format and pipe syntax
+                const newContent = fileContent.replace(linkRegex, (match) => {
+                    return ImageLinkPathReplacer.replacePath(match, newFilename);
+                });
                 if (newContent !== fileContent) {
                     editor.setValue(newContent);
                     new Notice(`Link updated in "${activeView.file?.name}"`, 1000);

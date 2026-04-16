@@ -29,9 +29,9 @@ vi.mock('obsidian', async () => {
     };
 });
 
-// Mock translation function
+// Mock translation function with proper variable substitution
 vi.mock('../../../../src/lang/helpers', () => ({
-    t: (key: string) => {
+    t: (key: string, vars?: any[]) => {
         const translations: Record<string, string> = {
             PASTE_MODE_CONFIG_TITLE: 'Configure Paste Mode',
             PASTE_MODE_CONFIG_DESC: 'Set paste mode for current note',
@@ -42,8 +42,21 @@ vi.mock('../../../../src/lang/helpers', () => ({
             NOTICE_NO_ACTIVE_FILE: 'No active file',
             NOTICE_PASTE_MODE_SET: 'Paste mode set to {0}',
             NOTICE_PASTE_MODE_GLOBAL: 'Using global paste mode settings',
+            LABEL_LOCAL: 'Local',
+            LABEL_CLOUD: 'Cloud',
+            MODAL_PASTE_MODE_TITLE: 'Configure Paste Mode',
+            MODAL_PASTE_MODE_DESC: 'Set paste mode for current note',
+            MODAL_PASTE_MODE_LOCAL: 'Set Local Mode',
+            MODAL_PASTE_MODE_CLOUD: 'Set Cloud Mode',
+            MODAL_PASTE_MODE_GLOBAL: 'Use Global Settings',
         };
-        return translations[key] || key;
+        let result = translations[key] || key;
+        if (vars && vars.length > 0) {
+            vars.forEach((v, i) => {
+                result = result.replace(`{${i}}`, v);
+            });
+        }
+        return result;
     },
 }));
 

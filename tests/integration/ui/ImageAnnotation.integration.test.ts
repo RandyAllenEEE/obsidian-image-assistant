@@ -40,7 +40,7 @@ vi.mock('fabric', () => {
 });
 
 import ImageConverterPlugin from '../../../src/main';
-import { ImageAnnotationModal } from '../../../src/ImageAnnotation';
+import { ImageAnnotationModal } from '../../../src/ui/ImageAnnotation';
 import { fakeApp, fakeTFile, fakeVault, fakePluginManifest } from '../../factories/obsidian';
 import { IText } from 'fabric';
 

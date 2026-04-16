@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { FolderAndFilenameManagement } from '../../../src/FolderAndFilenameManagement';
-import { VariableProcessor } from '../../../src/VariableProcessor';
-import { SupportedImageFormats } from '../../../src/SupportedImageFormats';
-import { DEFAULT_SETTINGS, type FolderPreset, type FilenamePreset } from '../../../src/ImageConverterSettings';
+import { FolderAndFilenameManagement } from '../../../src/local/FolderAndFilenameManagement';
+import { VariableProcessor } from '../../../src/local/VariableProcessor';
+import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
 import { fakeApp, fakeVault, fakeTFile } from '../../factories/obsidian';
 
 describe('FolderAndFilenameManagement.validateTemplates delegates to VariableProcessor and throws on invalid', () => {

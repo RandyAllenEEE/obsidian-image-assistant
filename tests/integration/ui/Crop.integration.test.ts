@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Crop } from '../../../src/Crop';
+import { Crop } from '../../../src/ui/Crop';
 import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
 
 function setRect(el: Element, rect: Partial<DOMRect>) {

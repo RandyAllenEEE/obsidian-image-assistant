@@ -3,7 +3,7 @@ import { ProcessFolderModal } from '../../../src/ProcessFolderModal';
 import ImageConverterPlugin from '../../../src/main';
 import { App, TFile, TFolder } from 'obsidian';
 import { fakeApp, fakeVault, fakeTFile, fakeTFolder } from '../../factories/obsidian';
-import { BatchImageProcessor } from '../../../src/BatchImageProcessor';
+import { BatchImageProcessor } from '../../../src/local/BatchImageProcessor';
 
 function makePlugin(app: App) {
   const plugin = new ImageConverterPlugin(app, { id: 'image-converter' } as any);

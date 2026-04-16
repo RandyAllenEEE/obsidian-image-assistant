@@ -5,8 +5,8 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-import { ImageProcessor } from '../../../src/ImageProcessor';
-import { SupportedImageFormats } from '../../../src/SupportedImageFormats';
+import { ImageProcessor } from '../../../src/local/ImageProcessor';
+import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
 import { makePngBytes, makeImageBlob } from '../../factories/image';
 import { fakeCanvas } from '../../factories/canvas';
 import { fakeApp } from '../../factories/obsidian';

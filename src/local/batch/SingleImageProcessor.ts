@@ -5,6 +5,7 @@ import { FolderAndFilenameManagement } from '../FolderAndFilenameManagement';
 import { ResizeMode, EnlargeReduce } from '../../settings/types';
 import { BatchResult } from '../../types/BatchTypes';
 import { ConcurrentQueue } from '../../utils/AsyncLock';
+import { ImageLinkPathReplacer } from '../../utils/ImageLinkPathReplacer';
 
 /**
  * SingleImageProcessor - Shared logic for processing a single image.
@@ -98,9 +99,7 @@ export class SingleImageProcessor {
                 if (newFile) {
                     // Update References
                     await this.plugin.vaultReferenceManager.updateReferences(file.path, (loc) => {
-                        const newName = newFile.name;
-                        const oldName = file.name;
-                        return loc.original.replace(oldName, newName);
+                        return ImageLinkPathReplacer.replacePath(loc.original, newFile.name);
                     });
 
                     // Delete Old File

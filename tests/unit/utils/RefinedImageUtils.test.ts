@@ -13,14 +13,16 @@ describe('RefinedImageUtils', () => {
 
         mockEditor = {
             getValue: vi.fn(),
-            getLine: vi.fn(),
-            lineCount: vi.fn(),
+            getLine: vi.fn((line: number) => ''),
+            lineCount: vi.fn(() => 1),
         } as unknown as Editor;
     });
 
     it('should identify Wiki links correctly', () => {
         const content = 'Some text\n![[test-image.png]]\nMore text';
-        (mockEditor.getValue as any).mockReturnValue(content);
+        const lines = content.split('\n');
+        (mockEditor.getLine as any).mockImplementation((n: number) => lines[n]);
+        (mockEditor.lineCount as any).mockReturnValue(lines.length);
 
         const img = document.createElement('img');
         img.setAttribute('src', 'app://local/test-image.png');
@@ -31,7 +33,9 @@ describe('RefinedImageUtils', () => {
 
     it('should identify Markdown links correctly', () => {
         const content = 'Some text\n![Alt text](test-image.png)\nMore text';
-        (mockEditor.getValue as any).mockReturnValue(content);
+        const lines = content.split('\n');
+        (mockEditor.getLine as any).mockImplementation((n: number) => lines[n]);
+        (mockEditor.lineCount as any).mockReturnValue(lines.length);
 
         const img = document.createElement('img');
         img.setAttribute('src', 'app://local/test-image.png');
@@ -42,7 +46,9 @@ describe('RefinedImageUtils', () => {
 
     it('should return null if image not found in editor', () => {
         const content = 'Some text\n![[other-image.png]]\nMore text';
-        (mockEditor.getValue as any).mockReturnValue(content);
+        const lines = content.split('\n');
+        (mockEditor.getLine as any).mockImplementation((n: number) => lines[n]);
+        (mockEditor.lineCount as any).mockReturnValue(lines.length);
 
         const img = document.createElement('img');
         img.setAttribute('src', 'app://local/test-image.png');
@@ -53,7 +59,9 @@ describe('RefinedImageUtils', () => {
 
     it('should handle images with spaces in name', () => {
         const content = '![[my image with spaces.png]]';
-        (mockEditor.getValue as any).mockReturnValue(content);
+        const lines = content.split('\n');
+        (mockEditor.getLine as any).mockImplementation((n: number) => lines[n]);
+        (mockEditor.lineCount as any).mockReturnValue(lines.length);
 
         const img = document.createElement('img');
         img.setAttribute('src', 'app://local/my%20image%20with%20spaces.png');
@@ -64,7 +72,9 @@ describe('RefinedImageUtils', () => {
 
     it('should handle online images with captions correctly', () => {
         const content = '![Online Caption](https://example.com/image.png)';
-        (mockEditor.getValue as any).mockReturnValue(content);
+        const lines = content.split('\n');
+        (mockEditor.getLine as any).mockImplementation((n: number) => lines[n]);
+        (mockEditor.lineCount as any).mockReturnValue(lines.length);
 
         const img = document.createElement('img');
         img.setAttribute('src', 'https://example.com/image.png');
@@ -75,7 +85,9 @@ describe('RefinedImageUtils', () => {
 
     it('should handle online images with encoded URLs', () => {
         const content = '![Encoded](https://example.com/image%20space.png)';
-        (mockEditor.getValue as any).mockReturnValue(content);
+        const lines = content.split('\n');
+        (mockEditor.getLine as any).mockImplementation((n: number) => lines[n]);
+        (mockEditor.lineCount as any).mockReturnValue(lines.length);
 
         const img = document.createElement('img');
         img.setAttribute('src', 'https://example.com/image%20space.png');

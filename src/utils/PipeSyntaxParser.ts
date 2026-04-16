@@ -15,7 +15,8 @@ import {
     PIPE_SIZE_PATTERN,
     PIPE_ALIGN_PATTERN,
     REGEX_WIKI_LINK_VALIDATE,
-    REGEX_MD_LINK_VALIDATE
+    REGEX_MD_LINK_VALIDATE,
+    getAllImageLinks
 } from './RegexPatterns';
 
 export type AlignType = 'left' | 'center' | 'right' | 'left-wrap' | 'right-wrap' | null;
@@ -76,6 +77,13 @@ export class PipeSyntaxParser {
 
     /**
      * 解析 Wiki 格式链接：![[path|attr1|attr2|...]]
+     *
+     * Obsidian 转义约定：
+     *   `\\`  = 字面反斜杠（所以 `\\\\` = 两个反斜杠）
+     *   `\|`  = 字面管道符（出现在路径中时）
+     *
+     * 分拆策略：遇到未被转义的 `|` 才分割。
+     * "被转义" = 前面有奇数个反斜杠。
      */
     private parseWikiLink(linkText: string): PipeSyntaxData | null {
         const match = linkText.match(PipeSyntaxParser.WIKI_LINK_PATTERN);
@@ -84,15 +92,14 @@ export class PipeSyntaxParser {
         }
 
         const content = match[1]; // path|attr1|attr2|...
-        // Split by unescaped pipes
-        const parts = content.split(/(?<!\\)\|/);
+        const parts = this.wikiSplitByUnescapedPipe(content);
 
         if (parts.length === 0) {
             return null;
         }
 
-        // 第一个片段是路径
-        const path = parts[0].trim();
+        // 第一个片段是路径（需要去掉转义还原为字面字符）
+        const path = this.unescapeWikiPath(parts[0].trim());
         const attrContent = parts.slice(1).join('|');
 
         const { alt, align, size } = this.parsePipeAttributes(attrContent, false);
@@ -104,6 +111,80 @@ export class PipeSyntaxParser {
             size,
             linkType: 'wiki'
         };
+    }
+
+    /**
+     * 按未被转义的管道符分拆 wiki link 内容。
+     * "被转义的管道" = 前面有奇数个反斜杠。
+     */
+    private wikiSplitByUnescapedPipe(text: string): string[] {
+        const result: string[] = [];
+        let i = 0;
+        let start = 0;
+
+        while (i < text.length) {
+            if (text[i] === "\\") {
+                // 跳过转义序列（\\ 或 \\\\| 或 \\\\ 等）
+                let bsCount = 0;
+                while (i < text.length && text[i] === "\\") { bsCount++; i++; }
+                // 遇到 `\\|` 时，bsCount 是偶数 => 这里的 | 是字面管道；
+                // 遇到 `\|` 时，bsCount 是奇数 => 这里的 | 是转义管道，应作为内容而非分隔符。
+                // 直接继续即可，下次循环看下一个字符。
+                continue;
+            }
+
+            if (text[i] === "|") {
+                // 奇数个反斜杠在前的管道 = 转义管道 => 跳过
+                let bsCount = 0;
+                let j = i - 1;
+                while (j >= 0 && text[j] === "\\") { bsCount++; j--; }
+                if (bsCount % 2 !== 0) { i++; continue; }
+
+                // 未被转义的管道 => 分隔符
+                result.push(text.slice(start, i));
+                start = i + 1;
+            }
+            i++;
+        }
+
+        result.push(text.slice(start));
+        return result;
+    }
+
+    /**
+     * 将 wiki link 路径中的转义序列还原为字面字符：
+     *   `\\`  -> `\`
+     *   `\|`  -> `|`
+     */
+    private unescapeWikiPath(text: string): string {
+        let result = "";
+        let i = 0;
+        while (i < text.length) {
+            if (text[i] === "\\") {
+                let bsCount = 0;
+                while (i < text.length && text[i] === "\\") { bsCount++; i++; }
+                // 每两个反斜杠还原为一个字面反斜杠
+                result += "\\".repeat(bsCount / 2);
+                if (bsCount % 2 !== 0 && i < text.length && text[i] === "|") {
+                    // 奇数个 + 后面是 | => 这个 | 是转义的字面管道
+                    result += "|";
+                    i++;
+                }
+                continue;
+            }
+            result += text[i];
+            i++;
+        }
+        return result;
+    }
+
+    /**
+     * 将字面字符转义为 wiki link 路径存储格式：
+     *   `\` -> `\\`
+     *   `|` -> `\|`
+     */
+    private escapeWikiPathForBuild(text: string): string {
+        return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
     }
 
     /**
@@ -146,7 +227,7 @@ export class PipeSyntaxParser {
      * 构建 Wiki 格式链接
      */
     private buildWikiLink(data: PipeSyntaxData): string {
-        const parts: string[] = [data.path];
+        const parts: string[] = [this.escapeWikiPathForBuild(data.path)];
 
         // 添加 alt（如果不是空格）
         if (data.alt && data.alt !== ' ') {
@@ -382,32 +463,16 @@ export class PipeSyntaxParser {
     }[] {
         const results: { fullMatch: string; index: number; data: PipeSyntaxData }[] = [];
 
-        // 1. 匹配 Wiki 链接
-        // 匹配 ![[...]]
-        const wikiRegex = /!\[\[([^\]]+?)\]\]/g;
-        let wikiMatch;
-        while ((wikiMatch = wikiRegex.exec(text)) !== null) {
-            const parsed = this.parseWikiLink(wikiMatch[0]);
-            if (parsed) {
-                results.push({
-                    fullMatch: wikiMatch[0],
-                    index: wikiMatch.index,
-                    data: parsed
-                });
-            }
-        }
+        // Use the centralized getAllImageLinks to ensure consistent regex matching
+        // with the rest of the codebase (RegexPatterns.ts)
+        const allLinks = getAllImageLinks(text);
 
-        // 2. 匹配 Markdown 链接
-        // 匹配 ![...](...)
-        // 支持一层嵌套括号，例如 ![alt](url(1).png)
-        const mdRegex = /!\[([^\]]*)\]\(((?:[^)(]+|\((?:[^)(]+|\([^)(]*\))*\))*)\)/g;
-        let mdMatch;
-        while ((mdMatch = mdRegex.exec(text)) !== null) {
-            const parsed = this.parseMarkdownLink(mdMatch[0]);
+        for (const link of allLinks) {
+            const parsed = this.parsePipeSyntax(link.source);
             if (parsed) {
                 results.push({
-                    fullMatch: mdMatch[0],
-                    index: mdMatch.index,
+                    fullMatch: link.source,
+                    index: text.indexOf(link.source),
                     data: parsed
                 });
             }

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import ImageConverterPlugin from '../../../src/main';
-import { ImageConverterSettingTab, DEFAULT_SETTINGS, ConversionPreset, FilenamePreset } from '../../../src/ImageConverterSettings';
-import type { LinkFormatPreset } from '../../../src/LinkFormatSettings';
+import { ImageConverterSettingTab, DEFAULT_SETTINGS, ConversionPreset, FilenamePreset } from '/types';
+import type { LinkFormatPreset } from '../../../src/settings/LinkFormatSettings';
 import { App } from 'obsidian';
 
 // Mock SortableJS to capture onEnd callbacks for reorder (11.9)

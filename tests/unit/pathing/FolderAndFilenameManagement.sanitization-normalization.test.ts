@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { FolderAndFilenameManagement } from '../../../src/FolderAndFilenameManagement';
-import { VariableProcessor } from '../../../src/VariableProcessor';
-import { SupportedImageFormats } from '../../../src/SupportedImageFormats';
-import { DEFAULT_SETTINGS } from '../../../src/ImageConverterSettings';
+import { FolderAndFilenameManagement } from '../../../src/local/FolderAndFilenameManagement';
+import { VariableProcessor } from '../../../src/local/VariableProcessor';
+import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
 import { fakeApp, fakeVault } from '../../factories/obsidian';
 
 describe('FolderAndFilenameManagement sanitization and ensureFolderExists', () => {

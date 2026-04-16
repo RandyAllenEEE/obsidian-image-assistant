@@ -72,10 +72,10 @@ export function renderOCRSettingsSection(
         .setDesc(t("SETTING_OCR_LATEX_PROVIDER_DESC"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("SimpleTex", "SimpleTex (Online)")
-                .addOption("Pix2Tex", "Pix2Tex (Self-hosted)")
-                .addOption("Texify", "Texify (Self-hosted)")
-                .addOption("LLM", "LLM (AI Model)")
+                .addOption("SimpleTex", t("SETTING_OCR_LATEX_PROVIDER_SIMPLETEX"))
+                .addOption("Pix2Tex", t("SETTING_OCR_LATEX_PROVIDER_PIX2TEX"))
+                .addOption("Texify", t("SETTING_OCR_LATEX_PROVIDER_TEXIFY"))
+                .addOption("LLM", t("SETTING_OCR_LATEX_PROVIDER_LLM"))
                 .setValue(plugin.settings.ocrSettings.latexProvider)
                 .onChange(async (value: any) => {
                     plugin.settings.ocrSettings.latexProvider = value;
@@ -90,8 +90,8 @@ export function renderOCRSettingsSection(
         .setDesc(t("SETTING_OCR_MARKDOWN_PROVIDER_DESC"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("Texify", "Texify")
-                .addOption("LLM", "LLM")
+                .addOption("Texify", t("SETTING_OCR_MARKDOWN_PROVIDER_TEXIFY"))
+                .addOption("LLM", t("SETTING_OCR_MARKDOWN_PROVIDER_LLM"))
                 .setValue(plugin.settings.ocrSettings.markdownProvider)
                 .onChange(async (value: any) => {
                     plugin.settings.ocrSettings.markdownProvider = value;
@@ -202,7 +202,7 @@ export function renderOCRSettingsSection(
         .setName(t("SETTING_OCR_PL_URL"))
         .setDesc(t("SETTING_OCR_PL_URL_DESC"))
         .addText(text => text
-            .setPlaceholder("http://127.0.0.1:8502/predict/")
+            .setPlaceholder(t("PLACEHOLDER_PIX2TEX_URL"))
             .setValue(plugin.settings.ocrSettings.pix2tex.url)
             .onChange(async v => { plugin.settings.ocrSettings.pix2tex.url = v; await plugin.saveSettings(); })
         );
@@ -213,7 +213,7 @@ export function renderOCRSettingsSection(
         .setName(t("SETTING_OCR_TEXIFY_URL"))
         .setDesc(t("SETTING_OCR_PL_URL_DESC")) // Kept original desc
         .addText(text => text
-            .setPlaceholder("http://127.0.0.1:5000/predict")
+            .setPlaceholder(t("PLACEHOLDER_TEXIFY_URL"))
             .setValue(plugin.settings.ocrSettings.texify.url)
             .onChange(async v => { plugin.settings.ocrSettings.texify.url = v; await plugin.saveSettings(); })
         );
@@ -224,12 +224,12 @@ export function renderOCRSettingsSection(
 
     // Provider Type Setting
     new Setting(settingsContentWrapper)
-        .setName("LLM Provider Type")
-        .setDesc("Choose between OpenAI-compatible API or Ollama Native API.")
+        .setName(t("SETTING_OCR_LLM_PROVIDER_TYPE"))
+        .setDesc(t("SETTING_OCR_LLM_PROVIDER_TYPE_DESC"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("openai", "OpenAI / Compatible")
-                .addOption("ollama", "Ollama Native")
+                .addOption("openai", t("SETTING_OCR_LLM_PROVIDER_OPENAI"))
+                .addOption("ollama", t("SETTING_OCR_LLM_PROVIDER_OLLAMA"))
                 .setValue(plugin.settings.ocrSettings.aiModel.providerType || "openai")
                 .onChange(async (value: "openai" | "ollama") => {
                     plugin.settings.ocrSettings.aiModel.providerType = value;
@@ -245,7 +245,7 @@ export function renderOCRSettingsSection(
         .setName(t("SETTING_OCR_LLM_ENDPOINT"))
         .setDesc(t("SETTING_OCR_LLM_ENDPOINT_DESC"))
         .addText(text => text
-            .setPlaceholder(isOllama ? "http://localhost:11434/api/chat" : "https://api.openai.com/v1/chat/completions")
+            .setPlaceholder(isOllama ? t("SETTING_OCR_LLM_ENDPOINT_PLACEHOLDER_OLLAMA") : t("SETTING_OCR_LLM_ENDPOINT_PLACEHOLDER_OPENAI"))
             .setValue(plugin.settings.ocrSettings.aiModel.endpoint)
             .onChange(async v => { plugin.settings.ocrSettings.aiModel.endpoint = v; await plugin.saveSettings(); })
         );
@@ -255,7 +255,7 @@ export function renderOCRSettingsSection(
         .setName(t("SETTING_OCR_LLM_MODEL"))
         .setDesc(t("SETTING_OCR_LLM_MODEL_DESC"))
         .addText(text => text
-            .setPlaceholder(isOllama ? "llava" : "gpt-4-vision-preview")
+            .setPlaceholder(isOllama ? t("SETTING_OCR_LLM_MODEL_PLACEHOLDER_OLLAMA") : t("SETTING_OCR_LLM_MODEL_PLACEHOLDER_OPENAI"))
             .setValue(plugin.settings.ocrSettings.aiModel.model)
             .onChange(async v => { plugin.settings.ocrSettings.aiModel.model = v; await plugin.saveSettings(); })
         );
@@ -263,7 +263,7 @@ export function renderOCRSettingsSection(
     const apiKeySecretId = plugin.settings.ocrSettings.aiModel.apiKeySecretId;
     const matchSetting = new Setting(settingsContentWrapper)
         .setName(t("SETTING_OCR_LLM_KEY"))
-        .setDesc(t("SETTING_OCR_LLM_KEY_DESC") + (apiKeySecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + apiKeySecretId + ")" : "") + (isOllama ? " (Optional for Ollama)" : ""));
+        .setDesc(t("SETTING_OCR_LLM_KEY_DESC") + (apiKeySecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + apiKeySecretId + ")" : "") + (isOllama ? t("SETTING_OCR_LLM_KEY_OPTIONAL") : ""));
 
     if ((plugin.app as any).secretStorage && SecretComponent) {
         try {
@@ -293,7 +293,7 @@ export function renderOCRSettingsSection(
         .setDesc(t("SETTING_OCR_LLM_MAX_TOKENS_DESC"))
         .addText(text => {
             text
-                .setPlaceholder("300")
+                .setPlaceholder(t("PLACEHOLDER_MAX_TOKENS"))
                 .setValue(String(plugin.settings.ocrSettings.aiModel.maxTokens))
                 .onChange(async (value) => {
                     const num = parseInt(value);

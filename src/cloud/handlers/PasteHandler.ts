@@ -5,6 +5,7 @@ import { CloudLinkFormatter } from "../CloudLinkFormatter";
 import { EditorContentInserter } from "../../utils/EditorContentInserter";
 import { t } from "../../lang/helpers";
 import { CloudResourceHelpers } from "../utils/CloudResourceHelpers";
+import { getAllImageLinks } from "../../utils/RegexPatterns";
 
 import { BasePasteHandler } from "../../core/BasePasteHandler";
 
@@ -96,21 +97,14 @@ export class PasteHandler extends BasePasteHandler {
             return;
         }
 
-        const imageUrlRegex = /!\[(.*?)\]\((https?:\/\/[^\s)]+)\)/g;
-        const markdownMatches = [...clipboardText.matchAll(imageUrlRegex)];
+        // Use centralized getAllImageLinks to extract both markdown and wiki image links
+        const allLinks = getAllImageLinks(clipboardText);
+        const networkLinks = allLinks.filter(link =>
+            (link.path.startsWith('http://') || link.path.startsWith('https://')) &&
+            !this.helpers.isBlacklistedDomain(link.path)
+        );
 
-        // Simple regex for wikilinks (duplicating to avoid circular dependency complex imports)
-        const REGEX_WIKI_NETWORK_IMAGE = /!\[\[(https?:\/\/[^\]]+)(?:\|([^\]]+))?\]\]/g;
-        const wikilinkMatches = [...clipboardText.matchAll(REGEX_WIKI_NETWORK_IMAGE)];
-
-        const totalMatches = markdownMatches.length + wikilinkMatches.length;
-        if (totalMatches === 0) return;
-
-        // Filter blacklisted
-        const validMarkdownMatches = markdownMatches.filter(match => !this.helpers.isBlacklistedDomain(match[2]));
-        const validWikilinkMatches = wikilinkMatches.filter(match => !this.helpers.isBlacklistedDomain(match[1]));
-
-        if (validMarkdownMatches.length === 0 && validWikilinkMatches.length === 0) return;
+        if (networkLinks.length === 0) return;
 
         evt.preventDefault();
 
@@ -120,28 +114,10 @@ export class PasteHandler extends BasePasteHandler {
             this.plugin
         );
 
-        // Process Markdown
-        for (const match of validMarkdownMatches) {
-            const originalLink = match[0];
-            const imageUrl = match[2];
-            try {
-                const uploadResult = await uploaderManager.upload([imageUrl]);
-                if (uploadResult.success && uploadResult.result.length > 0) {
-                    const cloudUrl = uploadResult.result[0];
-                    const cloudLink = CloudLinkFormatter.formatCloudLink(
-                        cloudUrl,
-                        this.plugin.settings.pasteHandling.cloud,
-                        originalLink
-                    );
-                    newContent = newContent.replace(originalLink, cloudLink);
-                }
-            } catch (e) { console.error(e); }
-        }
-
-        // Process Wikilink
-        for (const match of validWikilinkMatches) {
-            const originalLink = match[0];
-            const imageUrl = match[1];
+        // Process all network image links (both markdown and wiki format)
+        for (const link of networkLinks) {
+            const originalLink = link.source;
+            const imageUrl = link.path;
             try {
                 const uploadResult = await uploaderManager.upload([imageUrl]);
                 if (uploadResult.success && uploadResult.result.length > 0) {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BatchImageProcessor } from '../../../src/BatchImageProcessor';
+import { BatchImageProcessor } from '../../../src/local/BatchImageProcessor';
 import { fakeApp, fakeVault, fakeTFile } from '../../factories/obsidian';
 
 function makePluginStub(overrides: any = {}) {

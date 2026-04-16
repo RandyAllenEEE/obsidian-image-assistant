@@ -4,7 +4,8 @@ import { BatchTask, BatchItemResult, BatchResult, BatchScope } from "../../../..
 import { IBatchMode, ReviewAction } from "./IBatchMode";
 import { t } from "../../../../lang/helpers";
 import { CloudImageDeleter } from "../../../../cloud/CloudImageDeleter";
-import { UploadHelper } from "../../../../utils/UploadHelper";
+import { ImageLinkPathReplacer } from "../../../../utils/ImageLinkPathReplacer";
+import { getAllImageLinks } from "../../../../utils/RegexPatterns";
 
 export class DownloadMode implements IBatchMode {
     id = "download" as const;
@@ -57,25 +58,35 @@ export class DownloadMode implements IBatchMode {
         // If we want to support batch for OTHER files, we must rely on MetadataCache.
 
         for (const file of files) {
-            const cache = this.app.metadataCache.getFileCache(file);
-            if (!cache) continue;
-
             const links = new Set<string>();
+            const useContentScan = !!this.plugin.settings.global.codeBlockImageLinkIndexing;
 
-            // 1. Embeds
-            if (cache.embeds) {
-                for (const embed of cache.embeds) {
-                    if (embed.link.startsWith("http")) {
-                        links.add(embed.link);
+            if (useContentScan) {
+                const content = await this.app.vault.read(file);
+                for (const link of getAllImageLinks(content)) {
+                    const rawPath = (link.path ?? "").trim();
+                    if (!rawPath.startsWith("http://") && !rawPath.startsWith("https://")) continue;
+                    if (!this.plugin.supportedImageFormats.isSupported(undefined, rawPath)) continue;
+                    links.add(rawPath);
+                }
+            } else {
+                const cache = this.app.metadataCache.getFileCache(file);
+                if (!cache) continue;
+
+                if (cache.embeds) {
+                    for (const embed of cache.embeds) {
+                        if (embed.link.startsWith("http://") || embed.link.startsWith("https://")) {
+                            links.add(embed.link);
+                        }
                     }
                 }
-            }
 
-            // 2. Links (some users use []() for images)
-            if (cache.links) {
-                for (const link of cache.links) {
-                    if (link.link.startsWith("http") && this.plugin.supportedImageFormats.isSupported(undefined, link.link)) {
-                        links.add(link.link);
+                if (cache.links) {
+                    for (const link of cache.links) {
+                        if ((link.link.startsWith("http://") || link.link.startsWith("https://"))
+                            && this.plugin.supportedImageFormats.isSupported(undefined, link.link)) {
+                            links.add(link.link);
+                        }
                     }
                 }
             }
@@ -145,7 +156,7 @@ export class DownloadMode implements IBatchMode {
         };
 
         try {
-            const result = await this.plugin.networkDownloader.batchDownload([downloadTask]);
+            const result = await this.plugin.cloudImageHandler.batchDownload([downloadTask]);
             if (result.successful.length > 0) {
                 return result.successful[0];
             } else if (result.failed.length > 0) {
@@ -219,8 +230,9 @@ export class DownloadMode implements IBatchMode {
         // and replace occurrences of the URL.
 
         let filesToScan: TFile[] = [];
-        if (this.scope === "note" && this.target instanceof TFile) filesToScan = [this.target];
-        else if (this.scope === "folder" && this.target instanceof TFolder) {
+        if (this.scope === "note" && this.target instanceof TFile) {
+            filesToScan = [this.target];
+        } else if (this.scope === "folder" && this.target instanceof TFolder) {
             // Collect
             const collectFiles = (folder: TFolder) => {
                 for (const child of folder.children) {
@@ -232,6 +244,7 @@ export class DownloadMode implements IBatchMode {
         } else {
             filesToScan = this.app.vault.getMarkdownFiles();
         }
+        const allowedPathSet = new Set(filesToScan.map(f => f.path));
 
         let count = 0;
 
@@ -245,25 +258,22 @@ export class DownloadMode implements IBatchMode {
             const localFile = this.app.vault.getAbstractFileByPath(localPath) as TFile;
             if (!localFile) continue;
 
-            for (const note of filesToScan) {
-                // Ensure we only update if the note actually contains the link (optimization)
-                // MetadataCache check
-                const cache = this.app.metadataCache.getFileCache(note);
-                // Check if url is in embeds or links
-                // Simplification: Just try update. It's safe.
+            const references = await this.plugin.vaultReferenceManager.getFilesReferencingUrl(url);
+            const notesToUpdate = Array.from(new Set(
+                references
+                    .map(r => r.file)
+                    .filter(note => allowedPathSet.has(note.path))
+            ));
 
+            for (const note of notesToUpdate) {
                 const updated = await this.plugin.vaultReferenceManager.updateReferencesInFile(note, url, (loc) => {
                     const relativePath = this.app.metadataCache.fileToLinktext(
                         localFile,
                         note.path
                         // generateMarkdownLink? 
                     );
-                    // Standard obsidian link format.
-                    // If plugin setting says 'use wikilinks' or not? 
-                    // `fileToLinktext` respects 'Use Wikilinks' setting? No, it returns text.
-                    // We need `app.fileManager.generateMarkdownLink(localFile, note.path)`? 
-                    // Yes, that handles settings best.
-                    return this.app.fileManager.generateMarkdownLink(localFile, note.path);
+                    // Path-only replacement: preserve original wiki/markdown syntax & pipe syntax.
+                    return ImageLinkPathReplacer.replacePath(loc.original, relativePath);
                 });
                 count += updated;
             }

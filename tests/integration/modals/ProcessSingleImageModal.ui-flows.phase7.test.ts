@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ProcessSingleImageModal } from '../../../src/ProcessSingleImageModal';
+import { ProcessSingleImageModal } from '../../../src/ui/modals/ProcessSingleImageModal';
 import ImageConverterPlugin from '../../../src/main';
 import { App, TFile } from 'obsidian';
 import { fakeApp, fakeVault, fakeTFile } from '../../factories/obsidian';

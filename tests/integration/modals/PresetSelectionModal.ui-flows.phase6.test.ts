@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PresetSelectionModal } from '../../../src/PresetSelectionModal';
+import { PresetSelectionModal } from '../../../src/ui/modals/PresetSelectionModal';
 import ImageConverterPlugin from '../../../src/main';
 import { App } from 'obsidian';
-import { VariableProcessor } from '../../../src/VariableProcessor';
-import type { ConversionPreset, FilenamePreset, FolderPreset } from '../../../src/ImageConverterSettings';
-import type { LinkFormatPreset } from '../../../src/LinkFormatSettings';
-import type { NonDestructiveResizePreset } from '../../../src/NonDestructiveResizeSettings';
+import { VariableProcessor } from '../../../src/local/VariableProcessor';
+import type { ConversionPreset, FilenamePreset, FolderPreset } from '/types';
+import type { LinkFormatPreset } from '../../../src/settings/LinkFormatSettings';
+import type { NonDestructiveResizePreset } from '../../../src/settings/NonDestructiveResizeSettings';
 
 function makeAppWithVault(files: string[] = []) {
   const imageFiles = files.map((name) => ({

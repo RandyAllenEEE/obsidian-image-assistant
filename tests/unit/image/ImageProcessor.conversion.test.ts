@@ -16,8 +16,8 @@ vi.mock('sortablejs');
 vi.mock('piexifjs');
 vi.mock('@/main');
 
-import { ImageProcessor } from '../../../src/ImageProcessor';
-import { SupportedImageFormats } from '../../../src/SupportedImageFormats';
+import { ImageProcessor } from '../../../src/local/ImageProcessor';
+import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
 import { 
   makePngBytes, 
   makeJpegBytes, 

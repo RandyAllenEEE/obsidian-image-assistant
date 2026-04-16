@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { LinkFormatter } from '../../../src/LinkFormatter';
-import type { NonDestructiveResizePreset } from '../../../src/NonDestructiveResizeSettings';
+import { LinkFormatter } from '../../../src/utils/LinkFormatter';
+import type { NonDestructiveResizePreset } from '../../../src/settings/NonDestructiveResizeSettings';
 import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
 import { setMockImageSize } from '../../helpers/test-setup';
 

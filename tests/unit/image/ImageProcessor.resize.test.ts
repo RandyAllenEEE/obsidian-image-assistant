@@ -16,8 +16,8 @@ vi.mock('sortablejs');
 vi.mock('piexifjs');
 vi.mock('../../../src/main');
 
-import { ImageProcessor } from '../../../src/ImageProcessor';
-import { SupportedImageFormats } from '../../../src/SupportedImageFormats';
+import { ImageProcessor } from '../../../src/local/ImageProcessor';
+import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
 import { makePngBytes, makeImageBlob } from '../../factories/image';
 import { fakeCanvas, fakeImage } from '../../factories/canvas';
 import { setMockImageSize } from '../../helpers/test-setup';
@@ -29,8 +29,9 @@ describe('ImageProcessor - Resize Math Tests', () => {
 
   beforeEach(() => {
     // Arrange: Set up processor and mocks
-    supportedFormats = new SupportedImageFormats(undefined as any);
-    processor = new ImageProcessor(supportedFormats);
+    const mockApp = {} as any;
+    supportedFormats = new SupportedImageFormats(mockApp);
+    processor = new ImageProcessor(mockApp, supportedFormats);
     
     // Mock document.createElement for canvas without replacing whole document
     mockCanvas = fakeCanvas({ w: 100, h: 100 });

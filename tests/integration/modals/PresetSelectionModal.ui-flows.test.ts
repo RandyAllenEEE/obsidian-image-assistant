@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PresetSelectionModal } from '../../../src/PresetSelectionModal';
+import { PresetSelectionModal } from '../../../src/ui/modals/PresetSelectionModal';
 import ImageConverterPlugin from '../../../src/main';
 import { App } from 'obsidian';
-import { VariableProcessor } from '../../../src/VariableProcessor';
+import { VariableProcessor } from '../../../src/local/VariableProcessor';
 
 function makeAppWithVault(files: string[] = []) {
   const imageFiles = files.map((name) => ({

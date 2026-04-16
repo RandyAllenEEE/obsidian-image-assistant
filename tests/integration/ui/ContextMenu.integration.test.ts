@@ -4,10 +4,10 @@ import { fakeApp, fakeTFile, fakeVault, fakePluginManifest } from '../../factori
 import { Menu } from 'obsidian';
 
 // Mock modules that are constructed by ContextMenu actions
-vi.mock('../../../src/ProcessSingleImageModal.ts', () => ({
+vi.mock('/modals/ProcessSingleImageModal, () => ({
   ProcessSingleImageModal: vi.fn().mockImplementation(function () { return { open: vi.fn() } as any; })
 }));
-vi.mock('../../../src/ImageAnnotation.ts', () => ({
+vi.mock('/ImageAnnotation, () => ({
   ImageAnnotationModal: vi.fn().mockImplementation(function () { return { open: vi.fn() } as any; })
 }));
 
@@ -31,7 +31,7 @@ describe('ContextMenu integration (14.1–14.6)', () => {
 beforeEach(async () => {
     const note = fakeTFile({ path: 'n1.md', name: 'n1.md', extension: 'md' });
     // Load ContextMenu after mocks are registered
-    ContextMenuCls = (await import('../../../src/ContextMenu')).ContextMenu;
+    ContextMenuCls = (await import('/ContextMenu')).ContextMenu;
     const vault = fakeVault({ files: [note] });
     app = fakeApp({ vault });
 
@@ -120,7 +120,7 @@ beforeEach(async () => {
       const file = fakeTFile({ path: 'imgs/pic.jpg', name: 'pic.jpg', extension: 'jpg' });
       ((app.vault as any).getFiles as any).mockReturnValue([file]);
 
-      const mod = await import('../../../src/ProcessSingleImageModal.ts');
+      const mod = await import('/modals/ProcessSingleImageModal');
       const openSpy = vi.spyOn(mod as any, 'ProcessSingleImageModal');
       const ctx = new ContextMenuCls(app as any, plugin, {} as any, {} as any);
       const evt = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
@@ -142,7 +142,7 @@ beforeEach(async () => {
       const file = fakeTFile({ path: 'imgs/pic.jpg', name: 'pic.jpg', extension: 'jpg' });
       ((app.vault as any).getFiles as any).mockReturnValue([file]);
 
-      const mod = await import('../../../src/ImageAnnotation.ts');
+      const mod = await import('/ImageAnnotation');
       const modalSpy = vi.spyOn(mod as any, 'ImageAnnotationModal');
       const ctx = new ContextMenuCls(app as any, plugin, {} as any, {} as any);
       img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));

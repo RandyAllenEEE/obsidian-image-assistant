@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SupportedImageFormats } from '../../../src/SupportedImageFormats';
+import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
 import { makePngBytes, makeJpegBytes, corruptedBytes, makeImageBlob } from '../../factories/image';
 
 function makeIsoBmffFtypBytes(majorBrand: string): ArrayBuffer {

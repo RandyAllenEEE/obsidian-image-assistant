@@ -5,3 +5,4 @@ export { ImageFileCollector } from './ImageFileCollector';
 export { BatchProgressManager } from './BatchProgressManager';
 export { BatchExecutor } from './BatchExecutor';
 export { BatchConfirmDialog, showBatchConfirmDialog } from './BatchConfirmDialog';
+export { computeMultiRefItems, buildAllowedPathSet } from './BatchReferenceScanner';

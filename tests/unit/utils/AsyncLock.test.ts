@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AsyncLock } from '../../../src/AsyncLock';
+import { AsyncLock } from '../../../src/utils/AsyncLock';
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));

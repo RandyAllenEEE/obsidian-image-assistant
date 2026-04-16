@@ -48,6 +48,7 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
 
         modalBehavior: "never",
         enableContextMenu: true,
+        codeBlockImageLinkIndexing: true,
         showSpaceSavedNotification: true,
         revertToOriginalIfLarger: false,
         minimumCompressionSavingsInKB: 30,
@@ -148,26 +149,26 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
     },
 
     annotationPresets: {
-        drawing: Array(3).fill({
+        drawing: Array(3).fill(null).map(() => ({
             color: '#000000',
             opacity: 1,
             blendMode: 'source-over',
             size: 2
-        }),
-        arrow: Array(3).fill({
+        })),
+        arrow: Array(3).fill(null).map(() => ({
             color: '#000000',
             opacity: 1,
             blendMode: 'source-over',
             size: 2
-        }),
-        text: Array(3).fill({
+        })),
+        text: Array(3).fill(null).map(() => ({
             color: '#000000',
             opacity: 1,
             blendMode: 'source-over',
             size: 24,
             backgroundColor: 'transparent',
             backgroundOpacity: 0.7
-        })
+        }))
     },
     subfolderTemplate: "",
     resizeCursorLocation: "none",

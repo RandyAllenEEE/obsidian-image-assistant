@@ -3,16 +3,19 @@
  */
 
 // Matches standard Markdown image links:
-// 1. ![alt](<path/to/image.png>)
-// 2. ![alt](path/to/image.png "title")
-// 3. ![alt](https://example.com/image.png)
-export const REGEX_FILE = /!\[(.* ?)\]\(<(\S+\.\w+)>\)|!\[(.*?)\]\((\S+\.\w+)(?:\s+"[^"]*")?\)|!\[(.*?)\]\((https?:\/\/.*?)\)/g;
+// 1. ![alt](<path/to/image.png>)           — angle-bracketed path
+// 2. ![alt](path/to/image.png "title")     — plain path + optional title
+// 3. ![alt](https://example.com/image.png) — full URL with extension
+// 4. ![alt](https://example.com/image)      — URL without extension
+// 5. ![alt](data:image/png;base64,...)     — data URI
+// Extension requirement (\.\w+) is now OPTIONAL.
+export const REGEX_FILE = /!\[(.*?)?\]\(<([^)>]+)>\)|!\[(.*?)?\]\((\S+)(?:\s+"[^"]*")?\)|!\[(.*?)?\]\((https?:\/\/\S+)\)/g;
 
 // Matches WikiLinks:
 // 1. ![[image.png]]
 // 2. ![[image.png|alt text]]
 // 3. ![[https://example.com/image.png]] (network image)
-export const REGEX_WIKI_FILE = /!\[\[(.*?)(\s*?\|.*?)?\]\]/g;
+export const REGEX_WIKI_FILE = /!\[\[([^\]]+?)(?:\s*\|[^\]]*)?\]\]/g;
 
 // Matches WikiLink network images specifically:
 // ![[https://example.com/image.png]]
@@ -41,57 +44,70 @@ export interface ImageLink {
 
 /**
  * Helper function to extract all image links from a text using the shared regexes.
+ *
+ * REGEX_FILE groups:
+ *   Alt 1: !\[(...)?\]\(<([^)>]+)>\)
+ *   Alt 2: !\[(...)?\]\((\S+)(?:\s+"[^"]*")?\)
+ *   Alt 3: !\[(...)?\]\((https?:\/\/\S+)\)
+ *
+ *   Group 1 = alt (alt 1),  Group 2 = path (alt 1)
+ *   Group 3 = alt (alt 2),  Group 4 = path (alt 2)
+ *   Group 5 = alt (alt 3),  Group 6 = url  (alt 3)
+ *
+ * For WikiLinks REGEX_WIKI_FILE, the non-greedy .*? stops at the first `|` in the path,
+ * which breaks for paths containing literal pipes (e.g. `image|file.png`).
+ * We accept this limitation and treat everything after the first `|` as attributes.
  */
 export function getAllImageLinks(text: string): ImageLink[] {
     const fileArray: ImageLink[] = [];
 
-    // Match Markdown Links
-    // Reset lastIndex because these are global regexes and might have state if reused (though we export consts, 
-    // it's safer to treat them as stateless or re-instantiate if needed, but here simple matchAll is fine)
-    // Actually, matchAll does not rely on lastIndex of the regex object itself if we use the iterator correctly.
-    const matches = text.matchAll(REGEX_FILE);
-    for (const match of matches) {
+    // --- Markdown links ---
+    // Using exported REGEX_FILE (same pattern as inline)
+    const mdRegex = new RegExp(REGEX_FILE.source, 'g');
+    for (const match of text.matchAll(mdRegex)) {
         const source = match[0];
 
-        let name = match[1];
-        let path = match[2];
+        let name: string | undefined;
+        let path: string | undefined;
 
-        // Handle different capture groups
-        if (name === undefined) {
-            name = match[3];
+        // Alt 1: angle-bracketed path
+        if (match[2] !== undefined) {
+            name = match[1];
+            path = match[2];
         }
-        if (path === undefined) {
+        // Alt 2: plain path + optional title
+        else if (match[4] !== undefined) {
+            name = match[3];
             path = match[4];
         }
-        if (path === undefined) {
-            path = match[6]; // URL case
+        // Alt 3: URL
+        else if (match[6] !== undefined) {
+            name = match[5];
+            path = match[6];
         }
 
         if (path) {
             fileArray.push({
-                path: path,
-                name: name || "",
-                source: source,
+                path,
+                name: name ?? "",
+                source,
             });
         }
     }
 
-    // Match Wiki Links
-    const wikiMatches = text.matchAll(REGEX_WIKI_FILE);
-    for (const match of wikiMatches) {
+    // --- Wiki links ---
+    // Using exported REGEX_WIKI_FILE (same pattern as inline)
+    const wikiRegex = new RegExp(REGEX_WIKI_FILE.source, 'g');
+    for (const match of text.matchAll(wikiRegex)) {
         const source = match[0];
-        const path = match[1];
-        let name = path;
-
-        // If there is a custom display name/size
-        if (match[2]) {
-            name = `${name}${match[2]}`;
-        }
+        const rawContent = match[1]; // path|attr|...
+        const pipeIdx = rawContent.indexOf("|");
+        const path = pipeIdx < 0 ? rawContent.trim() : rawContent.slice(0, pipeIdx).trim();
 
         fileArray.push({
-            path: path,
-            name: name,
-            source: source,
+            path,
+            name: path,
+            source,
         });
     }
 

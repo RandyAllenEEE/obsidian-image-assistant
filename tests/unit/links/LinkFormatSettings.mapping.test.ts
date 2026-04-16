@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { LinkFormatter } from '../../../src/LinkFormatter';
-import { type LinkFormatPreset, type PathFormat } from '../../../src/LinkFormatSettings';
+import { LinkFormatter } from '../../../src/utils/LinkFormatter';
+import { type LinkFormatPreset, type PathFormat } from '../../../src/settings/LinkFormatSettings';
 import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
 
 function makeAppWithFile(path: string) {

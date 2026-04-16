@@ -74,6 +74,18 @@ export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: Ima
             })
         );
 
+    // Code blocks / admonition reference indexing toggle
+    new Setting(settingsContentWrapper)
+        .setName(t("SETTING_CODE_BLOCK_IMAGE_LINK_INDEXING_NAME"))
+        .setDesc(t("SETTING_CODE_BLOCK_IMAGE_LINK_INDEXING_DESC"))
+        .addToggle(toggle => toggle
+            .setValue(plugin.settings.global.codeBlockImageLinkIndexing)
+            .onChange(async (value) => {
+                plugin.settings.global.codeBlockImageLinkIndexing = value;
+                await plugin.saveSettings();
+            })
+        );
+
     new Setting(settingsContentWrapper)
         .setName(t("SETTING_SHOW_NOTIFICATION_NAME"))
         .setDesc(t("SETTING_SHOW_NOTIFICATION_DESC"))

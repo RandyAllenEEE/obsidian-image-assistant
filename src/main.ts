@@ -51,8 +51,6 @@ import { ConfirmDialog } from "./settings/SettingsModals";
 import { PresetSelectionModal } from "./ui/modals/PresetSelectionModal";
 
 import { VaultReferenceManager } from "./utils/VaultReferenceManager";
-
-import { NetworkImageDownloader } from "./cloud/NetworkImageDownloader";
 import { UnusedFileCleanerModal } from "./utils/UnusedFileCleanerModal";
 import { PasteModeConfigModal } from "./ui/modals/PasteModeConfigModal";
 
@@ -133,8 +131,6 @@ export default class ImageConverterPlugin extends Plugin {
     historyManager: UploadHistoryManager;
     // upload helper for batch upload and download
     uploadHelper: UploadHelper;
-    // network image downloader
-    networkDownloader: NetworkImageDownloader;
 
     // Handlers
     cloudImageHandler: CloudImageHandler;
@@ -153,7 +149,7 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     public async downloadFolderImagesPublic(folderPath: string, recursive: boolean) {
-        await this.networkDownloader.downloadFolderImages(folderPath, recursive);
+        await this.cloudImageHandler.downloadFolderImages(folderPath, recursive);
     }
 
     // unused file cleaner
@@ -295,7 +291,7 @@ export default class ImageConverterPlugin extends Plugin {
         this.variableProcessor = new VariableProcessor(this.app, this.settings);
         this.linkFormatter = new LinkFormatter(this.app);
         this.imageProcessor = new ImageProcessor(this.app, this.supportedImageFormats);
-        this.vaultReferenceManager = new VaultReferenceManager(this.app);
+        this.vaultReferenceManager = new VaultReferenceManager(this.app, this);
 
         // Initialize History Manager
         this.historyManager = new UploadHistoryManager(this.app, this);
@@ -334,10 +330,8 @@ export default class ImageConverterPlugin extends Plugin {
             );
         }
 
-        // Initialize network image downloader
-        this.networkDownloader = new NetworkImageDownloader(
-            this.app,
-            this,
+        // Initialize network image downloader via CloudImageHandler facade
+        this.cloudImageHandler.initializeDownloader(
             this.uploadHelper,
             this.folderAndFilenameManagement
         );
@@ -719,9 +713,9 @@ export default class ImageConverterPlugin extends Plugin {
 
     /**
      * 获取剪贴板中的图片数据
-     * 注意: 仅桌面端可用，移动端不支持 electron API
+     * 注意: 仅桌面端可用，移动端不支持 clipboard API
      */
-    private getClipboardImage(): Uint8Array | null {
+    private async getClipboardImage(): Promise<Uint8Array | null> {
         // 移动端检查
         if (Platform.isMobile) {
             new Notice(t("MSG_OCR_DESKTOP_ONLY"));
@@ -729,22 +723,37 @@ export default class ImageConverterPlugin extends Plugin {
         }
 
         try {
-            // 动态导入 electron,避免在非桌面端报错
-            // @ts-ignore
-            const { clipboard } = require('electron');
+            // 使用 Web Clipboard API 读取图片
+            // 在 Obsidian 桌面版中，navigator.clipboard 可用于访问剪贴板内容
+            const clipboardItems = await navigator.clipboard.read();
 
-            const availableFormats = clipboard.availableFormats();
-            const hasImage = availableFormats.some((format: string) =>
-                format.includes('image/png') || format.includes('image/jpeg')
-            );
-
-            if (!hasImage) {
-                new Notice(t("MSG_NO_CLIPBOARD_IMAGE"));
-                return null;
+            for (const item of clipboardItems) {
+                for (const type of item.types) {
+                    if (type.startsWith('image/')) {
+                        const blob = await item.getType(type);
+                        const arrayBuffer = await blob.arrayBuffer();
+                        return new Uint8Array(arrayBuffer);
+                    }
+                }
             }
 
-            const nativeImage = clipboard.readImage();
-            return new Uint8Array(nativeImage.toPNG());
+            // 检查是否有 PNG 或 JPEG 格式的图片数据
+            // 某些情况下图片可能以其他格式提供
+            for (const item of clipboardItems) {
+                if (item.types.includes('image/png')) {
+                    const blob = await item.getType('image/png');
+                    const arrayBuffer = await blob.arrayBuffer();
+                    return new Uint8Array(arrayBuffer);
+                }
+                if (item.types.includes('image/jpeg')) {
+                    const blob = await item.getType('image/jpeg');
+                    const arrayBuffer = await blob.arrayBuffer();
+                    return new Uint8Array(arrayBuffer);
+                }
+            }
+
+            new Notice(t("MSG_NO_CLIPBOARD_IMAGE"));
+            return null;
         } catch (error) {
             console.error('Failed to read clipboard image:', error);
             new Notice(t("MSG_CLIPBOARD_READ_FAIL"));
@@ -764,7 +773,7 @@ export default class ImageConverterPlugin extends Plugin {
                 return;
             }
 
-            const image = this.getClipboardImage();
+            const image = await this.getClipboardImage();
             if (!image) return;
 
             editorInteract = new EditorContentInserter(view);
@@ -796,7 +805,7 @@ export default class ImageConverterPlugin extends Plugin {
                 return;
             }
 
-            const image = this.getClipboardImage();
+            const image = await this.getClipboardImage();
             if (!image) return;
 
             editorInteract = new EditorContentInserter(view);

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AIModelConverter } from '../../../../src/ocr/providers/AIModelConverter';
 import { OCRSettings } from '../../../../src/ocr/OCRSettings';
+import { App } from 'obsidian';
 
 // Mock global fetch
 global.fetch = vi.fn();
@@ -8,26 +9,38 @@ global.fetch = vi.fn();
 describe('AIModelConverter', () => {
     let converter: AIModelConverter;
     let mockSettings: OCRSettings;
+    let mockApp: App;
 
     beforeEach(() => {
+        mockApp = {
+            secretStorage: {
+                // Mock getSecret to return a string synchronously for testing
+                // Note: Real Obsidian API returns Promise, but tests run synchronously
+                getSecret: vi.fn().mockReturnValue('test-api-key')
+            }
+        } as any;
+
         mockSettings = {
-            simpleTexToken: '',
-            simpleTexAppId: '',
-            simpleTexAppSecret: '',
             latexProvider: 'LLM',
             markdownProvider: 'LLM',
+            simpleTex: {
+                appIdSecretId: '',
+                appSecretSecretId: '',
+                tokenSecretId: ''
+            },
+            texify: { url: '', username: '', password: '' },
+            pix2tex: { url: '', username: '', password: '' },
             aiModel: {
+                providerType: 'openai' as const,
                 endpoint: 'https://api.openai.com/v1/chat/completions',
-                apiKey: 'test-api-key',
                 model: 'gpt-4o',
                 maxTokens: 1000,
+                apiKeySecretId: 'test-secret-id',
                 prompts: {
                     latex: 'Convert this image to LaTeX',
                     markdown: 'Convert this image to Markdown'
                 }
-            },
-            texify: { url: '', username: '', password: '' },
-            pix2tex: { url: '', username: '', password: '' }
+            }
         };
 
         vi.clearAllMocks();
@@ -35,7 +48,7 @@ describe('AIModelConverter', () => {
 
     describe('构造函数和初始化', () => {
         it('Given LaTeX 单行模式, When 创建转换器, Then 正确初始化', () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
 
             expect((converter as any).isMultiline).toBe(false);
             expect((converter as any).promptType).toBe('latex');
@@ -43,14 +56,14 @@ describe('AIModelConverter', () => {
         });
 
         it('Given LaTeX 多行模式, When 创建转换器, Then 正确初始化', () => {
-            converter = new AIModelConverter(true, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, true, mockSettings, 'latex');
 
             expect((converter as any).isMultiline).toBe(true);
             expect((converter as any).promptType).toBe('latex');
         });
 
         it('Given Markdown 模式, When 创建转换器, Then 正确初始化', () => {
-            converter = new AIModelConverter(false, mockSettings, 'markdown');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'markdown');
 
             expect((converter as any).promptType).toBe('markdown');
         });
@@ -58,7 +71,7 @@ describe('AIModelConverter', () => {
 
     describe('sendRequest 方法 - 成功场景', () => {
         it('Given 图片数据, When 调用 sendRequest, Then 发送正确的 API 请求', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]); // PNG header
 
             const mockResponse = {
@@ -86,7 +99,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given LaTeX 单行模式, When 收到响应, Then 包裹为单行公式', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -107,7 +120,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given LaTeX 多行模式, When 收到响应, Then 包裹为多行公式', async () => {
-            converter = new AIModelConverter(true, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, true, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -128,7 +141,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given Markdown 模式, When 收到响应, Then 直接返回内容', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'markdown');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'markdown');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -151,7 +164,7 @@ describe('AIModelConverter', () => {
 
     describe('sendRequest 方法 - 数据清洗', () => {
         it('Given 响应包含 markdown 代码块, When 清洗, Then 移除代码块标记', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -172,7 +185,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given 响应已包含 $ 包裹, When 清洗, Then 移除外层 $ 符号', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -194,7 +207,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given 响应已包含 $$ 包裹, When 清洗, Then 移除外层 $$ 符号', async () => {
-            converter = new AIModelConverter(true, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, true, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -215,7 +228,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given 响应包含多余空白, When 清洗, Then 正确 trim', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -238,7 +251,7 @@ describe('AIModelConverter', () => {
 
     describe('sendRequest 方法 - 错误处理', () => {
         it('Given API 返回错误状态, When 调用, Then 抛出异常', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -252,7 +265,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given 网络错误, When 调用, Then 抛出异常', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 76, 71]);
 
             (global.fetch as any).mockRejectedValueOnce(new Error('Network error'));
@@ -261,7 +274,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given API 响应格式错误, When 调用, Then 抛出异常', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -279,7 +292,7 @@ describe('AIModelConverter', () => {
 
     describe('请求载荷构建', () => {
         it('Given 图片数据, When 构建请求, Then Base64 编码正确', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]); // PNG header
 
             const mockResponse = {
@@ -312,7 +325,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given Markdown 模式, When 构建请求, Then 使用 Markdown prompt', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'markdown');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'markdown');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {
@@ -334,7 +347,7 @@ describe('AIModelConverter', () => {
 
     describe('边界情况和注意事项', () => {
         it('Given 空图片数据, When 调用, Then 仍能正常处理', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([]);
 
             const mockResponse = {
@@ -351,7 +364,7 @@ describe('AIModelConverter', () => {
         });
 
         it('Given 特殊字符响应, When 清洗, Then 保留 LaTeX 语法', async () => {
-            converter = new AIModelConverter(false, mockSettings, 'latex');
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([137, 80, 78, 71]);
 
             const mockResponse = {

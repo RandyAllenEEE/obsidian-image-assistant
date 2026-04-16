@@ -32,7 +32,12 @@ export default class PicGoCoreUploader implements Uploader {
 
     const length = list.length;
     let cli = this.settings.picgoCorePath || "picgo";
-    let command = `${cli} upload ${list.map(item => `"${item}"`).join(" ")}`;
+    // Escape paths to prevent command injection - replace " with \" and wrap in quotes
+    const safeList = list.map(item => {
+      const escaped = item.replace(/"/g, '\\"');
+      return `"${escaped}"`;
+    });
+    let command = `${cli} upload ${safeList.join(" ")}`;
 
     const res = await this.exec(command);
     const splitList = res.split("\n");

@@ -67,15 +67,8 @@ export class UploadDownloadHandler {
             const activeFile = activeView.file;
             const editor = activeView.editor;
 
-            // Call NetworkImageDownloader to download the single image
-            const downloader = this.plugin.networkDownloader;
-            if (!downloader) {
-                new Notice(t("MSG_DOWNLOADER_UNAVAILABLE"));
-                return;
-            }
-
-            // Download and replace the link (pass editor for automatic link replacement)
-            const success = await downloader.downloadSingleImage(src, activeFile, editor);
+            // Call CloudImageHandler facade to download the single image
+            const success = await this.plugin.cloudImageHandler.downloadSingleImage(src, activeFile, editor);
 
             if (success) {
                 new Notice(t("MSG_DOWNLOAD_SUCCESS"));

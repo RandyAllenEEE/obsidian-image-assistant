@@ -46,6 +46,168 @@ export default {
     "SETTING_GLOBAL_SETTINGS": "Drop/paste presets",
     "SETTING_GLOBAL_SETTINGS_DESC": "Quickly apply a combination of presets",
 
+    // Cloud Settings - Uploader Types
+    "SETTING_UPLOADER_PICGO": "PicGo",
+    "SETTING_UPLOADER_PICGO_CORE": "PicGo-Core",
+    "SETTING_UPLOADER_PICLIST": "PicList",
+
+    // Cloud Settings - Placeholders
+    "PLACEHOLDER_UPLOAD_SERVER": "http://127.0.0.1:36677/upload",
+    "PLACEHOLDER_DELETE_SERVER": "http://127.0.0.1:36677/delete",
+    "PLACEHOLDER_PICGO_CORE_PATH": "/path/to/picgo",
+    "PLACEHOLDER_IMG_WIDTH": "e.g. 800",
+    "PLACEHOLDER_IMG_HEIGHT": "e.g. 600",
+    "PLACEHOLDER_NETWORK_BLACKLIST": "example.com, test.org",
+
+    // Cloud Link Format Options
+    "SETTING_CLOUD_LINK_MARKDOWN": "Markdown (![alt](url))",
+    "SETTING_CLOUD_LINK_WIKILINK": "WikiLink (![[url]])",
+
+    // Scroll Resize Modifier
+    "SETTING_SCROLL_MODIFIER_NONE": "None (always)",
+    "SETTING_SCROLL_MODIFIER_SHIFT": "Shift",
+    "SETTING_SCROLL_MODIFIER_CTRL": "Control",
+    "SETTING_SCROLL_MODIFIER_ALT": "Alt",
+    "SETTING_SCROLL_MODIFIER_META": "Meta",
+
+    // Alignment Options
+    "SETTING_ALIGN_LEFT": "Left",
+    "SETTING_ALIGN_CENTER": "Center",
+    "SETTING_ALIGN_RIGHT": "Right",
+
+    // Caption Alignment
+    "SETTING_CAPTION_ALIGN_LEFT": "Left",
+    "SETTING_CAPTION_ALIGN_CENTER": "Center",
+    "SETTING_CAPTION_ALIGN_RIGHT": "Right",
+
+    // Output Format Options
+    "SETTING_FORMAT_WEBP": "WebP",
+    "SETTING_FORMAT_JPEG": "JPEG",
+    "SETTING_FORMAT_PNG": "PNG",
+    "SETTING_FORMAT_ORIGINAL": "Same as original",
+    "SETTING_FORMAT_NONE": "None (No Conversion)",
+    "SETTING_FORMAT_PNGQUANT": "PNGquant (PNG Only)",
+    "SETTING_FORMAT_AVIF": "AVIF (via ffmpeg)",
+
+    // Resize Mode Options
+    "SETTING_RESIZE_NONE": "None",
+    "SETTING_RESIZE_FIT": "Fit",
+    "SETTING_RESIZE_FILL": "Fill",
+    "SETTING_RESIZE_LONGEST": "Longest Edge",
+    "SETTING_RESIZE_SHORTEST": "Shortest Edge",
+    "SETTING_RESIZE_WIDTH": "Width",
+    "SETTING_RESIZE_HEIGHT": "Height",
+
+    // Resize Dimension Options
+    "SETTING_RESIZE_DIM_NONE": "None",
+    "SETTING_RESIZE_DIM_WIDTH": "Width",
+    "SETTING_RESIZE_DIM_HEIGHT": "Height",
+    "SETTING_RESIZE_DIM_BOTH": "Both",
+    "SETTING_RESIZE_DIM_LONGEST": "Longest Edge",
+    "SETTING_RESIZE_DIM_SHORTEST": "Shortest Edge",
+    "SETTING_RESIZE_DIM_ORIG_WIDTH": "Original Width",
+    "SETTING_RESIZE_DIM_ORIG_HEIGHT": "Original Height",
+    "SETTING_RESIZE_DIM_EDITOR_MAX": "Editor Max Width",
+
+    // OCR Provider Options
+    "SETTING_OCR_LATEX_PROVIDER_SIMPLETEX": "SimpleTex (Online)",
+    "SETTING_OCR_LATEX_PROVIDER_PIX2TEX": "Pix2Tex (Self-hosted)",
+    "SETTING_OCR_LATEX_PROVIDER_TEXIFY": "Texify (Self-hosted)",
+    "SETTING_OCR_LATEX_PROVIDER_LLM": "LLM (AI Model)",
+    "SETTING_OCR_MARKDOWN_PROVIDER_TEXIFY": "Texify",
+    "SETTING_OCR_MARKDOWN_PROVIDER_LLM": "LLM",
+
+    // Placeholders
+    "PLACEHOLDER_PIX2TEX_URL": "http://127.0.0.1:8502/predict/",
+    "PLACEHOLDER_TEXIFY_URL": "http://127.0.0.1:5000/predict",
+    "PLACEHOLDER_MAX_TOKENS": "300",
+
+    // Caption Options
+    "SETTING_CAPTION_SKIP_EXT_PLACEHOLDER": "pdf,svg",
+    "SETTING_CAPTION_FONT_SIZE_PLACEHOLDER": "12px",
+    "SETTING_CAPTION_COLOR_PLACEHOLDER": "var(--text-muted)",
+
+    // Notice messages
+    "NOTICE_IMAGE_CAPTION_DISABLED": "Image captions disabled.",
+    "NOTICE_IMAGE_ALIGNMENT_DISABLED": "Image alignment disabled.",
+
+    // Batch Confirm Dialog
+    "BATCH_DIALOG_LOCAL_PROCESSING": "Local Processing",
+    "MODAL_MODE_UPLOAD": "Cloud Upload",
+    "BATCH_SCOPE_LABEL": "Scope: {0}",
+    "BATCH_DIALOG_IN_CURRENT": "in current",
+    "BATCH_DIALOG_IN_OTHER": "in other notes",
+    "BATCH_DIALOG_IMAGES": "images",
+    "BATCH_DIALOG_DETAILS": "Details:",
+    "BATCH_DIALOG_REFS_WARNING": "images have references in other notes",
+    "BATCH_DIALOG_ALL_IN_CURRENT": "All images are only referenced in the current note.",
+    "BATCH_DIALOG_MORE_ITEMS": "... and {0} more",
+    "BATCH_DIALOG_SELECT_ACTION": "Select an action:",
+    "BATCH_DIALOG_REPLACE_CURRENT": "Replace in current note",
+    "BATCH_DIALOG_REPLACE_CURRENT_DESC": "Only replace links in current note",
+    "BATCH_DIALOG_REPLACE_ALL": "Replace in all notes",
+    "BATCH_DIALOG_REPLACE_ALL_DESC": "Replace links in all notes",
+    "BATCH_DIALOG_PROCESS_ONLY": "Process only (no link changes)",
+    "BATCH_DIALOG_PROCESS_ONLY_DESC": "Process images without changing links",
+    "BATCH_DIALOG_REPLACE_DELETE": "Replace all & delete source",
+    "BATCH_DIALOG_REPLACE_DELETE_DESC": "Replace all links and delete source files",
+    "BATCH_DIALOG_CANCEL": "Cancel",
+    "BATCH_DIALOG_CANCEL_DESC": "Cancel operation",
+
+    // Batch upload/process messages
+    "NOTICE_NO_IMAGES_FOUND": "No images found.",
+    "NOTICE_NO_IMAGES_TO_UPLOAD": "No images to upload (all already uploaded).",
+    "NOTICE_NO_IMAGES_TO_PROCESS": "No images found that need processing.",
+    "NOTICE_NO_IMAGES_IN_FOLDER": "No images found in the folder.",
+    "NOTICE_NO_IMAGES_IN_NOTE": "No images found in the current note.",
+    "NOTICE_NO_IMAGES_IN_VAULT": "No images found in the vault.",
+    "NOTICE_NO_VALID_IMAGES": "No valid images found to upload.",
+    "NOTICE_NO_IMAGES_SKIPPED": "No images found that need processing (all skipped).",
+    "NOTICE_SCANNING_REFS": "Scanning references...",
+    "NOTICE_INVALID_FOLDER": "Error: Invalid folder path.",
+
+    // Network Image Downloader
+    "NOTICE_NO_ACTIVE_NOTE": "⚠️ Please open a note first",
+    "NOTICE_NO_NETWORK_IMAGES": "📝 No network images in current note",
+    "NOTICE_ALL_BLACKLISTED": "📝 All network images are blacklisted",
+
+    // Single Upload Handler
+    "ERROR_CANNOT_UPLOAD_NETWORK": "⚠️ Cannot upload network images, only upload local image files",
+
+    // Crop notice
+    "NOTICE_CROP_ASPECT_FREE": "Free",
+
+    // Image Processor
+    "ERROR_PNGQUANT_NOT_SET": "PNGQUANT executable path is not set. Please configure it in the plugin settings.",
+    "ERROR_FFMPEG_NOT_SET": "FFmpeg executable path is not set. Please configure it in the plugin settings.",
+
+    // Uploader
+    "ERROR_MOBILE_MUST_REMOTE": "Mobile App must use remote server mode.",
+
+    // Review Renderer
+    "FALLBACK_UNKNOWN": "Unknown",
+
+    // Image Annotation
+    "NOTICE_ANNOTATION_EXPORT_FAIL": "Failed to export image",
+    "NOTICE_ANNOTATION_SAVE_SUCCESS": "Image saved successfully",
+    "NOTICE_ANNOTATION_SAVE_FAIL": "Error saving image",
+
+    // Image State Manager
+    "ERROR_CANNOT_FIND_LINK": "Could not find image link in editor to update.",
+
+    // Folder Management
+    "ERROR_CUSTOM_FOLDER_NOT_DEFINED": "Custom folder template is not defined.",
+
+    // Link Format Preset
+    "SUMMARY_LINK_TYPE": "Link Type: {0}",
+    "SUMMARY_PATH_TYPE": "Path Type: {0}",
+    "SUMMARY_FORMAT": "Format: {0}",
+    "SUMMARY_QUALITY": "Quality: {0}",
+    "SUMMARY_RESIZE": "Resize: {0}",
+    "SUMMARY_DIMENSION": "Dimension: {0}",
+    "SUMMARY_WIDTH": "Width: {0}",
+    "SUMMARY_FOLDER_TYPE": "Type: {0}",
+
     // Presets labels and messages
     "LABEL_DROP_PASTE_PRESETS": "Drop/paste presets",
     "DESC_DROP_PASTE_PRESETS": "Quickly apply a combination of presets",
@@ -186,6 +348,8 @@ export default {
     "SETTING_OTHER_SECTION": "Other Settings",
     "SETTING_ENABLE_CONTEXT_MENU_NAME": "Context Menu",
     "SETTING_ENABLE_CONTEXT_MENU_DESC": "Enable context menu on right click",
+    "SETTING_CODE_BLOCK_IMAGE_LINK_INDEXING_NAME": "Code block image link indexing",
+    "SETTING_CODE_BLOCK_IMAGE_LINK_INDEXING_DESC": "When enabled, image references inside fenced code blocks and Obsidian admonition blocks are also discovered for upload/download replacement.",
     "SETTING_CONTEXT_MENU_TOOLTIP": "Need to restart Obsidian to take effect",
     "SETTING_PASTE_CURSOR_LOC": "Paste/Drop Cursor Location",
     "SETTING_PASTE_CURSOR_LOC_DESC": "Where to place cursor after inserting image",
@@ -228,8 +392,17 @@ export default {
     "SETTING_OCR_LLM_ENDPOINT_DESC": "OpenAI-compatible API endpoint",
     "SETTING_OCR_LLM_MODEL": "Model",
     "SETTING_OCR_LLM_MODEL_DESC": "Model name (e.g. gpt-4-vision-preview)",
+    "SETTING_OCR_LLM_PROVIDER_TYPE": "LLM Provider Type",
+    "SETTING_OCR_LLM_PROVIDER_TYPE_DESC": "Choose between OpenAI-compatible API or Ollama Native API.",
+    "SETTING_OCR_LLM_PROVIDER_OPENAI": "OpenAI / Compatible",
+    "SETTING_OCR_LLM_PROVIDER_OLLAMA": "Ollama Native",
     "SETTING_OCR_LLM_KEY": "API Key",
     "SETTING_OCR_LLM_KEY_DESC": "Enter API Key",
+    "SETTING_OCR_LLM_KEY_OPTIONAL": " (Optional for Ollama)",
+    "SETTING_OCR_LLM_ENDPOINT_PLACEHOLDER_OPENAI": "https://api.openai.com/v1/chat/completions",
+    "SETTING_OCR_LLM_ENDPOINT_PLACEHOLDER_OLLAMA": "http://localhost:11434/api/chat",
+    "SETTING_OCR_LLM_MODEL_PLACEHOLDER_OPENAI": "gpt-4-vision-preview",
+    "SETTING_OCR_LLM_MODEL_PLACEHOLDER_OLLAMA": "llava",
     "SETTING_OCR_LLM_MAX_TOKENS": "Max Tokens",
     "SETTING_OCR_LLM_MAX_TOKENS_DESC": "Maximum tokens to generate",
     "SETTING_OCR_PROMPTS_LATEX": "LaTeX Prompt",
@@ -486,7 +659,7 @@ export default {
     "MENU_SHOW_EXPLORER": "Show in system explorer",
     "MSG_FAIL_SHOW_EXPLORER": "Failed to show in system explorer",
 
-    "MENU_UPLOAD_CLOUD": "Upload to Cloud",
+    "MENU_UPLOAD_CLOUD": "Upload & Replace",
     "MENU_UPLOAD_FOLDER_IMAGES": "Upload folder images to Cloud",
     "MSG_RESOLVE_PATH_FAIL": "Cannot resolve image path. This may be a network image.",
     "MSG_FILE_NOT_FOUND": "Image file not found in vault",
@@ -523,6 +696,7 @@ export default {
     "ALIGN_CENTER": "Center",
     "ALIGN_RIGHT": "Right",
     "ALIGN_WRAP": "Wrap Text",
+    "ALIGN_REMOVE": "Remove Alignment",
     "LABEL_ALIGNMENT": "Alignment:",
 
     // Batch Operations
@@ -532,7 +706,7 @@ export default {
     "DIALOG_BATCH_OP_CONVERT": "Convert/Compress Images",
     "DIALOG_BATCH_OP_UPLOAD": "Upload to Cloud",
     "DIALOG_BATCH_OP_DOWNLOAD": "Download Network Images",
-    "MENU_DOWNLOAD_NETWORK_IMAGE": "Download network image to local",
+    "MENU_DOWNLOAD_NETWORK_IMAGE": "Download & Replace",
 
     // Main Plugin Commands
     "CMD_PROCESS_ALL_VAULT": "Process all images in vault",

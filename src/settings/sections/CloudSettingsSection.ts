@@ -73,9 +73,9 @@ export function renderCloudSettingsSection(
             .setName(t("SETTING_UPLOADER_NAME"))
             .setDesc(t("SETTING_UPLOADER_DESC"))
             .addDropdown(dropdown => dropdown
-                .addOption("PicGo", "PicGo")
-                .addOption("PicGo-Core", "PicGo-Core")
-                .addOption("PicList", "PicList")
+                .addOption("PicGo", t("SETTING_UPLOADER_PICGO"))
+                .addOption("PicGo-Core", t("SETTING_UPLOADER_PICGO_CORE"))
+                .addOption("PicList", t("SETTING_UPLOADER_PICLIST"))
                 .setValue(plugin.settings.pasteHandling.cloud.uploader)
                 .onChange(async (value: string) => {
                     plugin.settings.pasteHandling.cloud.uploader = value;
@@ -92,7 +92,7 @@ export function renderCloudSettingsSection(
                 .setName(t("SETTING_UPLOAD_SERVER_NAME"))
                 .setDesc(t("SETTING_UPLOAD_SERVER_DESC"))
                 .addText(text => text
-                    .setPlaceholder("http://127.0.0.1:36677/upload")
+                    .setPlaceholder(t("PLACEHOLDER_UPLOAD_SERVER"))
                     .setValue(plugin.settings.pasteHandling.cloud.uploadServer)
                     .onChange(async (value) => {
                         plugin.settings.pasteHandling.cloud.uploadServer = value;
@@ -105,7 +105,7 @@ export function renderCloudSettingsSection(
                     .setName(t("SETTING_DELETE_SERVER_NAME"))
                     .setDesc(t("SETTING_DELETE_SERVER_DESC"))
                     .addText(text => text
-                        .setPlaceholder("http://127.0.0.1:36677/delete")
+                        .setPlaceholder(t("PLACEHOLDER_DELETE_SERVER"))
                         .setValue(plugin.settings.pasteHandling.cloud.deleteServer)
                         .onChange(async (value) => {
                             plugin.settings.pasteHandling.cloud.deleteServer = value;
@@ -121,7 +121,7 @@ export function renderCloudSettingsSection(
                 .setName(t("SETTING_PICGO_CORE_PATH_NAME"))
                 .setDesc(t("SETTING_PICGO_CORE_PATH_DESC"))
                 .addText(text => text
-                    .setPlaceholder("/path/to/picgo")
+                    .setPlaceholder(t("PLACEHOLDER_PICGO_CORE_PATH"))
                     .setValue(plugin.settings.pasteHandling.cloud.picgoCorePath)
                     .onChange(async (value) => {
                         plugin.settings.pasteHandling.cloud.picgoCorePath = value;
@@ -135,8 +135,8 @@ export function renderCloudSettingsSection(
             .setName(t("LABEL_CLOUD_LINK_FORMAT"))
             .setDesc(t("DESC_CLOUD_LINK_FORMAT"))
             .addDropdown(dropdown => dropdown
-                .addOption("markdown", "Markdown (![alt](url))")
-                .addOption("wikilink", "WikiLink (![[url]])")
+                .addOption("markdown", t("SETTING_CLOUD_LINK_MARKDOWN"))
+                .addOption("wikilink", t("SETTING_CLOUD_LINK_WIKILINK"))
                 .setValue(plugin.settings.pasteHandling.cloud.cloudLinkFormat || "markdown")
                 .onChange(async (value: "markdown" | "wikilink") => {
                     plugin.settings.pasteHandling.cloud.cloudLinkFormat = value;
@@ -166,7 +166,7 @@ export function renderCloudSettingsSection(
                 .setName(t("SETTING_IMG_WIDTH"))
                 .setDesc(t("SETTING_IMG_WIDTH_DESC"))
                 .addText(text => text
-                    .setPlaceholder("例如：800")
+                    .setPlaceholder(t("PLACEHOLDER_IMG_WIDTH"))
                     .setValue(plugin.settings.pasteHandling.cloud.imageSizeWidth?.toString() || "")
                     .onChange(async (value) => {
                         plugin.settings.pasteHandling.cloud.imageSizeWidth = value ? parseInt(value) : undefined;
@@ -178,7 +178,7 @@ export function renderCloudSettingsSection(
                 .setName(t("SETTING_IMG_HEIGHT"))
                 .setDesc(t("SETTING_IMG_HEIGHT_DESC"))
                 .addText(text => text
-                    .setPlaceholder("例如：600")
+                    .setPlaceholder(t("PLACEHOLDER_IMG_HEIGHT"))
                     .setValue(plugin.settings.pasteHandling.cloud.imageSizeHeight?.toString() || "")
                     .onChange(async (value) => {
                         plugin.settings.pasteHandling.cloud.imageSizeHeight = value ? parseInt(value) : undefined;
@@ -205,7 +205,7 @@ export function renderCloudSettingsSection(
                 .setName(t("SETTING_NETWORK_BLACKLIST"))
                 .setDesc(t("SETTING_NETWORK_BLACKLIST_DESC"))
                 .addTextArea(text => text
-                    .setPlaceholder("example.com, test.org")
+                    .setPlaceholder(t("PLACEHOLDER_NETWORK_BLACKLIST"))
                     .setValue(plugin.settings.pasteHandling.cloud.newWorkBlackDomains)
                     .onChange(async (value) => {
                         plugin.settings.pasteHandling.cloud.newWorkBlackDomains = value;

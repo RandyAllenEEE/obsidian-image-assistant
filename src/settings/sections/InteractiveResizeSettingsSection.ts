@@ -132,11 +132,11 @@ export function renderInteractiveResizeSettingsSection(
                 .setDesc(t("SETTING_SCROLL_MODIFIER_DESC"))
                 .addDropdown(dropdown => dropdown
                     .addOptions({
-                        'None': '无',
-                        'Shift': 'Shift',
-                        'Control': 'Control',
-                        'Alt': 'Alt',
-                        'Meta': 'Meta'
+                        'None': t("SETTING_SCROLL_MODIFIER_NONE"),
+                        'Shift': t("SETTING_SCROLL_MODIFIER_SHIFT"),
+                        'Control': t("SETTING_SCROLL_MODIFIER_CTRL"),
+                        'Alt': t("SETTING_SCROLL_MODIFIER_ALT"),
+                        'Meta': t("SETTING_SCROLL_MODIFIER_META")
                     })
                     .setValue(plugin.settings.interactiveResize.scrollModifier)
                     .onChange(async (value: "None" | "Shift" | "Control" | "Alt" | "Meta") => {

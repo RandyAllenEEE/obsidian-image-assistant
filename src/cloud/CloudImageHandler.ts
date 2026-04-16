@@ -15,6 +15,7 @@ import { CloudResourceHelpers } from "./utils/CloudResourceHelpers";
 import { BatchResult } from "../types/BatchTypes";
 import { NotificationManager } from "../utils/NotificationManager";
 import { t } from "../lang/helpers";
+import { NetworkImageDownloader } from "./NetworkImageDownloader";
 
 export class CloudImageHandler implements ImageHandler {
     private app: App;
@@ -30,6 +31,27 @@ export class CloudImageHandler implements ImageHandler {
     private noteBatchUploader: NoteBatchUploader;
     private vaultBatchUploader: VaultBatchUploader;
     private helpers: CloudResourceHelpers;
+    private networkDownloader: NetworkImageDownloader | null = null;
+
+    /**
+     * Initialize the network downloader after dependent components are ready.
+     * Called from main.ts initializeComponents() after uploadHelper and folderAndFilenameManagement are created.
+     */
+    initializeDownloader(uploadHelper: any, folderAndFilenameManagement: any): void {
+        this.networkDownloader = new NetworkImageDownloader(
+            this.app,
+            this.plugin,
+            uploadHelper,
+            folderAndFilenameManagement
+        );
+    }
+
+    private ensureDownloader(): NetworkImageDownloader {
+        if (!this.networkDownloader) {
+            throw new Error("NetworkImageDownloader not initialized. Call initializeDownloader() first.");
+        }
+        return this.networkDownloader;
+    }
 
     constructor(
         app: App,
@@ -144,11 +166,7 @@ export class CloudImageHandler implements ImageHandler {
             cancelled: false
         };
 
-        const uploaderManager = new UploaderManager(
-            this.plugin.settings.pasteHandling.cloud.uploader,
-            this.plugin
-        );
-
+        // Use the class's existing uploaderManager instance instead of creating a new one
         const tasks = files.map(file => async () => {
             try {
                 let uploadPath = file.path;
@@ -160,7 +178,7 @@ export class CloudImageHandler implements ImageHandler {
                     }
                 }
 
-                const uploadRes = await uploaderManager.upload([uploadPath]);
+                const uploadRes = await this.uploaderManager.upload([uploadPath]);
 
                 if (uploadRes.success) {
                     result.successful.push({
@@ -191,4 +209,22 @@ export class CloudImageHandler implements ImageHandler {
     // Proxy for blacklisted domain check if needed externally?
     // It was private, used by handlePasteText (now in PasteHandler) and uploadAllImages (NoteBatchUploader).
     // So no need to expose.
+
+    /* Download delegation methods */
+
+    async downloadSingleImage(url: string, activeFile: TFile, editor: Editor): Promise<boolean> {
+        return this.ensureDownloader().downloadSingleImage(url, activeFile, editor);
+    }
+
+    async downloadAllNetworkImages(): Promise<void> {
+        return this.ensureDownloader().downloadAllNetworkImages();
+    }
+
+    async downloadFolderImages(folderPath: string, recursive: boolean): Promise<void> {
+        return this.ensureDownloader().downloadFolderImages(folderPath, recursive);
+    }
+
+    async batchDownload(tasks: any[]): Promise<any> {
+        return this.ensureDownloader().batchDownload(tasks);
+    }
 }

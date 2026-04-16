@@ -7,6 +7,9 @@ import type ImageConverterPlugin from "../main";
 import { NetworkImageDownloadModal, DownloadTask, DownloadChoice, DownloadMode } from "./NetworkImageDownloadModal";
 import { NotificationManager } from "../utils/NotificationManager";
 import { ConcurrentQueue } from "../utils/AsyncLock";
+import { ImageLinkPathReplacer } from "../utils/ImageLinkPathReplacer";
+import { pipeSyntaxParser } from "../utils/PipeSyntaxParser";
+import { getAllImageLinks } from "../utils/RegexPatterns";
 import { t } from "../lang/helpers";
 import { BatchResult, BatchItemResult } from "../types/BatchTypes";
 
@@ -46,8 +49,11 @@ export class NetworkImageDownloader {
             return;
         }
 
-        // 1. 提取所有图片链接
-        const allImages = this.uploadHelper.getAllImageLinks();
+        // 1. 提取所有图片链接（直接读取文件内容，使用 getAllImageLinks）
+        // getAllImageLinks respects codeBlockImageLinkIndexing via the fence/admonition scanning
+        // in downloadFolderImages, but for single-note download we scan the raw content directly.
+        const activeContent = await this.app.vault.read(activeFile);
+        const allImages = getAllImageLinks(activeContent);
 
         // 2. 过滤网络图片
         const networkImages = allImages.filter(img =>
@@ -140,30 +146,115 @@ export class NetworkImageDownloader {
         console.log('[Folder Download] Found', markdownFiles.length, 'markdown file(s) in folder:', folderPath);
 
         // Step 3: Extract all network images from notes
+        // Respects codeBlockImageLinkIndexing setting:
+        //   ON  -> scan note content using getAllImageLinks, filter HTTP/HTTPS, skip code blocks/admonitions
+        //   OFF -> use metadataCache (fast path only)
         const networkImageMap = new Map<string, { url: string; notes: TFile[] }>();
+        const useContentScan = !!this.plugin.settings.global.codeBlockImageLinkIndexing;
 
         for (const noteFile of markdownFiles) {
             try {
-                const content = await this.app.vault.read(noteFile);
+                const cache = this.app.metadataCache.getFileCache(noteFile);
+                const foundUrls = new Set<string>();
 
-                // Extract network images using regex (Markdown format)
-                const markdownRegex = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
-                let match;
-                while ((match = markdownRegex.exec(content)) !== null) {
-                    const url = match[1];
-                    if (!networkImageMap.has(url)) {
-                        networkImageMap.set(url, { url, notes: [] });
+                // Fast path: metadataCache for embeds and links (always runs).
+                if (cache?.embeds) {
+                    for (const embed of cache.embeds) {
+                        const raw = embed.link ?? '';
+                        if (raw.startsWith('http://') || raw.startsWith('https://')) {
+                            foundUrls.add(raw);
+                        }
                     }
-                    const existing = networkImageMap.get(url)!;
-                    if (!existing.notes.includes(noteFile)) {
-                        existing.notes.push(noteFile);
+                }
+                if (cache?.links) {
+                    for (const link of cache.links) {
+                        const raw = link.link ?? '';
+                        if ((raw.startsWith('http://') || raw.startsWith('https://'))
+                            && this.plugin.supportedImageFormats.isSupported(undefined, raw)) {
+                            foundUrls.add(raw);
+                        }
                     }
                 }
 
-                // Extract network images (Wikilink format)
-                const wikilinkRegex = /!\[\[(https?:\/\/[^\]]+)\]\]/g;
-                while ((match = wikilinkRegex.exec(content)) !== null) {
-                    const url = match[1];
+                // Slow path: content scan (only when setting is ON).
+                if (useContentScan) {
+                    const content = await this.app.vault.read(noteFile);
+                    // pipeSyntaxParser.extractAllLinks gives { fullMatch, index, data } with absolute positions.
+                    const links = pipeSyntaxParser.extractAllLinks(content);
+                    if (links.length === 0) continue;
+
+                    // Build line-index -> offset mapping.
+                    const lines = content.split(/\r?\n/);
+                    const lineStartOffsets: number[] = [0];
+                    for (let i = 0; i < content.length; i++) {
+                        if (content[i] === '\n') lineStartOffsets.push(i + 1);
+                    }
+
+                    // Walk lines in order, tracking fenced/admonition state.
+                    let inFencedCode = false;
+                    let inAdmonition = false;
+
+                    for (let li = 0; li < lines.length; li++) {
+                        const line = lines[li];
+
+                        // Determine block state AFTER this line's content (before processing links on this line).
+                        let lineEndsFenced = false;
+                        let lineEndsAdmonition = false;
+
+                        if (/^\s*```/.test(line)) {
+                            // Fence line: if currently outside, this line STARTS the block (links here are excluded).
+                            // If currently inside, this line ENDS the block (links here are included).
+                            if (!inFencedCode) {
+                                // Link on this line should NOT be included (block starts here).
+                                // We handle this by NOT toggling yet.
+                            } else {
+                                lineEndsFenced = true; // block ends after this line
+                            }
+                        } else if (!inFencedCode) {
+                            // Only check admonitions outside fenced blocks.
+                            if (/^\s*>\s*\[![^\]]+\]/.test(line)) {
+                                inAdmonition = true; // starts here, link IS included
+                            } else if (!/^\s*>/.test(line)) {
+                                lineEndsAdmonition = true;
+                            }
+                        }
+
+                        // Which absolute range does this line cover?
+                        const lineAbsStart = lineStartOffsets[li]!;
+                        const lineAbsEnd = lineStartOffsets[li + 1] ?? content.length;
+
+                        // Evaluate all links whose absolute position falls within this line.
+                        for (const link of links) {
+                            const absStart = lineStartOffsets[li]! + link.index;
+                            const absEnd = absStart + link.fullMatch.length;
+                            if (absEnd <= lineAbsStart || absStart >= lineAbsEnd) continue; // not on this line
+
+                            // Link on a fence line: exclude if currently outside (block hasn't started yet).
+                            if (/^\s*```/.test(line) && !inFencedCode) continue;
+
+                            // Link outside fenced blocks AND inside admonition: include.
+                            if (!inFencedCode && inAdmonition) {
+                                const raw = link.data.path ?? '';
+                                if (raw.startsWith('http://') || raw.startsWith('https://')) {
+                                    foundUrls.add(raw);
+                                }
+                            }
+                        }
+
+                        // Now apply state transitions for next line.
+                        if (/^\s*```/.test(line)) {
+                            if (!inFencedCode) {
+                                inFencedCode = true; // entered fenced block
+                            } else {
+                                inFencedCode = false; // exited fenced block
+                            }
+                        }
+                        if (lineEndsAdmonition) inAdmonition = false;
+                    }
+                }
+
+                // Register all found URLs for this note.
+                for (const url of foundUrls) {
                     if (!networkImageMap.has(url)) {
                         networkImageMap.set(url, { url, notes: [] });
                     }
@@ -337,27 +428,13 @@ export class NetworkImageDownloader {
                                         noteFile,
                                         task.url,
                                         (location) => {
-                                            // Extract original alt text and size params
-                                            let altText = "";
-                                            let sizeParams = "";
-                                            const markdownMatch = location.original.match(/!\[([^\]]*)\]/);
-                                            if (markdownMatch) {
-                                                const fullAlt = markdownMatch[1];
-                                                const sizeMatch = fullAlt.match(/^(.*?)\|(\d+x\d*|\d*x\d+|\d+)$/);
-                                                if (sizeMatch) {
-                                                    altText = sizeMatch[1];
-                                                    sizeParams = `|${sizeMatch[2]}`;
-                                                } else {
-                                                    altText = fullAlt;
-                                                }
-                                            }
-
-                                            // Generate new link with relative path
                                             const relativePath = this.app.metadataCache.fileToLinktext(
                                                 this.app.vault.getAbstractFileByPath(result.localPath!) as TFile,
                                                 noteFile.path
                                             );
-                                            return `![${altText}${sizeParams}](${encodeURI(relativePath)})`;
+
+                                            // Path-only replacement: preserve wiki/markdown syntax and pipe syntax.
+                                            return ImageLinkPathReplacer.replacePath(location.original, relativePath);
                                         }
                                     );
                                     console.log('[Folder Download] Replaced links in:', noteFile.path);
@@ -775,23 +852,8 @@ export class NetworkImageDownloader {
                 file,
                 url, // Find by URL
                 (location) => {
-                    // Extract original alt text and size params
-                    let altText = "";
-                    let sizeParams = "";
-                    const markdownMatch = location.original.match(/!\[([^\]]*)\]/);
-                    if (markdownMatch) {
-                        const fullAlt = markdownMatch[1];
-                        const sizeMatch = fullAlt.match(/^(.*?)\|(\d+x\d*|\d*x\d+|\d+)$/);
-                        if (sizeMatch) {
-                            altText = sizeMatch[1];
-                            sizeParams = `|${sizeMatch[2]}`;
-                        } else {
-                            altText = fullAlt;
-                        }
-                    }
-
-                    // Generate new link
-                    return `![${altText}${sizeParams}](${encodeURI(localPath)})`;
+                    // Path-only replacement: preserve wiki/markdown syntax and pipe syntax.
+                    return ImageLinkPathReplacer.replacePath(location.original, localPath);
                 }
             );
 

@@ -27,11 +27,22 @@ describe('PicGoCoreUploader', () => {
     let mockExec: any;
 
     beforeEach(() => {
-        const cloudUploadSettings = {
+        const cloudSettings = {
+            uploader: 'PicGo-Core',
             picgoCorePath: '',
             uploadServer: '',
+            deleteServer: '',
             remoteServerMode: false,
-            uploadedImages: [],
+            imageSizeWidth: undefined,
+            imageSizeHeight: undefined,
+            imageSizeSource: 'settings' as const,
+            workOnNetWork: false,
+            newWorkBlackDomains: '',
+            applyImage: true,
+            deleteSource: false,
+            downloadPath: 'attachments',
+            uploadConcurrency: 3,
+            cloudLinkFormat: 'markdown' as const,
         };
 
         const mockAdapter = {
@@ -40,7 +51,12 @@ describe('PicGoCoreUploader', () => {
 
         mockPlugin = {
             settings: {
-                cloudUploadSettings: cloudUploadSettings,
+                pasteHandling: {
+                    mode: 'cloud' as const,
+                    cursorLocation: 'back' as const,
+                    neverProcessFilenames: '',
+                    cloud: cloudSettings,
+                },
             },
             app: {
                 vault: {
@@ -64,7 +80,7 @@ describe('PicGoCoreUploader', () => {
     describe('构造函数和初始化', () => {
         it('Given Plugin 实例, When 创建 Uploader, Then 正确初始化', () => {
             expect(uploader.plugin).toBe(mockPlugin);
-            expect(uploader.settings).toBe(mockPlugin.settings.cloudUploadSettings);
+            expect(uploader.settings).toBe(mockPlugin.settings.pasteHandling.cloud);
         });
 
         it('Given 未配置 picgoCorePath, When 初始化, Then 使用默认值', () => {
@@ -468,8 +484,8 @@ describe('PicGoCoreUploader', () => {
             await uploader.upload(fileList);
 
             const command = execSpy.mock.calls[0][0];
-            // 命令中应包含转义的引号
-            expect(command).toContain('"/path/"quoted".png"');
+            // 命令中应包含转义的引号 (quotes should be escaped for shell safety)
+            expect(command).toContain('"/path/\\"quoted\\".png"');
         });
 
         it('Given PicGo 未安装, When 执行命令, Then exec 抛出错误', async () => {

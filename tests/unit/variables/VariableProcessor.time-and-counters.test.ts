@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { VariableProcessor } from '../../../src/VariableProcessor';
-import { DEFAULT_SETTINGS } from '../../../src/ImageConverterSettings';
+import { VariableProcessor } from '../../../src/local/VariableProcessor';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
 import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
 
 function setMoment(date: Date) {

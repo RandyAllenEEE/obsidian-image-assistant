@@ -2,8 +2,8 @@ import { App, Notice, TFile, normalizePath, FileSystemAdapter } from "obsidian";
 import { join } from "path-browserify";
 import ImageConverterPlugin from "../../main";
 import { UploaderManager } from "../uploader/index";
-import { CloudLinkFormatter } from "../CloudLinkFormatter";
 import { t } from "../../lang/helpers";
+import { ImageLinkPathReplacer } from "../../utils/ImageLinkPathReplacer";
 import { CloudImageDeleter } from "../CloudImageDeleter";
 import {
     UploadErrorDialog,
@@ -108,7 +108,7 @@ export class SingleUploadHandler {
     private async updateLinksWithManager(imagePath: string, cloudUrl: string, scopeFiles?: string[]): Promise<number> {
         const count = await this.plugin.vaultReferenceManager.updateReferences(imagePath, (loc) => {
             if (scopeFiles && !scopeFiles.includes(loc.file.path)) return loc.original;
-            return CloudLinkFormatter.formatCloudLink(cloudUrl, this.plugin.settings.pasteHandling.cloud, loc.original);
+            return ImageLinkPathReplacer.replacePath(loc.original, cloudUrl);
         });
         if (this.plugin.settings.captions.enabled) this.plugin.imageStateManager?.refreshAllImages();
         return count;

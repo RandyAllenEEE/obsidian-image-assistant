@@ -2,6 +2,7 @@ import { App, TFile, TFolder, Notice } from "obsidian";
 import type ImageConverterPlugin from "../main";
 import { BatchMode, BatchScope, BatchTask } from "../types/BatchTypes";
 import { ImageHandler } from "../core/ImageHandler";
+import { getAllImageLinks } from "./RegexPatterns";
 
 export class BatchScopeManager {
     constructor(private app: App, private plugin: ImageConverterPlugin) { }
@@ -107,15 +108,10 @@ export class BatchScopeManager {
 
     private async extractImageUrls(file: TFile): Promise<string[]> {
         const content = await this.app.vault.read(file);
-        const urls: string[] = [];
-        const markdownRegex = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
-        const wikilinkRegex = /!\[\[(https?:\/\/[^\]]+)\]\]/g;
-
-        let match;
-        while ((match = markdownRegex.exec(content)) !== null) urls.push(match[1]);
-        while ((match = wikilinkRegex.exec(content)) !== null) urls.push(match[1]);
-
-        return urls;
+        const links = getAllImageLinks(content);
+        return links
+            .filter(link => link.path.startsWith('http://') || link.path.startsWith('https://'))
+            .map(link => link.path);
     }
 
     private async getImagesFromCanvas(file: TFile): Promise<TFile[]> {

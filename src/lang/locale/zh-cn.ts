@@ -46,6 +46,168 @@ export default {
     "SETTING_GLOBAL_SETTINGS": "Drop/paste presets",
     "SETTING_GLOBAL_SETTINGS_DESC": "快速应用预设组合",
 
+    // Cloud Settings - Uploader Types
+    "SETTING_UPLOADER_PICGO": "PicGo",
+    "SETTING_UPLOADER_PICGO_CORE": "PicGo-Core",
+    "SETTING_UPLOADER_PICLIST": "PicList",
+
+    // Cloud Settings - Placeholders
+    "PLACEHOLDER_UPLOAD_SERVER": "http://127.0.0.1:36677/upload",
+    "PLACEHOLDER_DELETE_SERVER": "http://127.0.0.1:36677/delete",
+    "PLACEHOLDER_PICGO_CORE_PATH": "/path/to/picgo",
+    "PLACEHOLDER_IMG_WIDTH": "例如：800",
+    "PLACEHOLDER_IMG_HEIGHT": "例如：600",
+    "PLACEHOLDER_NETWORK_BLACKLIST": "example.com, test.org",
+
+    // Cloud Link Format Options
+    "SETTING_CLOUD_LINK_MARKDOWN": "Markdown (![alt](url))",
+    "SETTING_CLOUD_LINK_WIKILINK": "WikiLink (![[url]])",
+
+    // Scroll Resize Modifier
+    "SETTING_SCROLL_MODIFIER_NONE": "无（始终可用）",
+    "SETTING_SCROLL_MODIFIER_SHIFT": "Shift",
+    "SETTING_SCROLL_MODIFIER_CTRL": "Control",
+    "SETTING_SCROLL_MODIFIER_ALT": "Alt",
+    "SETTING_SCROLL_MODIFIER_META": "Meta",
+
+    // Alignment Options
+    "SETTING_ALIGN_LEFT": "左对齐",
+    "SETTING_ALIGN_CENTER": "居中",
+    "SETTING_ALIGN_RIGHT": "右对齐",
+
+    // Caption Alignment
+    "SETTING_CAPTION_ALIGN_LEFT": "左对齐",
+    "SETTING_CAPTION_ALIGN_CENTER": "居中",
+    "SETTING_CAPTION_ALIGN_RIGHT": "右对齐",
+
+    // Output Format Options
+    "SETTING_FORMAT_WEBP": "WebP",
+    "SETTING_FORMAT_JPEG": "JPEG",
+    "SETTING_FORMAT_PNG": "PNG",
+    "SETTING_FORMAT_ORIGINAL": "保持原样",
+    "SETTING_FORMAT_NONE": "无（不转换）",
+    "SETTING_FORMAT_PNGQUANT": "PNGquant（仅限 PNG）",
+    "SETTING_FORMAT_AVIF": "AVIF（通过 ffmpeg）",
+
+    // Resize Mode Options
+    "SETTING_RESIZE_NONE": "无",
+    "SETTING_RESIZE_FIT": "适应",
+    "SETTING_RESIZE_FILL": "填充",
+    "SETTING_RESIZE_LONGEST": "最长边",
+    "SETTING_RESIZE_SHORTEST": "最短边",
+    "SETTING_RESIZE_WIDTH": "宽度",
+    "SETTING_RESIZE_HEIGHT": "高度",
+
+    // Resize Dimension Options
+    "SETTING_RESIZE_DIM_NONE": "无",
+    "SETTING_RESIZE_DIM_WIDTH": "宽度",
+    "SETTING_RESIZE_DIM_HEIGHT": "高度",
+    "SETTING_RESIZE_DIM_BOTH": "两者",
+    "SETTING_RESIZE_DIM_LONGEST": "最长边",
+    "SETTING_RESIZE_DIM_SHORTEST": "最短边",
+    "SETTING_RESIZE_DIM_ORIG_WIDTH": "原始宽度",
+    "SETTING_RESIZE_DIM_ORIG_HEIGHT": "原始高度",
+    "SETTING_RESIZE_DIM_EDITOR_MAX": "编辑器最大宽度",
+
+    // OCR Provider Options
+    "SETTING_OCR_LATEX_PROVIDER_SIMPLETEX": "SimpleTex（在线）",
+    "SETTING_OCR_LATEX_PROVIDER_PIX2TEX": "Pix2Tex（自托管）",
+    "SETTING_OCR_LATEX_PROVIDER_TEXIFY": "Texify（自托管）",
+    "SETTING_OCR_LATEX_PROVIDER_LLM": "LLM（AI 模型）",
+    "SETTING_OCR_MARKDOWN_PROVIDER_TEXIFY": "Texify",
+    "SETTING_OCR_MARKDOWN_PROVIDER_LLM": "LLM",
+
+    // Placeholders
+    "PLACEHOLDER_PIX2TEX_URL": "http://127.0.0.1:8502/predict/",
+    "PLACEHOLDER_TEXIFY_URL": "http://127.0.0.1:5000/predict",
+    "PLACEHOLDER_MAX_TOKENS": "300",
+
+    // Caption Options
+    "SETTING_CAPTION_SKIP_EXT_PLACEHOLDER": "pdf,svg",
+    "SETTING_CAPTION_FONT_SIZE_PLACEHOLDER": "12px",
+    "SETTING_CAPTION_COLOR_PLACEHOLDER": "var(--text-muted)",
+
+    // Notice messages
+    "NOTICE_IMAGE_CAPTION_DISABLED": "图片标注已禁用。",
+    "NOTICE_IMAGE_ALIGNMENT_DISABLED": "图片对齐已禁用。",
+
+    // Batch Confirm Dialog
+    "BATCH_DIALOG_LOCAL_PROCESSING": "本地处理",
+    "MODAL_MODE_UPLOAD": "图床上传",
+    "BATCH_SCOPE_LABEL": "范围: {0}",
+    "BATCH_DIALOG_IN_CURRENT": "在当前",
+    "BATCH_DIALOG_IN_OTHER": "在其他笔记中",
+    "BATCH_DIALOG_IMAGES": "张图片",
+    "BATCH_DIALOG_DETAILS": "详情:",
+    "BATCH_DIALOG_REFS_WARNING": "张图片在其他笔记中也有引用",
+    "BATCH_DIALOG_ALL_IN_CURRENT": "所有图片仅在当前笔记中被引用。",
+    "BATCH_DIALOG_MORE_ITEMS": "... 还有 {0} 项",
+    "BATCH_DIALOG_SELECT_ACTION": "请选择操作：",
+    "BATCH_DIALOG_REPLACE_CURRENT": "在当前笔记中替换",
+    "BATCH_DIALOG_REPLACE_CURRENT_DESC": "仅替换当前笔记中的链接",
+    "BATCH_DIALOG_REPLACE_ALL": "在所有笔记中替换",
+    "BATCH_DIALOG_REPLACE_ALL_DESC": "替换所有笔记中的链接",
+    "BATCH_DIALOG_PROCESS_ONLY": "仅处理（不更改链接）",
+    "BATCH_DIALOG_PROCESS_ONLY_DESC": "处理图片但不更改链接",
+    "BATCH_DIALOG_REPLACE_DELETE": "替换全部并删除源文件",
+    "BATCH_DIALOG_REPLACE_DELETE_DESC": "替换所有链接并删除源文件",
+    "BATCH_DIALOG_CANCEL": "取消",
+    "BATCH_DIALOG_CANCEL_DESC": "取消操作",
+
+    // Batch upload/process messages
+    "NOTICE_NO_IMAGES_FOUND": "未找到图片。",
+    "NOTICE_NO_IMAGES_TO_UPLOAD": "没有需要上传的图片（已全部上传或被过滤）。",
+    "NOTICE_NO_IMAGES_TO_PROCESS": "未找到需要处理的图片。",
+    "NOTICE_NO_IMAGES_IN_FOLDER": "文件夹中未找到图片。",
+    "NOTICE_NO_IMAGES_IN_NOTE": "当前笔记中未找到图片。",
+    "NOTICE_NO_IMAGES_IN_VAULT": "库中未找到图片。",
+    "NOTICE_NO_VALID_IMAGES": "未找到可上传的有效图片。",
+    "NOTICE_NO_IMAGES_SKIPPED": "未找到需要处理的图片（全部被跳过）。",
+    "NOTICE_SCANNING_REFS": "正在扫描引用...",
+    "NOTICE_INVALID_FOLDER": "错误：无效的文件夹路径。",
+
+    // Network Image Downloader
+    "NOTICE_NO_ACTIVE_NOTE": "⚠️ 请先打开一个笔记",
+    "NOTICE_NO_NETWORK_IMAGES": "📝 当前笔记没有网络图片",
+    "NOTICE_ALL_BLACKLISTED": "📝 所有网络图片都在黑名单中",
+
+    // Single Upload Handler
+    "ERROR_CANNOT_UPLOAD_NETWORK": "⚠️ 不能上传网络图片，请只上传本地图片文件",
+
+    // Crop notice
+    "NOTICE_CROP_ASPECT_FREE": "自由",
+
+    // Image Processor
+    "ERROR_PNGQUANT_NOT_SET": "PNGQUANT 可执行文件路径未设置。请在插件设置中配置。",
+    "ERROR_FFMPEG_NOT_SET": "FFmpeg 可执行文件路径未设置。请在插件设置中配置。",
+
+    // Uploader
+    "ERROR_MOBILE_MUST_REMOTE": "移动端必须使用远程服务器模式。",
+
+    // Review Renderer
+    "FALLBACK_UNKNOWN": "未知",
+
+    // Image Annotation
+    "NOTICE_ANNOTATION_EXPORT_FAIL": "导出图片失败",
+    "NOTICE_ANNOTATION_SAVE_SUCCESS": "图片保存成功",
+    "NOTICE_ANNOTATION_SAVE_FAIL": "保存图片出错",
+
+    // Image State Manager
+    "ERROR_CANNOT_FIND_LINK": "无法在编辑器中找到图片链接。",
+
+    // Folder Management
+    "ERROR_CUSTOM_FOLDER_NOT_DEFINED": "自定义文件夹模板未定义。",
+
+    // Link Format Preset
+    "SUMMARY_LINK_TYPE": "链接类型: {0}",
+    "SUMMARY_PATH_TYPE": "路径类型: {0}",
+    "SUMMARY_FORMAT": "格式: {0}",
+    "SUMMARY_QUALITY": "质量: {0}",
+    "SUMMARY_RESIZE": "调整大小: {0}",
+    "SUMMARY_DIMENSION": "尺寸: {0}",
+    "SUMMARY_WIDTH": "宽度: {0}",
+    "SUMMARY_FOLDER_TYPE": "类型: {0}",
+
     // Presets labels and messages
     "LABEL_DROP_PASTE_PRESETS": "粘贴/拖拽预设",
     "DESC_DROP_PASTE_PRESETS": "快速应用预设组合",
@@ -182,6 +344,8 @@ export default {
     "SETTING_OTHER_SECTION": "其他设置",
     "SETTING_ENABLE_CONTEXT_MENU_NAME": "右键菜单",
     "SETTING_ENABLE_CONTEXT_MENU_DESC": "启用以显示右键上下文菜单",
+    "SETTING_CODE_BLOCK_IMAGE_LINK_INDEXING_NAME": "代码块中图片链接索引",
+    "SETTING_CODE_BLOCK_IMAGE_LINK_INDEXING_DESC": "启用后，fenced 代码块与 Obsidian admonition 块中的图片引用也会被检索，从而参与上传/下载并替换。",
     "SETTING_CONTEXT_MENU_TOOLTIP": "启用后可以在图片上右键进行操作（需重启Obsidian生效）",
     "SETTING_PASTE_CURSOR_LOC": "粘贴/拖拽后光标位置",
     "SETTING_PASTE_CURSOR_LOC_DESC": "选择插入图片后光标的位置",
@@ -224,8 +388,17 @@ export default {
     "SETTING_OCR_LLM_ENDPOINT_DESC": "支持 OpenAI 兼容的 API 端点",
     "SETTING_OCR_LLM_MODEL": "Model",
     "SETTING_OCR_LLM_MODEL_DESC": "模型名称，例如 gpt-4-vision-preview",
+    "SETTING_OCR_LLM_PROVIDER_TYPE": "LLM Provider Type",
+    "SETTING_OCR_LLM_PROVIDER_TYPE_DESC": "选择 OpenAI 兼容 API 或 Ollama 本地 API。",
+    "SETTING_OCR_LLM_PROVIDER_OPENAI": "OpenAI / Compatible",
+    "SETTING_OCR_LLM_PROVIDER_OLLAMA": "Ollama Native",
     "SETTING_OCR_LLM_KEY": "API Key",
     "SETTING_OCR_LLM_KEY_DESC": "输入 API Key",
+    "SETTING_OCR_LLM_KEY_OPTIONAL": " (Ollama 可选)",
+    "SETTING_OCR_LLM_ENDPOINT_PLACEHOLDER_OPENAI": "https://api.openai.com/v1/chat/completions",
+    "SETTING_OCR_LLM_ENDPOINT_PLACEHOLDER_OLLAMA": "http://localhost:11434/api/chat",
+    "SETTING_OCR_LLM_MODEL_PLACEHOLDER_OPENAI": "gpt-4-vision-preview",
+    "SETTING_OCR_LLM_MODEL_PLACEHOLDER_OLLAMA": "llava",
     "SETTING_OCR_LLM_MAX_TOKENS": "Max Tokens",
     "SETTING_OCR_LLM_MAX_TOKENS_DESC": "最大生成 token 数",
     "SETTING_OCR_PROMPTS_LATEX": "LaTeX Prompt",
@@ -314,6 +487,14 @@ export default {
     "TOOLTIP_CANCEL_DOWNLOAD": "取消下载",
     "MSG_BATCH_REF_INFO": "{0}: 当前笔记中引用 {1} 次, 其他笔记中引用 {2} 次",
     "MODAL_BUTTON_SAVE": "保存",
+    "MODAL_CANCEL_DOWNLOAD": "取消下载",
+    "MODAL_ALL_REF_CURRENT": "所有图片仅在当前笔记中被引用",
+    "MODAL_FOUND_IMAGES": "发现 {0} 张网络图片",
+    "MODAL_DOWNLOAD_PATH": "下载路径: ",
+    "MODAL_ESTIMATED_SIZE": "预计大小: ~",
+    "MODAL_IMAGE_LIST": "图片列表:",
+    "MODAL_BUTTON_SELECT_ALL": "全选",
+    "MODAL_BUTTON_DESELECT_ALL": "取消全选",
     "MODAL_SELECT_OP": "选择操作",
     "MSG_NO_REFERENCING_NOTES": "未找到引用此图片的笔记。",
     "MSG_NO_ITEMS_SELECTED": "未选择任何项目。",
@@ -474,7 +655,7 @@ export default {
     "MENU_SHOW_EXPLORER": "在系统资源管理器中显示",
     "MSG_FAIL_SHOW_EXPLORER": "无法在系统资源管理器中显示",
 
-    "MENU_UPLOAD_CLOUD": "上传到云端",
+    "MENU_UPLOAD_CLOUD": "上传并替换",
     "MENU_UPLOAD_FOLDER_IMAGES": "上传文件夹图片到云端",
     "MSG_RESOLVE_PATH_FAIL": "无法解析图片路径。这可能是网络图片。",
     "MSG_FILE_NOT_FOUND": "库中未找到图片文件",
@@ -525,7 +706,7 @@ export default {
     "DIALOG_BATCH_OP_CONVERT": "转换/压缩图片",
     "DIALOG_BATCH_OP_UPLOAD": "上传到图床",
     "DIALOG_BATCH_OP_DOWNLOAD": "下载网络图片",
-    "MENU_DOWNLOAD_NETWORK_IMAGE": "下载网络图片到本地",
+    "MENU_DOWNLOAD_NETWORK_IMAGE": "下载并替换",
 
     // Main Plugin Commands
     "CMD_PROCESS_ALL_VAULT": "处理库中所有图片",
@@ -863,6 +1044,7 @@ export default {
     "TOOLTIP_ANNOTATION_SAVE_LOAD_PRESET": "点击加载，Shift + 点击保存预设",
     "MENU_IMAGE_TOOLS": "图片工具",
     "TOOLTIP_CANCEL_REPLACE_BATCH": "取消当前批量替换操作",
+    "LABEL_CROP_RESET": "重置",
     "TOOLTIP_REPLACE_ALL_DELETE_MULTI": "替换整个库中的所有引用并删除所有本地源文件",
     "TOOLTIP_REPLACE_ALL_MULTI": "替换整个库中的所有引用",
     "TOOLTIP_CANCEL_REPLACE_MULTI": "取消所有匹配图片的替换",

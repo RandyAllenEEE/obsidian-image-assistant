@@ -1,11 +1,11 @@
-import { App, Notice, TFile, normalizePath, FileSystemAdapter } from "obsidian";
+import { App, Notice, TFile, normalizePath } from "obsidian";
 import { join } from "path-browserify";
 import ImageConverterPlugin from "../../main";
-import { UploadHelper } from "../../utils/UploadHelper";
 import { t } from "../../lang/helpers";
 import { CloudResourceHelpers } from "../utils/CloudResourceHelpers";
 import { SingleImageUploader } from "./SingleImageUploader";
-import { CloudLinkFormatter } from "../CloudLinkFormatter";
+import { ImageLinkPathReplacer } from "../../utils/ImageLinkPathReplacer";
+import { getAllImageLinks } from "../../utils/RegexPatterns";
 
 // Unified Batch Tools
 import {
@@ -14,7 +14,8 @@ import {
     showBatchConfirmDialog,
     BatchTask,
     MultiRefItem,
-    BatchResult
+    BatchResult,
+    computeMultiRefItems
 } from "../../utils/batch";
 
 /**
@@ -62,9 +63,9 @@ export class NoteBatchUploader {
         }
 
         try {
-            // 1. Collect Image Links from Editor
-            const helper = new UploadHelper(this.app);
-            const allImageLinks = helper.getAllImageLinks();
+            // 1. Collect image links directly from active file content
+            const activeContent = await this.app.vault.read(activeFile);
+            const allImageLinks = getAllImageLinks(activeContent);
 
             if (allImageLinks.length === 0) {
                 new Notice("No images found in current note.");
@@ -140,28 +141,10 @@ export class NoteBatchUploader {
 
             // 5. Pre-calculate Reference Info for Dialog
             new Notice(t("MSG_SCANNING_REFS") || "Scanning references...");
-            const multiRefItems: MultiRefItem[] = [];
-
-            for (const task of tasksToUpload) {
-                if (!task.isNetwork && task.file) {
-                    const refs = await this.plugin.vaultReferenceManager.getFilesReferencingImage(task.file.path);
-                    const totalRef = refs.length;
-
-                    // Simple count: current note vs others
-                    // refs contains all link matches, so multiple per note possible.
-                    const currentNoteRefs = refs.filter(r => r.file.path === activeFile.path).length;
-                    const otherNoteRefs = totalRef - currentNoteRefs;
-
-                    if (otherNoteRefs > 0) {
-                        multiRefItems.push({
-                            name: task.file.name,
-                            vaultReferences: totalRef,
-                            currentNoteReferences: currentNoteRefs,
-                            otherNotesReferences: otherNoteRefs
-                        });
-                    }
-                }
-            }
+            const localFiles = tasksToUpload
+                .filter(t => !t.isNetwork && t.file)
+                .map(t => t.file!);
+            const multiRefItems = await computeMultiRefItems(localFiles, this.plugin, activeFile.path);
 
             // 6. Confirm Dialog
             const action = await showBatchConfirmDialog(this.app, {
@@ -213,65 +196,59 @@ export class NoteBatchUploader {
 
             this.progressManager.setPhase('finalizing');
             let replacedCount = 0;
-            let helperContent = helper.getValue();
-            let hasChanges = false;
 
-            const urlMap = new Map<string, string>(); // Original (Path/URI) -> Cloud URL
+            const urlMap = new Map<string, string>();
             result.successful.forEach(r => {
-                if (r.result) { // URL
-                    // For network, item.path is URL. For file, item.path is file path.
+                if (r.result) {
                     urlMap.set(r.item.path, r.result);
                 }
             });
 
             if (action === 'replace-current') {
-                for (const item of tasksToUpload) {
-                    const cloudUrl = urlMap.get(item.path);
-                    if (cloudUrl) {
-                        for (const linkSource of item.links) {
-                            const formattedLink = CloudLinkFormatter.formatCloudLink(
-                                cloudUrl,
-                                this.plugin.settings.pasteHandling.cloud,
-                                item.file?.basename
-                            );
-
-                            helperContent = helperContent.replaceAll(linkSource, formattedLink);
-                            replacedCount++;
-                            hasChanges = true;
-                        }
-                    }
-                }
-                if (hasChanges) helper.setValue(helperContent);
-            }
-            else if (action === 'replace-all' || action === 'replace-all-delete') {
-                // Replace in all files
+                // Replace links in the active note only, using VaultReferenceManager for precision.
                 for (const item of tasksToUpload) {
                     const cloudUrl = urlMap.get(item.path);
                     if (!cloudUrl) continue;
 
                     if (!item.isNetwork && item.file) {
-                        // Use Reference Manager
-                        await this.plugin.vaultReferenceManager.updateReferences(item.file.path, (loc) => {
-                            return CloudLinkFormatter.formatCloudLink(
-                                cloudUrl,
-                                this.plugin.settings.pasteHandling.cloud,
-                                item.file?.basename
-                            );
-                        });
-                        replacedCount++; // This count is vague for 'all', but good enough
+                        const updated = await this.plugin.vaultReferenceManager.updateReferencesInFile(
+                            activeFile,
+                            item.file.path,
+                            (loc) => ImageLinkPathReplacer.replacePath(loc.original, cloudUrl)
+                        );
+                        replacedCount += updated;
                     } else {
-                        // Network image: replace in current note only (no ref manager for URLs usually)
-                        for (const linkSource of item.links) {
-                            const formattedLink = CloudLinkFormatter.formatCloudLink(
-                                cloudUrl,
-                                this.plugin.settings.pasteHandling.cloud
-                            );
-                            helperContent = helperContent.replaceAll(linkSource, formattedLink);
-                            hasChanges = true;
+                        // Network image: replace all occurrences in active file via regex.
+                        const currentContent = await this.app.vault.read(activeFile);
+                        const newContent = ImageLinkPathReplacer.replaceUrlInLinks(currentContent, item.path, cloudUrl);
+                        if (newContent !== currentContent) {
+                            await this.app.vault.modify(activeFile, newContent);
+                            replacedCount++;
                         }
                     }
                 }
-                if (hasChanges) helper.setValue(helperContent);
+            }
+            else if (action === 'replace-all' || action === 'replace-all-delete') {
+                // Replace in all files vault-wide
+                for (const item of tasksToUpload) {
+                    const cloudUrl = urlMap.get(item.path);
+                    if (!cloudUrl) continue;
+
+                    if (!item.isNetwork && item.file) {
+                        const updated = await this.plugin.vaultReferenceManager.updateReferences(item.file.path, (loc) => {
+                            return ImageLinkPathReplacer.replacePath(loc.original, cloudUrl);
+                        });
+                        replacedCount += updated;
+                    } else {
+                        // Network image: replace in active note only
+                        const currentContent = await this.app.vault.read(activeFile);
+                        const newContent = ImageLinkPathReplacer.replaceUrlInLinks(currentContent, item.path, cloudUrl);
+                        if (newContent !== currentContent) {
+                            await this.app.vault.modify(activeFile, newContent);
+                            replacedCount++;
+                        }
+                    }
+                }
 
                 // Delete source
                 if (action === 'replace-all-delete') {

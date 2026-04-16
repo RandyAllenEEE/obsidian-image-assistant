@@ -1,137 +1,228 @@
 # Image Assistant for Obsidian
 
-**Image Assistant** 是一个功能强大的 Obsidian 图片管理插件，深度集成了**本地图片处理**、**云端图床管理**和**OCR识别**功能。旨在为您提供一站式的图片管理解决方案。
+**Image Assistant** is a powerful all-in-one image management plugin for Obsidian, deeply integrating **local image processing**, **cloud image hosting**, and **OCR recognition**. It seamlessly handles everything from paste to publish.
 
-> 本项目基于 **[Image Converter](https://github.com/xRyul/obsidian-image-converter)**、**[Image Auto Upload](https://github.com/renmu123/obsidian-image-auto-upload-plugin)** 和 **[Image2LaTEX](https://github.com/Hugo-Persson/obsidian-ocrlatex)** 开发。
-> 核心图片处理逻辑归功于 **xRyul**，云端上传功能归功于 **renmu123**，OCR识别功能归功于 **Hugo Persson**。本项目并在基础上进行了深度整合与优化。
+> This plugin is built upon and inspired by **[Image Converter](https://github.com/xRyul/obsidian-image-converter)**, **[Image Auto Upload](https://github.com/renmu123/obsidian-image-auto-upload-plugin)**, and **[Image2LaTEX](https://github.com/Hugo-Persson/obsidian-ocrlatex)**.
 
 ---
 
-## ✨ 核心功能 (Core Features)
+## ✨ Highlights
 
-插件的功能逻辑分为 **"自动化粘贴处理"** 和 **"按需工具箱"** 两大板块。
+- 🖼️ **Local Processing** — Convert, compress, resize, and rename images directly in your vault. WEBP, PNG, JPEG, AVIF, HEIC, TIFF, BMP, GIF, SVG supported.
+- ☁️ **Cloud Upload** — Upload to PicGo/PicList with one click. Batch upload entire notes, folders, or your whole vault.
+- 🔍 **Smart Reference Tracking** — Automatically updates every image link across your vault when files are renamed or replaced.
+- ✂️ **OCR & LaTeX** — Extract text and math from clipboard images using LLM, SimpleTex, Texify, or Pix2Tex.
+- 🎨 **Annotation & Editing** — Draw, arrow, stamp, and markup images directly within Obsidian.
+- 📐 **Interactive Resize** — Drag image corners or scroll to resize. Non-destructive, persisted via pipe syntax.
+- 🖼️ **Image Alignment** — Align images left/center/right with optional text wrap.
+- 📝 **Captions** — Auto-extract and render image alt-text as elegant captions.
+- 🧹 **Unused File Cleaner** — Find and remove unreferenced attachments.
+- 🌐 **Network Image Download** — One-click download of online images into your vault.
 
-### 1. 自动化粘贴处理 (Auto Paste Handling)
-当您在笔记中粘贴或拖入图片时，插件会根据设置自动执行处理。
+---
+
+## 🚀 What's New in v4.1.0
+
+> **🚀 v4.1.0 Major Update**:
+> 1. **Modular Architecture V2**: Refactored cloud and local handlers into a clean modular architecture with dedicated paste handlers, drop handlers, batch uploaders, and batch processors.
+> 2. **Ollama Support**: OCR/LaTeX now supports local Ollama models (OpenAI-compatible API endpoint).
+> 3. **Context Menu Refactoring**: Rewrote the image context menu system for better maintainability and richer interaction model (copy as base64, crop/rotate/flip, align submenu).
+> 4. **Unified Batch Modal**: Consolidated all batch operations (note / folder / vault scope) into a single unified modal with a consistent review-and-confirm workflow.
+> 5. **URL Image Caption Rendering**: Improved caption rendering for network images.
+> 6. **Secret Storage**: API keys migrated to Obsidian's native Secret Storage (requires Obsidian v1.11.4+).
+
 > **🚀 v4.0.0 Major Update**:
 > 1. **Modular Architecture**: Complete refactoring of core handlers and UI modals for better performance and extensibility.
 > 2. **i18n Refinement**: Standardized internationalization with parametric translation support across the entire plugin.
-> 3. **Secret Storage**: Migrated sensitive API keys to Obsidian's native Secret Storage (requires Obsidian v1.11.4+).
+> 3. **Secret Storage**: Sensitive API keys migrated to Obsidian's native Secret Storage (requires Obsidian v1.11.4+).
 > 4. **Stability**: Improved link reference management and concurrent processing reliability.
->
-> **🔥 v3.1.1 Patch Update**:
-> 1. **Fixed**: Layout leakage issues where image alignment affected surrounding text.
-> 2. **Refined**: Robust caption extraction (truncates at first `|` pipe, handles empty captions with space fallback).
-> 3. **Improved**: Dedicated rendering for URL image captions.
->
-> **🚀 v3.0.0 Major Update**: 
-> 1. **Internationalization (i18n)**: Now fully supports **English** and **Simplified Chinese** (UI strings no longer hardcoded).
-> 2. **Performance**: New concurrent queue system, batch processing hundreds of images without freezing.
-> 3. **Robustness**: Enhanced link cleaning and reference tracking.
-
-支持以下三种模式（在设置中切换）：
-
-*   **🏠 本地模式 (Local Mode)** - *离线优先，优化存档*
-    *   **自动转换**: 转为 WebP/JPG/PNG。
-    *   **自动压缩**: 减小体积，节省硬盘空间。
-    *   **自动重命名**: 基于笔记名或时间戳重命名 (`Date-FileName.webp`)。
-    *   **非破坏性调整**: 自动计算并添加尺寸标记 (`|width`)。
-
-*   **☁️ 图床模式 (Cloud Mode)** - *在线分享，节省本地空间*
-    *   **自动上传**: 粘贴时直接上传至 PicGo/PicList。
-    *   **链接替换**: 自动插入云端链接，而非本地路径。
-    *   **批量处理**: 支持一键将当前笔记的所有本地图片批量上传。
-
-*   **🚫 关闭 (Disabled)**
-    *   不进行任何自动化处理，保持 Obsidian 原生行为。
-
-### 2. 按需工具箱 (On-Demand Tools)
-以下功能通过 **命令面板 (Command Palette)** 或 **快捷键** 触发，随时调用：
-
-*   **🔍 OCR 智能识别 (OCR)**
-    *   **功能**: 将**剪贴板**中的图片（如公式截图）转换为文本或 LaTeX。
-    *   **触发方式**: `Cmd/Ctrl + P` -> 搜索 `Generate...`
-        *   `Generate inline LaTeX`: 生成行内公式 `$ ... $`
-        *   `Generate multiline LaTeX`: 生成公式块 `$$ ... $$`
-        *   `Generate markdown`: 生成普通文本
-    *   **支持服务**: LLM (GPT-4o/Claude等), SimpleTex, Texify, Pix2Tex。
-
-*   **🌐 网络图片本地化 (Downloader)**
-    *   **功能**: 一键下载笔记中的网络图片到本地，防止链接失效。
-    *   **模式**: 支持 "下载并替换"、"仅下载" 或 "仅替换"。
-
-*   **🎨 图片编辑 (Editing)**
-    *   **标注**: 直接在 Obsidian 内对图片进行绘图、标注。
-    *   **调整**: 拖拽边缘调整大小，或使用右键菜单编辑。
 
 ---
 
-## 🚀 使用指南 (Usage)
+## 1. Auto Paste / Drop Handling
 
-### 设置自动粘贴模式
-进入 **设置 (Settings) → Image Assistant → Paste handling mode**：
-*   选择 `Local`：启用本地压缩、重命名流程。
-*   选择 `Cloud`：启用自动上传流程（需配合 PicGo）。
+When you paste or drop an image into a note, the plugin processes it automatically based on your settings.
 
-### 使用 OCR 识别
-无需切换模式，随时可以使用：
-1.  **截图/复制**图片到系统剪贴板。
-2.  呼出的命令面板 (`Ctrl/Cmd + P`)。
-3.  输入 **OCR** 关键字。
-4.  选择对应命令（如转为 LaTeX 公式），结果将自动插入光标处。
+### Paste Mode: Local
 
-### 批量管理
-*   **上传笔记图片**: 在图床模式下，使用命令 `Upload all images in current note`。
-*   **下载网络图片**: 使用命令 `Download all network images in current note`。
+Offline-first, optimizes your vault archive.
 
----
+- **Auto-convert**: Convert to WebP, JPEG, PNG, or AVIF.
+- **Auto-compress**: Reduce file size with quality control, pngquant, or FFmpeg.
+- **Auto-rename**: Rename using templates like `{notename}-{timestamp}` or `{MD5}`.
+- **Non-destructive resize**: Auto-calculate and inject width/height pipe syntax (`|300`).
+- **Smart conflict resolution**: Skip, reuse, increment, or overwrite duplicates.
 
-## ⚙️ 配置说明 (Configuration)
+### Paste Mode: Cloud
 
-### 图床配置 (Cloud)
-*   需要安装并运行 **PicGo** 或 **PicList**。
-*   默认地址: `http://127.0.0.1:36677/upload`
+Online sharing, saves local vault space.
 
-### OCR 配置
-*   **推荐**: 使用 **LLM** (OpenAI 兼容接口) 或 **SimpleTex** (公式识别精度高)。
-*   可在设置页面的 "OCR & LaTeX 设置" 中配置 API Key。
+- **Auto-upload**: Paste directly uploads to PicGo/PicList server.
+- **Link replacement**: Inserts the cloud URL instead of a local path.
+- **Batch upload**: One command to upload all images in the current note.
+- **Network image upload**: Upload images from URLs directly to your cloud host.
+- **Delete after upload**: Option to remove the local file after successful upload.
+
+### Per-Note Override
+
+Set `image_paste_mode: local|cloud|disabled` in a note's frontmatter to override the global setting for that note only.
 
 ---
 
-## 📥 安装 (Installation)
+## 2. On-Demand Tools
 
-1.  从 [Releases](https://github.com/RandyAllenEEE/obsidian-image-assistant/releases) 下载 `main.js`, `styles.css`, `manifest.json`。
-2.  放入 `.obsidian/plugins/image-assistant/` 文件夹。
-3.  重启 Obsidian 并启用。
+Available any time via the **Command Palette** or right-click menu:
 
-*(或者使用 BRAT 插件安装: `RandyAllenEEE/obsidian-image-assistant`)*
+### OCR / LaTeX / Markdown
+Converts clipboard images (e.g. screenshots of equations) into text.
+
+| Command | Output |
+|---------|--------|
+| `Generate inline LaTeX` | `$...$` inline formula |
+| `Generate multiline LaTeX` | `$$...$$` display formula |
+| `Generate markdown` | Plain text |
+
+**Supported providers**: LLM (OpenAI or local Ollama), SimpleTex, Texify, Pix2Tex.
+
+### Network Image Downloader
+One-click download of online images referenced in notes to your local vault.
+
+- **Download & Replace** — Download and swap the URL for a local path
+- **Download Only** — Just download, don't touch the links
+- **Replace Only** — Assume already downloaded, swap URLs to local paths
+
+Scope: current note, folder (recursive), or entire vault.
+
+### Image Annotation
+Draw, arrow, stamp text, and markup images directly inside Obsidian.
+
+- Pencil, arrow, text, rectangle, circle, line, eraser tools
+- 3 color pickers, opacity, blend mode, stroke size
+- 3 preset slots per tool type (drawing / arrow / text)
+- Undo/Redo (Ctrl+Z / Ctrl+Shift+Z)
+- Saves directly to the original file
+
+### Batch Operations
+Process or upload multiple images at once:
+
+| Scope | Local Processing | Cloud Upload |
+|-------|-----------------|-------------|
+| Current note | ✅ | ✅ |
+| Selected folder | ✅ | ✅ |
+| Entire vault | ✅ | ✅ |
 
 ---
 
-## 🔧 技术栈 (Tech Stack)
-*   **Core**: Pure TypeScript/JavaScript
-*   **UI**: FabricJS (Annotation)
-*   **Protocol**: PicGo (Upload)
+## 3. Image Alignment & Captions
+
+### Alignment
+Right-click any image to align it **left / center / right** with optional **text wrap**.
+
+Settings control the default alignment and whether wrap applies in edit mode.
+
+### Captions
+Automatically extracts the `alt` text from image links and renders it as a styled caption below the image.
+
+Fully customizable: font size, color, style, weight, background, border, padding, alignment, and more.
 
 ---
 
-## 📜 协议与致谢 (License & Acknowledgments)
+## 4. Interactive Drag Resize
+
+Resize images by **dragging corner handles** or **scrolling the mouse wheel**.
+
+- 8 resize handles (corners + edges)
+- Optional aspect ratio lock
+- Scroll resize with configurable sensitivity and modifier key
+- Dimensions persisted via Obsidian pipe syntax (`![[image.png|300]]`)
+- Visual resize in reading mode (non-destructive)
+
+---
+
+## 5. Unused File Cleaner
+
+Scans any attachment folder for files not referenced anywhere in your vault.
+
+- Configurable scan path, file types, and delete mode (system trash / Obsidian trash / custom folder)
+- Preview list before deleting
+- Optionally indexes fenced code blocks and Obsidian admonitions for reference tracking
+
+---
+
+## 6. Right-Click Context Menu
+
+Right-click any image in the editor for quick access to:
+
+- **Rename** — rename file and update all references across the vault
+- **Cut / Copy / Copy as Base64**
+- **Convert / Compress** — single image processing modal
+- **Crop / Rotate / Flip**
+- **Annotate** — open annotation editor
+- **Align** (left / center / right / wrap submenu)
+- **Upload & Replace** (cloud mode)
+- **Auto Delete** (file + link)
+- **Show in explorer / navigation**
+- **Sidebar file menu**: Process single image, upload, or process all images in note/folder
+
+---
+
+## ⚙️ Configuration
+
+### Cloud Upload
+Requires **PicGo** or **PicList** running locally (default server: `http://127.0.0.1:36677`).
+
+Settings: upload server URL, delete server URL, PicGo-Core binary path, concurrency (1–10), link format (markdown / wikilink).
+
+### OCR
+**Recommended**: Use a local **Ollama** model or **SimpleTex** for formula recognition.
+
+Configure the API key in Settings → OCR & LaTeX. Keys are stored in Obsidian's native Secret Storage.
+
+### Alignment & Captions
+Enable/disable individually in Settings. All caption styles (font, color, background, border, spacing) are fully customizable.
+
+### External Tools
+- **pngquant**: Path to binary + quality range (e.g. `65-80`) for PNG compression
+- **FFmpeg**: Path to binary + CRF (0–51) + preset for advanced encoding
+
+---
+
+## 📥 Installation
+
+1. Download `main.js`, `styles.css`, and `manifest.json` from [Releases](https://github.com/RandyAllenEEE/obsidian-image-assistant/releases).
+2. Place them in `.obsidian/plugins/image-assistant/`.
+3. Restart Obsidian and enable the plugin.
+
+*Or install via BRAT: search for `RandyAllenEEE/obsidian-image-assistant` in BRAT.*
+
+---
+
+## 🔧 Tech Stack
+
+- **Core**: Pure TypeScript — no heavy runtime dependencies
+- **UI**: Obsidian's native Settings API + Fabric.js for annotation
+- **Protocol**: PicGo / PicList server API
+- **i18n**: Full English and Simplified Chinese support
+
+---
+
+## 📜 License & Acknowledgments
 
 ### License
 MIT License
 
 ### Acknowledgments
 
-**Image Assistant** 的诞生离不开以下优秀开源项目的启发与代码贡献。我们对其原始作者表示诚挚的感谢：
+**Image Assistant** stands on the shoulders of these excellent open-source projects:
 
-1. **[xRyul](https://github.com/xRyul)** - **[obsidian-image-converter](https://github.com/xRyul/obsidian-image-converter)**
-   - 提供了核心的图片转换、压缩和重命名逻辑。
+1. **[xRyul](https://github.com/xRyul)** — **[obsidian-image-converter](https://github.com/xRyul/obsidian-image-converter)**
+   — Core image conversion, compression, and rename logic.
 
-2. **[renmu123](https://github.com/renmu123)** - **[obsidian-image-auto-upload-plugin](https://github.com/renmu123/obsidian-image-auto-upload-plugin)**
-   - 提供了 PicGo/PicList 自动上传和链接替换的实现基础。
+2. **[renmu123](https://github.com/renmu123)** — **[obsidian-image-auto-upload-plugin](https://github.com/renmu123/obsidian-image-auto-upload-plugin)**
+   — PicGo/PicList auto-upload and link replacement foundation.
 
-3. **[Hugo Persson](https://github.com/Hugo-Persson)** - **[obsidian-ocrlatex](https://github.com/Hugo-Persson/obsidian-ocrlatex)**
-   - 提供了 OCR 识别和 LaTeX 公式转换的功能灵感。
+3. **[Hugo Persson](https://github.com/Hugo-Persson)** — **[obsidian-ocrlatex](https://github.com/Hugo-Persson/obsidian-ocrlatex)**
+   — OCR recognition and LaTeX formula conversion inspiration.
 
 4. **[Fabric.js](http://fabricjs.com/)**
-   - 提供了强大的图片标注和编辑功能的底层支持。
+   — Canvas-based image annotation and markup layer.

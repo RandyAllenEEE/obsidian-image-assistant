@@ -32,7 +32,7 @@ export function renderAlignmentSettingsSection(
                     refreshDisplay();
 
                     if (!value) {
-                        new Notice("Image alignment disabled.", 2000);
+                        new Notice(t("NOTICE_IMAGE_ALIGNMENT_DISABLED"), 2000);
                     }
                 })
         );

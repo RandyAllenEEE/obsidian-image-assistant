@@ -1,6 +1,7 @@
 import { App, Modal, Setting } from "obsidian";
 import { basename } from "path-browserify";
 import { BatchAction, BatchConfirmOptions, MultiRefItem } from "./types";
+import { t } from "../../lang/helpers";
 
 /**
  * BatchConfirmDialog - Unified confirmation dialog for batch operations.
@@ -30,16 +31,16 @@ export class BatchConfirmDialog extends Modal {
         const content = contentEl.createDiv();
 
         // Summary
-        const modeLabel = mode === 'local' ? "Local Processing" : "Cloud Upload";
+        const modeLabel = mode === 'local' ? t("BATCH_DIALOG_LOCAL_PROCESSING") : t("MODAL_MODE_UPLOAD");
         content.createEl("p", {
-            text: `${modeLabel}: ${totalCount} images`,
+            text: `${modeLabel}: ${totalCount} ${t("BATCH_DIALOG_IMAGES")}`,
             cls: "batch-confirm-summary"
         });
 
         // Scope info
         if (scopePath) {
             content.createEl("p", {
-                text: `Scope: ${basename(scopePath)}`,
+                text: `${t("BATCH_SCOPE_LABEL", [basename(scopePath)])}`,
                 cls: "batch-confirm-scope"
             });
         }
@@ -48,14 +49,14 @@ export class BatchConfirmDialog extends Modal {
         if (multiRefItems.length > 0) {
             const warningDiv = content.createDiv({ cls: "batch-warning-box" });
             warningDiv.createEl("p", {
-                text: `${multiRefItems.length} images have references in other notes`,
+                text: `${multiRefItems.length} ${t("BATCH_DIALOG_REFS_WARNING")}`,
                 cls: "batch-warning-text"
             });
 
             // Details list
             const detailsDiv = content.createDiv({ cls: "batch-reference-details" });
             detailsDiv.createEl("p", {
-                text: "Details:",
+                text: t("BATCH_DIALOG_DETAILS"),
                 cls: "batch-details-title"
             });
 
@@ -63,24 +64,24 @@ export class BatchConfirmDialog extends Modal {
             multiRefItems.slice(0, 10).forEach(info => {
                 const itemEl = listEl.createEl("li");
                 itemEl.setText(
-                    `${info.name}: ${info.currentNoteReferences} in current, ${info.otherNotesReferences} in other notes`
+                    `${info.name}: ${info.currentNoteReferences} ${t("BATCH_DIALOG_IN_CURRENT")}, ${info.otherNotesReferences} ${t("BATCH_DIALOG_IN_OTHER")}`
                 );
             });
 
             if (multiRefItems.length > 10) {
                 listEl.createEl("li", {
-                    text: `... and ${multiRefItems.length - 10} more`,
+                    text: t("BATCH_DIALOG_MORE_ITEMS", [(multiRefItems.length - 10).toString()]),
                     cls: "batch-more-files"
                 });
             }
 
             content.createEl("p", {
-                text: "Select an action:",
+                text: t("BATCH_DIALOG_SELECT_ACTION"),
                 cls: "batch-info-text"
             });
         } else {
             content.createEl("p", {
-                text: "All images are only referenced in the current note.",
+                text: t("BATCH_DIALOG_ALL_IN_CURRENT"),
                 cls: "batch-info-text"
             });
         }
@@ -93,8 +94,8 @@ export class BatchConfirmDialog extends Modal {
 
         if (actions.includes('replace-current') && multiRefItems.length > 0) {
             buttonSetting1.addButton(btn => btn
-                .setButtonText("Replace in current note")
-                .setTooltip("Only replace links in current note")
+                .setButtonText(t("BATCH_DIALOG_REPLACE_CURRENT"))
+                .setTooltip(t("BATCH_DIALOG_REPLACE_CURRENT_DESC"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-current');
@@ -104,9 +105,9 @@ export class BatchConfirmDialog extends Modal {
 
         if (actions.includes('replace-all')) {
             buttonSetting1.addButton(btn => btn
-                .setButtonText("Replace in all notes")
+                .setButtonText(t("BATCH_DIALOG_REPLACE_ALL"))
                 .setCta()
-                .setTooltip("Replace links in all notes")
+                .setTooltip(t("BATCH_DIALOG_REPLACE_ALL_DESC"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-all');
@@ -116,8 +117,8 @@ export class BatchConfirmDialog extends Modal {
 
         if (actions.includes('process-only')) {
             buttonSetting1.addButton(btn => btn
-                .setButtonText("Process only (no link changes)")
-                .setTooltip("Process images without changing links")
+                .setButtonText(t("BATCH_DIALOG_PROCESS_ONLY"))
+                .setTooltip(t("BATCH_DIALOG_PROCESS_ONLY_DESC"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('process-only');
@@ -130,8 +131,8 @@ export class BatchConfirmDialog extends Modal {
 
         if (actions.includes('replace-all-delete')) {
             buttonSetting2.addButton(btn => btn
-                .setButtonText("Replace all & delete source")
-                .setTooltip("Replace all links and delete source files")
+                .setButtonText(t("BATCH_DIALOG_REPLACE_DELETE"))
+                .setTooltip(t("BATCH_DIALOG_REPLACE_DELETE_DESC"))
                 .onClick(() => {
                     this.close();
                     this.onChoice('replace-all-delete');
@@ -140,8 +141,8 @@ export class BatchConfirmDialog extends Modal {
         }
 
         buttonSetting2.addButton(btn => btn
-            .setButtonText("Cancel")
-            .setTooltip("Cancel operation")
+            .setButtonText(t("BATCH_DIALOG_CANCEL"))
+            .setTooltip(t("BATCH_DIALOG_CANCEL_DESC"))
             .onClick(() => {
                 this.close();
                 this.onChoice('cancel');
