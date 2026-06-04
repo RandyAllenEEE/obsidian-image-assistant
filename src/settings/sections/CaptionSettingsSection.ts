@@ -1,12 +1,12 @@
 import { Setting, setIcon, Notice } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
-import { PresetUIState } from "../types";
+import { SettingsUIState } from "../types";
 
 export function renderCaptionSettingsSection(
     containerEl: HTMLElement,
     plugin: ImageConverterPlugin,
-    presetUIState: PresetUIState,
+    settingsUIState: SettingsUIState,
     refreshDisplay: () => void
 ): void {
     // --- Image Captions Settings Section ---
@@ -49,7 +49,7 @@ export function renderCaptionSettingsSection(
 
     // Function to update chevron state
     const updateChevron = () => {
-        if (presetUIState.imageCaptionSectionCollapsed) {
+        if (settingsUIState.imageCaptionSectionCollapsed) {
             setIcon(chevronIcon, "chevron-right");
             settingsContentWrapper.style.display = "none";
         } else {
@@ -66,7 +66,7 @@ export function renderCaptionSettingsSection(
         // Prevent collapse when clicking the toggle
         if ((e.target as HTMLElement).closest(".checkbox-container")) return;
 
-        presetUIState.imageCaptionSectionCollapsed = !presetUIState.imageCaptionSectionCollapsed;
+        settingsUIState.imageCaptionSectionCollapsed = !settingsUIState.imageCaptionSectionCollapsed;
         updateChevron();
     };
 

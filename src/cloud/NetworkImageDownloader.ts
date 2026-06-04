@@ -775,7 +775,7 @@ export class NetworkImageDownloader {
             const finalName = `${sanitizedName}.${type.ext}`;
 
             // 4. 处理文件名冲突
-            const conflictMode = this.plugin.settings.filenamePresets[0]?.conflictResolution || "increment";
+            const conflictMode = this.plugin.settings.localProcessing.filename.conflictResolution || "increment";
 
             const uniqueName = await this.folderManager.handleNameConflicts(
                 folderPath,

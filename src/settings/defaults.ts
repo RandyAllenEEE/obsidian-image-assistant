@@ -1,4 +1,4 @@
-import { ImageAssistantSettings, LinkFormatSettings, NonDestructiveResizeSettings } from "./types";
+import { ImageAssistantSettings } from "./types";
 
 // Re-export for convenience
 export type { ImageAssistantSettings };
@@ -8,85 +8,77 @@ import { DEFAULT_OCR_SETTINGS } from "../ocr/OCRSettings";
 export { DEFAULT_OCR_SETTINGS };
 
 export const DEFAULT_SETTINGS: ImageAssistantSettings = {
-    folderPresets: [
-        { type: "DEFAULT", name: "Default (Obsidian setting)" },
-        { type: "ROOT", name: "Root folder" },
-        { type: "CURRENT", name: "Same folder as current note" },
-    ],
-    selectedFolderPreset: "Default (Obsidian setting)",
-    filenamePresets: [
-        { name: "Keep original name", customTemplate: "{imagename}", skipRenamePatterns: "", conflictResolution: "increment" },
-        { name: "NoteName-Timestamp", customTemplate: "{notename}-{timestamp}", skipRenamePatterns: "", conflictResolution: "increment" },
-    ],
-    selectedFilenamePreset: "Keep original name",
-    conversionPresets: [
-        { name: "Default (WebP)", outputFormat: "WEBP", quality: 80, colorDepth: 1, resizeMode: "None", desiredWidth: 800, desiredHeight: 600, desiredLongestEdge: 800, enlargeOrReduce: "Always", allowLargerFiles: false, skipConversionPatterns: "" },
-        { name: "High Quality (PNG)", outputFormat: "PNG", quality: 100, colorDepth: 1, resizeMode: "None", desiredWidth: 800, desiredHeight: 600, desiredLongestEdge: 800, enlargeOrReduce: "Always", allowLargerFiles: false, skipConversionPatterns: "" }
-    ],
-    selectedConversionPreset: "Default (WebP)",
-    globalPresets: [
-        {
-            name: "Default (WebP + Fit)",
-            folderPreset: "Default (Obsidian setting)",
-            filenamePreset: "Keep original name",
-            conversionPreset: "Default (WebP)",
-            linkFormatPreset: "Default",
-            resizePreset: "Default (No Resize)"
-        }
-    ],
-    selectedGlobalPreset: "Default (WebP + Fit)",
-    singleImageModalSettings: undefined,
+    localProcessing: {
+        destination: {
+            type: "DEFAULT",
+            subfolderTemplate: "{notename}",
+        },
+        filename: {
+            customTemplate: "{imagename}",
+            skipRenamePatterns: "",
+            conflictResolution: "increment",
+        },
+        conversion: {
+            outputFormat: "WEBP",
+            quality: 80,
+            colorDepth: 1,
+            resizeMode: "None",
+            desiredWidth: 800,
+            desiredHeight: 600,
+            desiredLongestEdge: 800,
+            enlargeOrReduce: "Always",
+            allowLargerFiles: false,
+            skipConversionPatterns: "",
+            minimumCompressionSavingsInKB: 30,
+        },
+        externalTools: {
+            pngquantExecutablePath: "",
+            pngquantQuality: "65-80",
+            ffmpegExecutablePath: "",
+            ffmpegCrf: 23,
+            ffmpegPreset: "medium",
+            useSystemPathForBinary: true,
+        },
+        link: {
+            linkFormat: "wikilink",
+            pathFormat: "shortest",
+            prependCurrentDir: false,
+            hideFolders: false,
+        },
+        embedResize: {
+            resizeDimension: "none",
+            resizeScaleMode: "auto",
+            respectEditorMaxWidth: true,
+            maintainAspectRatio: true,
+            resizeUnits: "pixels",
+        },
+    },
+    operationDefaults: {
+        singleImage: undefined,
+        batchLocal: {
+            convertTo: "webp",
+            quality: 0.75,
+            resizeMode: "None",
+            desiredWidth: 600,
+            desiredHeight: 800,
+            desiredLength: 800,
+            skipImagesInTargetFormat: false,
+            enlargeOrReduce: "Always",
+            skipFormats: "pdf,svg",
+        },
+    },
     global: {
-        outputFormat: "NONE",
-        quality: 100,
-        colorDepth: 1,
-        pngquantQuality: "65-80",
-        pngquantExecutablePath: "",
-        ffmpegExecutablePath: "",
-        ffmpegCrf: 23,
-        ffmpegPreset: "medium",
-
-        modalBehavior: "never",
         enableContextMenu: true,
         codeBlockImageLinkIndexing: true,
         showSpaceSavedNotification: true,
-        revertToOriginalIfLarger: false,
-        minimumCompressionSavingsInKB: 30,
-        useSystemPathForBinary: true,
     },
 
-    linkFormatSettings: new LinkFormatSettings(),
-    nonDestructiveResizeSettings: new NonDestructiveResizeSettings(),
     ocrSettings: DEFAULT_OCR_SETTINGS,
     cleanerSettings: {
         basePath: 'attachments',
         trashMode: 'obsidian',
         customTrashPath: '.trash',
         fileTypes: 'jpg,jpeg,png,gif,webp,bmp,svg,pdf,mp4,mp3'
-    },
-
-    processCurrentNote: {
-        convertTo: 'webp',
-        quality: 0.75,
-        resizeMode: 'None',
-        desiredWidth: 600,
-        desiredHeight: 800,
-        desiredLength: 800,
-        skipImagesInTargetFormat: false,
-        enlargeOrReduce: 'Always',
-        skipFormats: 'pdf,svg',
-    },
-
-    processAllVault: {
-        convertTo: 'webp',
-        quality: 0.75,
-        resizeMode: 'None',
-        desiredWidth: 800,
-        desiredHeight: 600,
-        desiredLength: 800,
-        enlargeOrReduce: 'Always',
-        skipFormats: 'pdf,svg',
-        skipImagesInTargetFormat: false,
     },
 
     captions: {
@@ -170,6 +162,5 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
             backgroundOpacity: 0.7
         }))
     },
-    subfolderTemplate: "",
     resizeCursorLocation: "none",
 };

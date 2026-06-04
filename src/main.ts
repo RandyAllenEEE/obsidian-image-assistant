@@ -19,9 +19,8 @@ import { SupportedImageFormats } from "./local/SupportedImageFormats";
 import { FolderAndFilenameManagement } from "./local/FolderAndFilenameManagement";
 import { ImageProcessor } from "./local/ImageProcessor";
 import { VariableProcessor } from "./local/VariableProcessor";
-import { LinkFormatPreset } from "./settings/LinkFormatSettings";
 import { LinkFormatter } from "./utils/LinkFormatter";
-import { NonDestructiveResizePreset } from "./settings/NonDestructiveResizeSettings";
+import { EmbedResizeSettings } from "./settings/NonDestructiveResizeSettings";
 import { ContextMenu } from "./ui/ContextMenu";
 import { ConcurrentQueue } from "./utils/AsyncLock";
 import { ImageAlignment } from './ui/ImageAlignment'; // Import class directly
@@ -45,11 +44,7 @@ import { resolve } from "path-browserify";
 // Settings tab and all DEFAULTS
 import { ImageConverterSettingTab } from "./settings/ImageAssistantSettings";
 import { ImageAssistantSettings, DEFAULT_SETTINGS } from "./settings/defaults";
-import { ConversionPreset, FilenamePreset, FolderPreset } from "./settings/types";
-import { ConfirmDialog } from "./settings/SettingsModals";
-
-import { PresetSelectionModal } from "./ui/modals/PresetSelectionModal";
-
+import { LocalLinkSettings } from "./settings/types";
 import { VaultReferenceManager } from "./utils/VaultReferenceManager";
 import { UnusedFileCleanerModal } from "./utils/UnusedFileCleanerModal";
 import { PasteModeConfigModal } from "./ui/modals/PasteModeConfigModal";
@@ -107,7 +102,6 @@ export default class ImageConverterPlugin extends Plugin {
     imageProcessor: ImageProcessor;
     // Handle variable processing
     variableProcessor: VariableProcessor;
-    // linkFormatSettings: LinkFormatSettings;     // Link format - it is initialised via ImageAssistantSettings
     // Link formatter
     linkFormatter: LinkFormatter;
     // Context menu
@@ -606,8 +600,28 @@ export default class ImageConverterPlugin extends Plugin {
         // Ensure critical sections exist even if deepMerge missed something (e.g. new sections)
         if (!this.settings.global) this.settings.global = { ...DEFAULT_SETTINGS.global };
         if (!this.settings.pasteHandling) this.settings.pasteHandling = { ...DEFAULT_SETTINGS.pasteHandling };
-        if (!this.settings.processCurrentNote) this.settings.processCurrentNote = { ...DEFAULT_SETTINGS.processCurrentNote };
-        if (!this.settings.processAllVault) this.settings.processAllVault = { ...DEFAULT_SETTINGS.processAllVault };
+        if (!this.settings.localProcessing) this.settings.localProcessing = { ...DEFAULT_SETTINGS.localProcessing };
+        if (!this.settings.operationDefaults) this.settings.operationDefaults = { ...DEFAULT_SETTINGS.operationDefaults };
+    }
+
+    public getDefaultSingleImageOperationSettings() {
+        const { conversion, externalTools } = this.settings.localProcessing || DEFAULT_SETTINGS.localProcessing;
+        return {
+            outputFormat: conversion.outputFormat,
+            quality: conversion.quality,
+            colorDepth: conversion.colorDepth,
+            resizeMode: conversion.resizeMode,
+            desiredWidth: conversion.desiredWidth,
+            desiredHeight: conversion.desiredHeight,
+            desiredLongestEdge: conversion.desiredLongestEdge,
+            enlargeOrReduce: conversion.enlargeOrReduce,
+            allowLargerFiles: conversion.allowLargerFiles,
+            pngquantExecutablePath: externalTools.pngquantExecutablePath,
+            pngquantQuality: externalTools.pngquantQuality,
+            ffmpegExecutablePath: externalTools.ffmpegExecutablePath,
+            ffmpegCrf: externalTools.ffmpegCrf,
+            ffmpegPreset: externalTools.ffmpegPreset,
+        };
     }
 
     // Save settings method
@@ -693,7 +707,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         if (frontmatter && 'image_paste_mode' in frontmatter) {
             const override = frontmatter['image_paste_mode'];
-            if (override === 'local' || override === 'cloud') {
+            if (override === 'local' || override === 'cloud' || override === 'disabled') {
                 return override;
             }
         }
@@ -905,11 +919,9 @@ export default class ImageConverterPlugin extends Plugin {
                     !this.folderAndFilenameManagement.matchesPatterns(data.file.name, this.settings.pasteHandling.neverProcessFilenames)
                 );
 
-                if (hasSupportedItems) {
-                    // Get effective paste mode (may be overridden by Frontmatter)
-                    const effectiveMode = this.getEffectivePasteMode();
+                const effectiveMode = this.getEffectivePasteMode();
 
-                    // Check paste handling mode
+                if (hasSupportedItems) {
                     if (effectiveMode === 'disabled') {
                         // Disabled mode: do nothing, let Obsidian handle it
                         return;
@@ -924,7 +936,7 @@ export default class ImageConverterPlugin extends Plugin {
                         // Local mode: use original converter logic
                         await this.localImageHandler.handlePaste(evt, editor);
                     }
-                } else if (this.settings.pasteHandling.mode === 'cloud' && clipboardText) {
+                } else if (effectiveMode === 'cloud' && clipboardText) {
                     // Check if pasted text contains image URLs (for URL auto-upload)
                     // Use the CloudImageHandler to handle text paste
                     await this.cloudImageHandler.handlePasteText(clipboardText, editor, cursor, evt);
@@ -940,28 +952,22 @@ export default class ImageConverterPlugin extends Plugin {
         editor: Editor,
         linkPath: string,
         cursor: EditorPosition,
-        selectedLinkFormatPreset?: LinkFormatPreset,
-        selectedResizePreset?: NonDestructiveResizePreset
+        selectedLinkFormatSetting?: LocalLinkSettings,
+        resizeSetting?: EmbedResizeSettings
     ) {
 
         const activeFile = this.app.workspace.getActiveFile();
 
-        // Use the passed presets or fall back to the plugin settings
-        const linkFormatPresetToUse = selectedLinkFormatPreset || this.settings.linkFormatSettings.linkFormatPresets.find(
-            (preset: LinkFormatPreset) => preset.name === this.settings.linkFormatSettings.selectedLinkFormatPreset
-        );
-
-        const resizePresetToUse = selectedResizePreset || this.settings.nonDestructiveResizeSettings.resizePresets.find(
-            (preset: NonDestructiveResizePreset) => preset.name === this.settings.nonDestructiveResizeSettings.selectedResizePreset
-        );
+        const linkFormatToUse = selectedLinkFormatSetting || this.settings.localProcessing.link;
+        const resizeSettingToUse = resizeSetting || this.settings.localProcessing.embedResize;
 
         // Await the result of formatLink
         const formattedLink = await this.linkFormatter.formatLink(
             linkPath, // Pass the original linkPath
-            linkFormatPresetToUse?.linkFormat || "wikilink",
-            linkFormatPresetToUse?.pathFormat || "shortest",
+            linkFormatToUse?.linkFormat || "wikilink",
+            linkFormatToUse?.pathFormat || "shortest",
             activeFile,
-            resizePresetToUse // Now using the selected resize preset
+            resizeSettingToUse
         );
 
 
@@ -986,27 +992,21 @@ export default class ImageConverterPlugin extends Plugin {
         inserter: EditorContentInserter,
         editor: Editor,
         linkPath: string,
-        selectedLinkFormatPreset?: LinkFormatPreset,
-        selectedResizePreset?: NonDestructiveResizePreset
+        selectedLinkFormatSetting?: LocalLinkSettings,
+        resizeSetting?: EmbedResizeSettings
     ) {
         const activeFile = this.app.workspace.getActiveFile();
 
-        // Use the passed presets or fall back to the plugin settings
-        const linkFormatPresetToUse = selectedLinkFormatPreset || this.settings.linkFormatSettings.linkFormatPresets.find(
-            (preset: LinkFormatPreset) => preset.name === this.settings.linkFormatSettings.selectedLinkFormatPreset
-        );
-
-        const resizePresetToUse = selectedResizePreset || this.settings.nonDestructiveResizeSettings.resizePresets.find(
-            (preset: NonDestructiveResizePreset) => preset.name === this.settings.nonDestructiveResizeSettings.selectedResizePreset
-        );
+        const linkFormatToUse = selectedLinkFormatSetting || this.settings.localProcessing.link;
+        const resizeSettingToUse = resizeSetting || this.settings.localProcessing.embedResize;
 
         // Await the result of formatLink
         const formattedLink = await this.linkFormatter.formatLink(
             linkPath,
-            linkFormatPresetToUse?.linkFormat || "wikilink",
-            linkFormatPresetToUse?.pathFormat || "shortest",
+            linkFormatToUse?.linkFormat || "wikilink",
+            linkFormatToUse?.pathFormat || "shortest",
             activeFile,
-            resizePresetToUse
+            resizeSettingToUse
         );
 
         inserter.insertResponseToEditor(formattedLink);
@@ -1033,19 +1033,6 @@ export default class ImageConverterPlugin extends Plugin {
 
         const message = `${originalSizeFormatted} → ${newSizeFormatted} (${changeSymbol}${percentChange}%)`;
         new Notice(message);
-    }
-
-    getPresetByName<T extends { name: string }>(
-        presetName: string,
-        presetArray: T[],
-        presetType: string
-    ): T {
-        const preset = presetArray.find(candidate => candidate.name === presetName);
-        if (!preset) {
-            console.warn(`${presetType} preset "${presetName}" not found, using default`);
-            return presetArray[0];
-        }
-        return preset;
     }
 
     /**

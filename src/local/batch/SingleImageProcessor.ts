@@ -48,9 +48,9 @@ export class SingleImageProcessor {
 
             // Check Revert to Original logic (including minimum savings)
             const originalSize = file.stat.size;
-            const minSavingsKB = (typeof (this.plugin.settings.global.minimumCompressionSavingsInKB) === 'number'
-                && this.plugin.settings.global.minimumCompressionSavingsInKB >= 0)
-                ? this.plugin.settings.global.minimumCompressionSavingsInKB
+            const minSavingsKB = (typeof (this.plugin.settings.localProcessing.conversion.minimumCompressionSavingsInKB) === 'number'
+                && this.plugin.settings.localProcessing.conversion.minimumCompressionSavingsInKB >= 0)
+                ? this.plugin.settings.localProcessing.conversion.minimumCompressionSavingsInKB
                 : 30;
 
             const shouldRevertIfLarger = !allowLargerFiles;
@@ -133,11 +133,11 @@ export class SingleImageProcessor {
             desiredHeight,
             desiredLength,
             enlargeOrReduce
-        } = this.plugin.settings.processCurrentNote;
-        const { revertToOriginalIfLarger } = this.plugin.settings.global;
-        const allowLargerFiles = !revertToOriginalIfLarger;
+        } = this.plugin.settings.operationDefaults.batchLocal;
+        const allowLargerFiles = this.plugin.settings.localProcessing.conversion.allowLargerFiles;
 
-        const outputFormat = convertTo === 'disabled' ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
+        const isKeepOriginalFormat = convertTo === 'disabled' || convertTo === 'Original';
+        const outputFormat = isKeepOriginalFormat ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
         const colorDepth = 1;
 
         const concurrency = this.plugin.settings.pasteHandling.cloud.uploadConcurrency || 3;

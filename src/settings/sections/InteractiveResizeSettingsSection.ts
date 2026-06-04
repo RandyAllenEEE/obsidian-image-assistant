@@ -1,12 +1,12 @@
 import { Setting, setIcon, Notice } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
-import { PresetUIState } from "../types";
+import { SettingsUIState } from "../types";
 
 export function renderInteractiveResizeSettingsSection(
     containerEl: HTMLElement,
     plugin: ImageConverterPlugin,
-    presetUIState: PresetUIState,
+    settingsUIState: SettingsUIState,
     refreshDisplay: () => void
 ): void {
     // --- Image Drag & Resize Settings Section ---
@@ -52,7 +52,7 @@ export function renderInteractiveResizeSettingsSection(
 
     // Function to update chevron state
     const updateChevron = () => {
-        if (presetUIState.imageDragResizeSectionCollapsed) {
+        if (settingsUIState.imageDragResizeSectionCollapsed) {
             setIcon(chevronIcon, "chevron-right");
             settingsContentWrapper.style.display = "none";
         } else {
@@ -69,7 +69,7 @@ export function renderInteractiveResizeSettingsSection(
         // Prevent collapse when clicking the toggle
         if ((e.target as HTMLElement).closest(".checkbox-container")) return;
 
-        presetUIState.imageDragResizeSectionCollapsed = !presetUIState.imageDragResizeSectionCollapsed;
+        settingsUIState.imageDragResizeSectionCollapsed = !settingsUIState.imageDragResizeSectionCollapsed;
         updateChevron();
     };
 

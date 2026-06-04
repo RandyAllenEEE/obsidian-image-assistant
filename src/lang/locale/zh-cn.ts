@@ -43,9 +43,6 @@ export default {
     "SETTING_DELETE_SOURCE": "上传后删除本地源文件",
     "SETTING_DELETE_SOURCE_DESC": "成功上传后自动删除本地文件",
 
-    "SETTING_GLOBAL_SETTINGS": "Drop/paste presets",
-    "SETTING_GLOBAL_SETTINGS_DESC": "快速应用预设组合",
-
     // Cloud Settings - Uploader Types
     "SETTING_UPLOADER_PICGO": "PicGo",
     "SETTING_UPLOADER_PICGO_CORE": "PicGo-Core",
@@ -198,7 +195,7 @@ export default {
     // Folder Management
     "ERROR_CUSTOM_FOLDER_NOT_DEFINED": "自定义文件夹模板未定义。",
 
-    // Link Format Preset
+    // Link formatting
     "SUMMARY_LINK_TYPE": "链接类型: {0}",
     "SUMMARY_PATH_TYPE": "路径类型: {0}",
     "SUMMARY_FORMAT": "格式: {0}",
@@ -208,30 +205,15 @@ export default {
     "SUMMARY_WIDTH": "宽度: {0}",
     "SUMMARY_FOLDER_TYPE": "类型: {0}",
 
-    // Presets labels and messages
-    "LABEL_DROP_PASTE_PRESETS": "粘贴/拖拽预设",
-    "DESC_DROP_PASTE_PRESETS": "快速应用预设组合",
-    "TOOLTIP_SAVE_GLOBAL_PRESET": "将当前选择保存为新的全局预设",
-    "TOOLTIP_DELETE_GLOBAL_PRESET": "删除选中的全局预设",
     "CONFIRM_DELETE_TITLE": "确认删除",
-    "CONFIRM_DELETE_GLOBAL_MSG": "您确定要删除全局预设 \"{0}\" 吗？",
-    "CONFIRM_DELETE_PRESET_MSG": "您确定要删除预设 \"{0}\" 吗？",
     "TAB_FOLDER": "文件夹",
     "TAB_FILENAME": "文件名",
     "TAB_CONVERSION": "转换",
     "TAB_LINK_FORMAT": "链接格式",
     "TAB_RESIZE": "调整大小",
-    "DESC_FOLDER_PRESETS": "定义转换后的图片存储位置。从预定义位置选择或使用变量创建自定义路径。",
-    "DESC_FILENAME_PRESETS": "控制转换后的图片命名。使用 {notename}、{timestamp}、{MD5}、{UUID} 等变量创建唯一文件名。",
-    "DESC_CONVERSION_PRESETS": "控制转换后图片的输出格式、质量和调整大小选项。",
-    "DESC_LINK_FORMAT_PRESETS": "确定如何将图片链接插入到笔记中。",
-    "DESC_RESIZE_PRESETS": "直接在编辑器中配置图片的非破坏性调整大小选项。",
     "BUTTON_EDIT": "编辑",
-    "BUTTON_ADD_NEW": "+ 添加新预设",
-    "LABEL_PRESET_NAME": "预设名称",
     "LABEL_SKIP_RENAME_PATTERNS": "跳过重命名的模式",
     "LABEL_SKIP_CONVERSION_PATTERNS": "跳过转换的模式",
-    "NOTICE_NAME_REQUIRED": "名称必填",
     "OPTION_FOLDER_SUBFOLDER": "当前笔记下的子文件夹",
     "OPTION_FOLDER_CUSTOM": "自定义",
     "OPTION_FOLDER_DEFAULT": "默认 (Obsidian 设置)",
@@ -353,11 +335,6 @@ export default {
     "SETTING_NEVER_PROCESS_DESC": "设置不需要处理的文件名或模式（逗号分隔）",
     "SETTING_SHOW_NOTIFICATION_NAME": "显示图片大小更改通知",
     "SETTING_SHOW_NOTIFICATION_DESC": "处理图片后显示节省的空间大小",
-    "SETTING_MODAL_BEHAVIOR_NAME": "显示处理窗口",
-    "SETTING_MODAL_BEHAVIOR_DESC": "选择是否在拖拽/粘贴图片时显示处理选项",
-    "SETTING_MODAL_BEHAVIOR_ALWAYS": "总是显示",
-    "SETTING_MODAL_BEHAVIOR_NEVER": "从不显示",
-    "SETTING_MODAL_BEHAVIOR_ASK": "每次询问",
     "SETTING_REVERT_IF_LARGER_NAME": "如果处理后变大则还原",
     "SETTING_REVERT_IF_LARGER_DESC": "如果处理后的图片比原图大，则使用原图",
 
@@ -530,19 +507,16 @@ export default {
     "LABEL_DIRECT_IMAGES": "直接包含的图片",
     "LABEL_LINKED_IMAGES": "链接的图片",
 
-    // Preset Selection Modal
-    "MODAL_PRESET_TITLE": "图片转换器",
     "BUTTON_VARIABLES": "{变量}",
     "TOOLTIP_SHOW_VARIABLES": "显示可用变量",
     "LABEL_FOLDER": "文件夹",
     "LABEL_FILENAME": "文件名",
     "LABEL_FORMAT": "格式",
     "LABEL_LINK": "链接",
-    "BUTTON_EDIT_PRESETS": "编辑预设",
     "BUTTON_APPLY": "应用",
     "PREVIEW_TITLE": "预览",
 
-    "DESC_FOLDER_OVERWRITE": "临时覆盖预设中定义的路径，例如: assets/{YYYY}/{MM}",
+    "DESC_FOLDER_OVERWRITE": "临时覆盖本地文件夹模板，例如: assets/{YYYY}/{MM}",
     "PLACEHOLDER_FOLDER": "图片保存位置",
     "DESC_FILENAME_TEMPLATE": "例如: {imagename}-{timestamp}",
     "PLACEHOLDER_FILENAME": "文件命名规则",
@@ -944,12 +918,6 @@ export default {
     "MSG_DELETING_DOWNLOADED": "正在删除已下载的文件...",
 
     // Settings Modals
-    "MODAL_SAVE_PRESET_TITLE": "保存全局预设",
-    "MODAL_PRESET_NAME": "预设名称",
-    "MODAL_PRESET_NAME_PLACEHOLDER": "输入预设名称",
-    "MODAL_SUMMARY": "总结",
-    "MODAL_ENTER_PRESET_NAME": "请输入预设名称。",
-    "MODAL_SECTION_PRESET": "{0} 预设: {1}",
     "MODAL_LABEL_TYPE": "类型",
     "MODAL_LABEL_SUBFOLDER_TEMPLATE": "子文件夹模板",
     "MODAL_LABEL_CUSTOM_TEMPLATE": "自定义模板",

@@ -51,13 +51,13 @@ export class VaultBatchProcessor {
                 enlargeOrReduce,
                 skipFormats: skipFormatsSetting,
                 skipImagesInTargetFormat: skipTargetFormat,
-            } = this.plugin.settings.processAllVault;
-            const { revertToOriginalIfLarger } = this.plugin.settings.global;
-            const allowLargerFiles = !revertToOriginalIfLarger;
+            } = this.plugin.settings.operationDefaults.batchLocal;
+            const allowLargerFiles = this.plugin.settings.localProcessing.conversion.allowLargerFiles;
 
             const targetFormat = convertTo;
+            const isKeepOriginalFormat = convertTo === "disabled" || convertTo === "Original";
             const outputFormat =
-                convertTo === "disabled"
+                isKeepOriginalFormat
                     ? "ORIGINAL"
                     : (convertTo.toUpperCase() as "WEBP" | "JPEG" | "PNG" | "ORIGINAL");
             const skipFormats = this.collector.parseSkipFormats(skipFormatsSetting);
@@ -75,7 +75,7 @@ export class VaultBatchProcessor {
             const filesToProcess = imageFiles.filter(file =>
                 this.collector.shouldProcessImage(
                     file,
-                    convertTo === 'disabled',
+                    isKeepOriginalFormat,
                     targetFormat,
                     skipFormats,
                     skipTargetFormat

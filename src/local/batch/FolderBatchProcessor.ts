@@ -56,14 +56,13 @@ export class FolderBatchProcessor {
                 desiredHeight,
                 desiredLength,
                 enlargeOrReduce,
-                skipFormats: processCurrentNoteSkipFormats,
-            } = this.plugin.settings.processCurrentNote;
+                skipFormats: batchSkipFormats,
+            } = this.plugin.settings.operationDefaults.batchLocal;
 
-            const { revertToOriginalIfLarger } = this.plugin.settings.global;
-            const allowLargerFiles = !revertToOriginalIfLarger;
+            const allowLargerFiles = this.plugin.settings.localProcessing.conversion.allowLargerFiles;
 
-            const outputFormat = convertTo === 'disabled' ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
-            const skipFormats = this.collector.parseSkipFormats(processCurrentNoteSkipFormats);
+            const outputFormat = (convertTo === 'disabled' || convertTo === 'Original') ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
+            const skipFormats = this.collector.parseSkipFormats(batchSkipFormats);
 
             // 3. Collect Images
             this.progressManager.start('collecting');

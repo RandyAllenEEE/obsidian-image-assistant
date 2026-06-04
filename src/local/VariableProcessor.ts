@@ -1181,7 +1181,7 @@ export class VariableProcessor {
                 Object.assign(metadata, {
                     // Existing properties
                     '{ratio}': aspectRatio.toFixed(2),
-                    '{quality}': this.settings.global.quality.toString(),
+                    '{quality}': this.settings.localProcessing.conversion.quality.toString(),
                     '{resolution}': `${img.width}x${img.height}`,
                     '{megapixels}': (pixelCount / 1000000).toFixed(2),
 
@@ -1283,7 +1283,7 @@ export class VariableProcessor {
                 Object.assign(metadata, {
                     // Existing properties
                     '{ratio}': aspectRatio.toFixed(2),
-                    '{quality}': this.settings.global.quality.toString(),
+                    '{quality}': this.settings.localProcessing.conversion.quality.toString(),
                     '{resolution}': `${img.width}x${img.height}`,
                     '{megapixels}': (pixelCount / 1000000).toFixed(2),
 

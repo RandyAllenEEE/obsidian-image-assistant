@@ -1,7 +1,7 @@
 import { App, TFile, Notice, MarkdownView } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { LinkFormat, PathFormat } from "../settings/LinkFormatSettings";
-import { NonDestructiveResizePreset, ResizeScaleMode, ResizeUnits } from "../settings/NonDestructiveResizeSettings";
+import { EmbedResizeSettings, ResizeScaleMode, ResizeUnits } from "../settings/NonDestructiveResizeSettings";
 
 
 export class LinkFormatter {
@@ -13,7 +13,7 @@ export class LinkFormatter {
         linkFormat: LinkFormat,
         pathFormat: PathFormat,
         activeFile: TFile | null,
-        resizePreset?: NonDestructiveResizePreset | null
+        embedResize?: EmbedResizeSettings | null
     ): Promise<string> {
         if (!linkPath) {
             throw new Error("Link path cannot be empty.");
@@ -35,9 +35,9 @@ export class LinkFormatter {
         );
 
         let resizeParams = "";
-        if (resizePreset) {
+        if (embedResize) {
             resizeParams = await this.getResizeParams(
-                resizePreset,
+                embedResize,
                 file
             );
         }
@@ -129,7 +129,7 @@ export class LinkFormatter {
 
     // Add helper function to generate resize parameters
     private async getResizeParams(
-        preset: NonDestructiveResizePreset,
+        embedResize: EmbedResizeSettings,
         file: TFile
     ): Promise<string> {
         let resizeParams = "";
@@ -147,17 +147,17 @@ export class LinkFormatter {
         let longestEdge: number | undefined;
         let shortestEdge: number | undefined;
 
-        // 1. Calculate Dimensions Based on Preset
-        switch (preset.resizeDimension) {
+        // 1. Calculate dimensions based on the configured embed resize mode.
+        switch (embedResize.resizeDimension) {
             case "width":
                 width = this.getDimensionValue(
-                    preset.width,
+                    embedResize.width,
                     originalDimensions.width,
-                    preset.resizeUnits
+                    embedResize.resizeUnits
                 );
 
                 // Calculate height only if maintainAspectRatio is true
-                if (preset.maintainAspectRatio) {
+                if (embedResize.maintainAspectRatio) {
                     height = Math.round(
                         (width ?? 0) *
                         originalDimensions.height /
@@ -169,12 +169,12 @@ export class LinkFormatter {
                 break;
             case "height":
                 height = this.getDimensionValue(
-                    preset.height,
+                    embedResize.height,
                     originalDimensions.height,
-                    preset.resizeUnits
+                    embedResize.resizeUnits
                 );
                 // Calculate width only if maintainAspectRatio is true
-                if (preset.maintainAspectRatio) {
+                if (embedResize.maintainAspectRatio) {
                     width = Math.round(
                         (height ?? 0) *
                         originalDimensions.width /
@@ -183,26 +183,26 @@ export class LinkFormatter {
                 }
                 break;
             case "both":
-                if (preset.customValue) {
+                if (embedResize.customValue) {
                     const dimensions = this.parseCustomDimensions(
-                        preset.customValue,
+                        embedResize.customValue,
                         originalDimensions,
-                        preset.resizeUnits
+                        embedResize.resizeUnits
                     );
                     ({ width, height } = dimensions);
                 }
                 break;
             case "longest-edge":
                 longestEdge = this.getDimensionValue(
-                    preset.longestEdge,
+                    embedResize.longestEdge,
                     Math.max(
                         originalDimensions.width,
                         originalDimensions.height
                     ),
-                    preset.resizeUnits
+                    embedResize.resizeUnits
                 );
                 // Calculate width and height based on the longest edge ONLY if maintainAspectRatio is true
-                if (preset.maintainAspectRatio) {
+                if (embedResize.maintainAspectRatio) {
                     if (originalDimensions.width >= originalDimensions.height) {
                         width = longestEdge;
                         height = Math.round(
@@ -232,15 +232,15 @@ export class LinkFormatter {
                 break;
             case "shortest-edge":
                 shortestEdge = this.getDimensionValue(
-                    preset.shortestEdge,
+                    embedResize.shortestEdge,
                     Math.min(
                         originalDimensions.width,
                         originalDimensions.height
                     ),
-                    preset.resizeUnits
+                    embedResize.resizeUnits
                 );
                 // Calculate width and height based on the shortest edge ONLY if maintainAspectRatio is true
-                if (preset.maintainAspectRatio) {
+                if (embedResize.maintainAspectRatio) {
                     if (originalDimensions.width < originalDimensions.height) {
                         width = shortestEdge;
                         height = Math.round(
@@ -270,7 +270,7 @@ export class LinkFormatter {
                 break;
             case "original-width":
                 ({ width, height } = originalDimensions);
-                height = preset.maintainAspectRatio
+                height = embedResize.maintainAspectRatio
                     ? height
                     : undefined;
                 break;
@@ -282,15 +282,15 @@ export class LinkFormatter {
                     return "";
                 }
 
-                if (preset.editorMaxWidthValue === undefined || isNaN(preset.editorMaxWidthValue)) {
-                    console.warn("Invalid editorMaxWidthValue:", preset.editorMaxWidthValue);
+                if (embedResize.editorMaxWidthValue === undefined || isNaN(embedResize.editorMaxWidthValue)) {
+                    console.warn("Invalid editorMaxWidthValue:", embedResize.editorMaxWidthValue);
                     return "";
                 }
 
                 // Calculate the target width
-                const targetWidth = preset.resizeUnits === "percentage"
-                    ? Math.round((editorMaxWidth * preset.editorMaxWidthValue) / 100)
-                    : preset.editorMaxWidthValue;
+                const targetWidth = embedResize.resizeUnits === "percentage"
+                    ? Math.round((editorMaxWidth * embedResize.editorMaxWidthValue) / 100)
+                    : embedResize.editorMaxWidthValue;
 
                 width = targetWidth;
 
@@ -300,7 +300,7 @@ export class LinkFormatter {
                     height = Math.round(originalDimensions.height * scalingFactor);
 
                     // Apply aspect ratio constraints only if maintainAspectRatio is true
-                    if (preset.maintainAspectRatio) {
+                    if (embedResize.maintainAspectRatio) {
                         const maxHeightToWidthRatio = 2;
                         if (height / width > maxHeightToWidthRatio) {
                             height = Math.round(width * maxHeightToWidthRatio);
@@ -324,22 +324,22 @@ export class LinkFormatter {
             width = this.applyScaleModeToDimension(
                 width,
                 originalDimensions.width,
-                preset.resizeScaleMode
+                embedResize.resizeScaleMode
             );
         }
         if (height !== undefined) {
             height = this.applyScaleModeToDimension(
                 height,
                 originalDimensions.height,
-                preset.resizeScaleMode
+                embedResize.resizeScaleMode
             );
         }
 
         // 3. Apply Editor Max Width Constraint (if applicable and width is defined)
-        if (preset.respectEditorMaxWidth && width !== undefined) {
+        if (embedResize.respectEditorMaxWidth && width !== undefined) {
             const editorMaxWidth = this.getEditorMaxWidth();
             if (width > editorMaxWidth) {
-                if (preset.maintainAspectRatio && height !== undefined) {
+                if (embedResize.maintainAspectRatio && height !== undefined) {
                     height = Math.round(
                         editorMaxWidth *
                         originalDimensions.height /
@@ -351,7 +351,7 @@ export class LinkFormatter {
         }
 
         // 4. Ensure Both Width and Height Are Present (ONLY if maintainAspectRatio is FALSE)
-        if (!preset.maintainAspectRatio) {
+        if (!embedResize.maintainAspectRatio) {
             if (width === undefined && height !== undefined) {
                 // Only set width to original if height is defined and we're not maintaining aspect ratio
                 width = originalDimensions ? originalDimensions.width : 100;
@@ -382,12 +382,12 @@ export class LinkFormatter {
         return resizeParams;
     }
 
-    private getDimensionValue(presetValue: number | undefined, originalDimension: number, resizeUnits: ResizeUnits): number | undefined {
-        if (presetValue === undefined) return undefined;
+    private getDimensionValue(configuredValue: number | undefined, originalDimension: number, resizeUnits: ResizeUnits): number | undefined {
+        if (configuredValue === undefined) return undefined;
         if (resizeUnits === "percentage") {
-            return Math.round(originalDimension * presetValue / 100);
+            return Math.round(originalDimension * configuredValue / 100);
         }
-        return presetValue;
+        return configuredValue;
     }
 
     private parseCustomDimensions(customValue: string, originalDimensions: { width: number, height: number }, resizeUnits: ResizeUnits): { width: number | undefined, height: number | undefined } {

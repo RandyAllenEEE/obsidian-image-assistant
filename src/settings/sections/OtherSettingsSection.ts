@@ -1,9 +1,9 @@
 import { Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
-import { ModalBehavior, PresetUIState } from "../types";
+import { SettingsUIState } from "../types";
 
-export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: ImageConverterPlugin, presetUIState: PresetUIState): void {
+export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: ImageConverterPlugin, settingsUIState: SettingsUIState): void {
     const otherSection = containerEl.createDiv("image-converter-settings-section");
     otherSection.addClass("other-settings-section");
 
@@ -30,7 +30,7 @@ export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: Ima
 
     // Function to update chevron state
     const updateChevron = () => {
-        if (presetUIState.otherSectionCollapsed) {
+        if (settingsUIState.otherSectionCollapsed) {
             setIcon(chevronIcon, "chevron-right");
             settingsContentWrapper.style.display = "none";
         } else {
@@ -44,24 +44,9 @@ export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: Ima
 
     // Click handler for collapse/expand
     headerSetting.settingEl.onclick = () => {
-        presetUIState.otherSectionCollapsed = !presetUIState.otherSectionCollapsed;
+        settingsUIState.otherSectionCollapsed = !settingsUIState.otherSectionCollapsed;
         updateChevron();
     };
-
-    // --- Interaction Settings ---
-    new Setting(settingsContentWrapper)
-        .setName(t("SETTING_MODAL_BEHAVIOR_NAME"))
-        .setDesc(t("SETTING_MODAL_BEHAVIOR_DESC"))
-        .addDropdown(dropdown => dropdown
-            .addOption("always", t("SETTING_MODAL_BEHAVIOR_ALWAYS"))
-            .addOption("never", t("SETTING_MODAL_BEHAVIOR_NEVER"))
-            .addOption("ask", t("SETTING_MODAL_BEHAVIOR_ASK"))
-            .setValue(plugin.settings.global.modalBehavior)
-            .onChange(async (value: ModalBehavior) => {
-                plugin.settings.global.modalBehavior = value;
-                await plugin.saveSettings();
-            })
-        );
 
     new Setting(settingsContentWrapper)
         .setName(t("SETTING_ENABLE_CONTEXT_MENU_NAME"))
@@ -101,9 +86,9 @@ export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: Ima
         .setName(t("SETTING_REVERT_IF_LARGER_NAME"))
         .setDesc(t("SETTING_REVERT_IF_LARGER_DESC"))
         .addToggle(toggle => toggle
-            .setValue(plugin.settings.global.revertToOriginalIfLarger)
+            .setValue(!plugin.settings.localProcessing.conversion.allowLargerFiles)
             .onChange(async (value) => {
-                plugin.settings.global.revertToOriginalIfLarger = value;
+                plugin.settings.localProcessing.conversion.allowLargerFiles = !value;
                 await plugin.saveSettings();
             })
         );

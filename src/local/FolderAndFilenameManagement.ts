@@ -3,9 +3,9 @@ import { TFile, TFolder, App, normalizePath, Notice, FileSystemAdapter } from "o
 import * as path from 'path';
 import {
     ImageAssistantSettings,
-    FolderPreset,
-    FilenamePreset,
-    ConversionPreset,
+    LocalDestinationSettings,
+    LocalFilenameSettings,
+    LocalConversionSettings,
 } from "../settings/types";
 import { VariableProcessor, VariableContext } from "./VariableProcessor";
 import { SupportedImageFormats } from "./SupportedImageFormats";
@@ -22,21 +22,21 @@ export class FolderAndFilenameManagement {
      * Validates templates to ensure variables won't resolve to empty strings that would cause issues
      * @param file The file being processed
      * @param activeFile The current active file
-     * @param selectedFilenamePreset The filename preset to validate
-     * @param selectedFolderPreset The folder preset to validate
+     * @param selectedFilenameSetting The filename settings to validate
+     * @param selectedFolderSetting The folder settings to validate
      * @throws Error if validation fails with descriptive message
      */
     private validateTemplates(
         file: File,
         activeFile: TFile,
-        selectedFilenamePreset: FilenamePreset,
-        selectedFolderPreset: FolderPreset
+        selectedFilenameSetting: LocalFilenameSettings,
+        selectedFolderSetting: LocalDestinationSettings
     ): void {
         const context = { file, activeFile };
 
         // Validate folder template if it's a custom template
-        if (selectedFolderPreset?.type === "CUSTOM" && selectedFolderPreset.customTemplate) {
-            const folderValidation = this.variableProcessor.validateTemplate(selectedFolderPreset.customTemplate, context);
+        if (selectedFolderSetting?.type === "CUSTOM" && selectedFolderSetting.customTemplate) {
+            const folderValidation = this.variableProcessor.validateTemplate(selectedFolderSetting.customTemplate, context);
             if (!folderValidation.valid) {
                 new Notice(`Folder template validation failed: ${folderValidation.errors.join(', ')}`);
                 throw new Error(`Folder template validation failed: ${folderValidation.errors.join(', ')}`);
@@ -44,8 +44,9 @@ export class FolderAndFilenameManagement {
         }
 
         // Validate subfolder template if using SUBFOLDER type
-        if (selectedFolderPreset?.type === "SUBFOLDER" && this.settings.subfolderTemplate) {
-            const subfolderValidation = this.variableProcessor.validateTemplate(this.settings.subfolderTemplate, context);
+        const subfolderTemplate = selectedFolderSetting?.subfolderTemplate;
+        if (selectedFolderSetting?.type === "SUBFOLDER" && subfolderTemplate) {
+            const subfolderValidation = this.variableProcessor.validateTemplate(subfolderTemplate, context);
             if (!subfolderValidation.valid) {
                 new Notice(`Subfolder template validation failed: ${subfolderValidation.errors.join(', ')}`);
                 throw new Error(`Subfolder template validation failed: ${subfolderValidation.errors.join(', ')}`);
@@ -53,8 +54,8 @@ export class FolderAndFilenameManagement {
         }
 
         // Validate filename template if it's a custom template
-        if (selectedFilenamePreset?.customTemplate) {
-            const filenameValidation = this.variableProcessor.validateTemplate(selectedFilenamePreset.customTemplate, context);
+        if (selectedFilenameSetting?.customTemplate) {
+            const filenameValidation = this.variableProcessor.validateTemplate(selectedFilenameSetting.customTemplate, context);
             if (!filenameValidation.valid) {
                 new Notice(`Filename template validation failed: ${filenameValidation.errors.join(', ')}`);
                 throw new Error(`Filename template validation failed: ${filenameValidation.errors.join(', ')}`);
@@ -65,16 +66,16 @@ export class FolderAndFilenameManagement {
     async determineDestination(
         file: File,
         activeFile: TFile,
-        selectedConversionPreset: ConversionPreset,
-        selectedFilenamePreset: FilenamePreset,
-        selectedFolderPreset: FolderPreset
+        selectedConversionSetting: LocalConversionSettings,
+        selectedFilenameSetting: LocalFilenameSettings,
+        selectedFolderSetting: LocalDestinationSettings
     ): Promise<{ destinationPath: string; newFilename: string }> {
         // Step 0: Validate templates before processing
-        this.validateTemplates(file, activeFile, selectedFilenamePreset, selectedFolderPreset);
+        this.validateTemplates(file, activeFile, selectedFilenameSetting, selectedFolderSetting);
 
-        // Step 1: Determine the target directory based on folder preset
+        // Step 1: Determine the target directory based on the local folder setting
         const destinationDir = await this.getDestinationDirectory(
-            selectedFolderPreset,
+            selectedFolderSetting,
             file,
             activeFile
         );
@@ -83,15 +84,15 @@ export class FolderAndFilenameManagement {
         let shouldSkipRename = false;
 
         // Step 2: Handle filename generation based on whether we should skip renaming
-        if (selectedFilenamePreset && this.shouldSkipRename(file.name, selectedFilenamePreset)) {
+        if (selectedFilenameSetting && this.shouldSkipRename(file.name, selectedFilenameSetting)) {
             // Skip rename case - use the original name without extension
             newFilename = file.name.substring(0, file.name.lastIndexOf('.'));
             shouldSkipRename = true; // Set the flag
 
         } else {
-            // Normal case - generate a new filename according to preset
+            // Normal case - generate a new filename according to the local filename setting
             newFilename = await this.generateNewFilename(
-                selectedFilenamePreset,
+                selectedFilenameSetting,
                 file,
                 activeFile
             );
@@ -102,12 +103,12 @@ export class FolderAndFilenameManagement {
             newFilename = await this.handleNameConflicts(
                 destinationDir,
                 newFilename,
-                selectedFilenamePreset?.conflictResolution || "reuse"
+                selectedFilenameSetting?.conflictResolution || "reuse"
             );
         }
 
         // Step 3: Add the appropriate file extension based on conversion settings
-        newFilename = this.addCorrectExtension(newFilename, file, selectedConversionPreset);
+        newFilename = this.addCorrectExtension(newFilename, file, selectedConversionSetting);
 
 
         // Step 4: Return both the destination path and final filename
@@ -118,13 +119,13 @@ export class FolderAndFilenameManagement {
     }
 
     private async getDestinationDirectory(
-        selectedFolderPreset: FolderPreset,
+        selectedFolderSetting: LocalDestinationSettings,
         file: File,
         activeFile: TFile
     ): Promise<string> {
         let destinationDir = "";
 
-        switch (selectedFolderPreset?.type) {
+        switch (selectedFolderSetting?.type) {
             case "DEFAULT":
                 destinationDir = this.getDefaultAttachmentFolderPath(activeFile);
                 break;
@@ -136,9 +137,10 @@ export class FolderAndFilenameManagement {
                 break;
             case "SUBFOLDER": {
                 // Use the custom template if provided, otherwise use activeFile.basename
-                const subfolderName = this.settings.subfolderTemplate
+                const subfolderTemplate = selectedFolderSetting.subfolderTemplate;
+                const subfolderName = subfolderTemplate
                     ? await this.processSubfolderVariables(
-                        this.settings.subfolderTemplate,
+                        subfolderTemplate,
                         file,
                         activeFile
                     )
@@ -150,9 +152,9 @@ export class FolderAndFilenameManagement {
                 break;
             }
             case "CUSTOM":
-                if (selectedFolderPreset.customTemplate) {
+                if (selectedFolderSetting.customTemplate) {
                     destinationDir = await this.processSubfolderVariables(
-                        selectedFolderPreset.customTemplate,
+                        selectedFolderSetting.customTemplate,
                         file,
                         activeFile
                     );
@@ -297,16 +299,16 @@ export class FolderAndFilenameManagement {
     }
 
     async generateNewFilename(
-        selectedFilenamePreset: FilenamePreset,
+        selectedFilenameSetting: LocalFilenameSettings,
         file: File,
         activeFile: TFile,
-        selectedConversionPreset?: ConversionPreset
+        selectedConversionSetting?: LocalConversionSettings
     ): Promise<string> {
         let newFilename = file.name;
 
-        if (selectedFilenamePreset && selectedFilenamePreset.customTemplate) {
+        if (selectedFilenameSetting && selectedFilenameSetting.customTemplate) {
             newFilename = await this.processSubfolderVariables(
-                selectedFilenamePreset.customTemplate,
+                selectedFilenameSetting.customTemplate,
                 file,
                 activeFile
             );
@@ -357,21 +359,21 @@ export class FolderAndFilenameManagement {
     private addCorrectExtension(
         filename: string,
         file: File,
-        selectedConversionPreset?: ConversionPreset
+        selectedConversionSetting?: LocalConversionSettings
     ): string {
         const originalExtension = file.name
             .substring(file.name.lastIndexOf("."))
             .toLowerCase();
 
         // First check if conversion should be skipped
-        if (selectedConversionPreset && this.shouldSkipConversion(file.name, selectedConversionPreset)) {
+        if (selectedConversionSetting && this.shouldSkipConversion(file.name, selectedConversionSetting)) {
             return `${filename}${originalExtension}`;
         }
 
         // If not skipped, proceed with normal conversion logic
-        const outputFormat = selectedConversionPreset
-            ? selectedConversionPreset.outputFormat
-            : this.settings.global.outputFormat;
+        const outputFormat = selectedConversionSetting
+            ? selectedConversionSetting.outputFormat
+            : this.settings.localProcessing.conversion.outputFormat;
         switch (outputFormat) {
             case "WEBP":
                 return `${filename}.webp`;
@@ -490,15 +492,15 @@ export class FolderAndFilenameManagement {
         return sanitizedBase + extension;
     }
 
-    shouldSkipConversion(filename: string, preset: ConversionPreset): boolean {
-        return this.matchesPatterns(filename, preset.skipConversionPatterns);
+    shouldSkipConversion(filename: string, setting: LocalConversionSettings): boolean {
+        return this.matchesPatterns(filename, setting.skipConversionPatterns);
     }
 
     shouldSkipRename(
         filename: string,
-        preset: FilenamePreset
+        setting: LocalFilenameSettings
     ): boolean {
-        return this.matchesPatterns(filename, preset.skipRenamePatterns);
+        return this.matchesPatterns(filename, setting.skipRenamePatterns);
     }
 
     matchesPatterns(

@@ -50,16 +50,15 @@ export class NoteBatchProcessor {
                 desiredHeight,
                 desiredLength,
                 enlargeOrReduce,
-                skipFormats: processCurrentNoteSkipFormats,
-                skipImagesInTargetFormat: processCurrentNoteSkipImagesInTargetFormat
-            } = this.plugin.settings.processCurrentNote;
-            const { revertToOriginalIfLarger, modalBehavior } = this.plugin.settings.global;
-            const allowLargerFiles = !revertToOriginalIfLarger;
+                skipFormats: batchSkipFormats,
+                skipImagesInTargetFormat: batchSkipImagesInTargetFormat
+            } = this.plugin.settings.operationDefaults.batchLocal;
+            const allowLargerFiles = this.plugin.settings.localProcessing.conversion.allowLargerFiles;
 
-            const isKeepOriginalFormat = convertTo === 'disabled';
+            const isKeepOriginalFormat = convertTo === 'disabled' || convertTo === 'Original';
             const targetFormat = convertTo;
-            const outputFormat = convertTo === 'disabled' ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
-            const skipFormats = this.collector.parseSkipFormats(processCurrentNoteSkipFormats);
+            const outputFormat = isKeepOriginalFormat ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
+            const skipFormats = this.collector.parseSkipFormats(batchSkipFormats);
 
             // 2. Collect Images
             this.progressManager.start('collecting');
@@ -92,7 +91,7 @@ export class NoteBatchProcessor {
                     isKeepOriginalFormat,
                     targetFormat,
                     skipFormats,
-                    processCurrentNoteSkipImagesInTargetFormat
+                    batchSkipImagesInTargetFormat
                 )
             );
 
@@ -102,7 +101,7 @@ export class NoteBatchProcessor {
             }
 
             // 4. Confirm Dialog
-            // NoteBatchProcessor uses "processCurrentNote" settings which implies user intent.
+            // NoteBatchProcessor uses the persisted local batch defaults, which implies user intent.
             // However, unified experience suggests showing confirmation if modal behavior is appropriate.
             // Or just always show minimal confirmation for batch ops to be safe?
             // Local batch didn't have confirm dialog before, adding it now as per plan.

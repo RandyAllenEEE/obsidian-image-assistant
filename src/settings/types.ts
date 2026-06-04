@@ -1,22 +1,17 @@
 // Basic types
 export type OutputFormat = "ORIGINAL" | "WEBP" | "PNG" | "JPEG" | "AVIF" | "PNGQUANT" | "NONE";
 
-// Import Class Types (Avoiding circular dependency if possible, used as Types)
-import { LinkFormatSettings } from "../settings/LinkFormatSettings";
-import { NonDestructiveResizeSettings } from "../settings/NonDestructiveResizeSettings";
-import type { LinkFormatPreset } from "./LinkFormatSettings";
-import type { NonDestructiveResizePreset } from "./NonDestructiveResizeSettings";
+import type { EmbedResizeSettings } from "./NonDestructiveResizeSettings";
+import type { LinkFormat, PathFormat } from "./LinkFormatSettings";
 export type { ResizeDimension } from "./NonDestructiveResizeSettings";
 
 // Import OCRSettings locally
 import { OCRSettings } from "../ocr/OCRSettings";
 
 // Re-export for convenience
-export type { LinkFormatPreset, NonDestructiveResizePreset, OCRSettings };
+export type { EmbedResizeSettings, OCRSettings };
 export type { PathFormat, LinkFormat } from "./LinkFormatSettings";
 export type { ResizeScaleMode, ResizeUnits } from "./NonDestructiveResizeSettings";
-
-export type ModalBehavior = "always" | "never" | "ask";
 
 // Paste handling mode types
 export type PasteHandlingMode = "local" | "cloud" | "disabled";
@@ -40,59 +35,12 @@ export interface CloudUploadSettings {
     cloudLinkFormat: 'markdown' | 'wikilink';
 }
 
-export type FolderPresetType = "DEFAULT" | "ROOT" | "CURRENT" | "SUBFOLDER" | "CUSTOM";
-export type FilenamePresetType = "imagename" | "notename" | "timestamp" | "custom";
+export type FolderDestinationType = "DEFAULT" | "ROOT" | "CURRENT" | "SUBFOLDER" | "CUSTOM";
 // Unified ResizeMode including all supported modes
 export type ResizeMode = "None" | "Fit" | "Fill" | "Scale" | "LongestEdge" | "ShortestEdge" | "Width" | "Height";
 export type EnlargeReduce = "Always" | "Reduce" | "Enlarge" | "Auto";
 
-export type ActivePresetSetting =
-    | "selectedFolderPreset"
-    | "selectedFilenamePreset"
-    | "selectedConversionPreset"
-    | "selectedLinkFormatPreset"
-    | "selectedResizePreset";
-
-export interface FolderPreset {
-    type: FolderPresetType;
-    customTemplate?: string;
-    name: string;
-}
-
-export interface FilenamePreset {
-    customTemplate?: string;
-    name: string;
-    skipRenamePatterns: string;
-    conflictResolution: "reuse" | "increment" | "skip" | "overwrite";
-}
-
-export interface ConversionPreset {
-    name: string;
-    outputFormat: OutputFormat;
-    quality: number;
-    colorDepth: number;
-    resizeMode: ResizeMode;
-    desiredWidth: number;
-    desiredHeight: number;
-    desiredLongestEdge: number;
-    enlargeOrReduce: EnlargeReduce;
-    allowLargerFiles: boolean;
-    skipConversionPatterns: string;
-    pngquantExecutablePath?: string;
-    pngquantQuality?: string;
-    ffmpegExecutablePath?: string;
-    ffmpegCrf?: number;
-    ffmpegPreset?: string;
-    minimumCompressionSavingsInKB?: number;
-}
-
-export interface PresetUIState {
-    folder: PresetCategoryUIState<FolderPreset>;
-    filename: PresetCategoryUIState<FilenamePreset>;
-    conversion: PresetCategoryUIState<ConversionPreset>;
-    linkformat: PresetCategoryUIState<LinkFormatPreset>;
-    globalPresetVisible: boolean;
-    resize: PresetCategoryUIState<NonDestructiveResizePreset>;
+export interface SettingsUIState {
     pasteHandlingSectionCollapsed: boolean;
     imageAlignmentSectionCollapsed: boolean;
     imageDragResizeSectionCollapsed: boolean;
@@ -100,20 +48,6 @@ export interface PresetUIState {
     cleanerSectionCollapsed: boolean;
     ocrSectionCollapsed: boolean;
     otherSectionCollapsed: boolean;
-}
-
-export interface PresetCategoryUIState<T> {
-    editingPreset: T | null;
-    newPreset: T | null;
-}
-
-export interface GlobalPreset {
-    name: string;
-    folderPreset: string;
-    filenamePreset: string;
-    conversionPreset: string;
-    linkFormatPreset: string;
-    resizePreset: string;
 }
 
 // Re-export OCRSettings from its source (already imported and exported above)
@@ -133,77 +67,106 @@ export interface ToolPreset {
 export interface SingleImageModalSettings {
     outputFormat: OutputFormat;
     quality: number;
+    colorDepth: number;
     resizeMode: ResizeMode;
     desiredWidth: number;
     desiredHeight: number;
     desiredLongestEdge: number;
     enlargeOrReduce: EnlargeReduce;
+    allowLargerFiles: boolean;
+    pngquantExecutablePath: string;
+    pngquantQuality: string;
+    ffmpegExecutablePath: string;
+    ffmpegCrf: number;
+    ffmpegPreset: string;
 }
 
-// Import and re-export LinkFormatSettings and NonDestructiveResizeSettings classes
-export { LinkFormatSettings } from "./LinkFormatSettings";
-export { NonDestructiveResizeSettings } from "./NonDestructiveResizeSettings";
+export interface LocalDestinationSettings {
+    type: FolderDestinationType;
+    customTemplate?: string;
+    subfolderTemplate?: string;
+}
+
+export interface LocalFilenameSettings {
+    customTemplate?: string;
+    skipRenamePatterns: string;
+    conflictResolution: "reuse" | "increment" | "skip" | "overwrite";
+}
+
+export interface LocalConversionSettings {
+    outputFormat: OutputFormat;
+    quality: number;
+    colorDepth: number;
+    resizeMode: ResizeMode;
+    desiredWidth: number;
+    desiredHeight: number;
+    desiredLongestEdge: number;
+    enlargeOrReduce: EnlargeReduce;
+    allowLargerFiles: boolean;
+    skipConversionPatterns: string;
+    minimumCompressionSavingsInKB: number;
+}
+
+export interface LocalExternalToolSettings {
+    pngquantExecutablePath: string;
+    pngquantQuality: string;
+    ffmpegExecutablePath: string;
+    ffmpegCrf: number;
+    ffmpegPreset: string;
+    useSystemPathForBinary: boolean;
+}
+
+export interface LocalLinkSettings {
+    linkFormat: LinkFormat;
+    pathFormat: PathFormat;
+    prependCurrentDir: boolean;
+    hideFolders: boolean;
+}
+
+export interface LocalProcessingSettings {
+    destination: LocalDestinationSettings;
+    filename: LocalFilenameSettings;
+    conversion: LocalConversionSettings;
+    externalTools: LocalExternalToolSettings;
+    link: LocalLinkSettings;
+    embedResize: EmbedResizeSettings;
+}
+
+export interface SingleImageOperationDefaults extends SingleImageModalSettings { }
+
+export interface BatchLocalOperationDefaults {
+    convertTo: string;
+    quality: number;
+    resizeMode: string;
+    desiredWidth: number;
+    desiredHeight: number;
+    desiredLength: number;
+    skipImagesInTargetFormat: boolean;
+    enlargeOrReduce: EnlargeReduce;
+    skipFormats: string;
+}
+
+export interface OperationDefaults {
+    singleImage?: SingleImageOperationDefaults;
+    batchLocal: BatchLocalOperationDefaults;
+}
 
 export interface ImageAssistantSettings {
-    folderPresets: FolderPreset[];
-    selectedFolderPreset: string;
-    filenamePresets: FilenamePreset[];
-    selectedFilenamePreset: string;
-    conversionPresets: ConversionPreset[];
-    selectedConversionPreset: string;
-    globalPresets: GlobalPreset[];
-    selectedGlobalPreset: string;
+    localProcessing: LocalProcessingSettings;
+    operationDefaults: OperationDefaults;
 
     global: {
-        outputFormat: OutputFormat;
-        quality: number;
-        colorDepth: number;
-        pngquantQuality: string;
-        pngquantExecutablePath: string;
-        ffmpegExecutablePath: string;
-        ffmpegCrf: number;
-        ffmpegPreset: string;
-        modalBehavior: ModalBehavior;
         enableContextMenu: boolean;
         codeBlockImageLinkIndexing: boolean;
         showSpaceSavedNotification: boolean;
-        revertToOriginalIfLarger: boolean;
-        minimumCompressionSavingsInKB: number;
-        useSystemPathForBinary: boolean;
     };
 
-    linkFormatSettings: LinkFormatSettings;
-    nonDestructiveResizeSettings: NonDestructiveResizeSettings;
     ocrSettings: OCRSettings;
     cleanerSettings: {
         basePath: string;
         trashMode: 'system' | 'obsidian' | 'custom';
         customTrashPath: string;
         fileTypes: string;
-    };
-
-    processCurrentNote: {
-        convertTo: string;
-        quality: number;
-        resizeMode: string;
-        desiredWidth: number;
-        desiredHeight: number;
-        desiredLength: number;
-        skipImagesInTargetFormat: boolean;
-        enlargeOrReduce: EnlargeReduce;
-        skipFormats: string;
-    };
-
-    processAllVault: {
-        convertTo: string;
-        quality: number;
-        resizeMode: string;
-        desiredWidth: number;
-        desiredHeight: number;
-        desiredLength: number;
-        enlargeOrReduce: string;
-        skipFormats: string;
-        skipImagesInTargetFormat: boolean;
     };
 
     captions: {
@@ -249,18 +212,14 @@ export interface ImageAssistantSettings {
         neverProcessFilenames: string;
     };
 
-    singleImageModalSettings?: SingleImageModalSettings;
     resizeCursorLocation: "front" | "back" | "below" | "none";
     annotationPresets: {
         drawing: ToolPreset[];
         arrow: ToolPreset[];
         text: ToolPreset[];
     };
-    subfolderTemplate: string;
     modalSessionState?: {
         customFolderOverride?: string;
         customFilenameOverride?: string;
-        lastUsedFolderPreset?: string;
-        lastUsedFilenamePreset?: string;
     };
 }

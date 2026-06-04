@@ -43,9 +43,6 @@ export default {
     "SETTING_DELETE_SOURCE": "Delete local source file after upload",
     "SETTING_DELETE_SOURCE_DESC": "Automatically delete local file after successful upload",
 
-    "SETTING_GLOBAL_SETTINGS": "Drop/paste presets",
-    "SETTING_GLOBAL_SETTINGS_DESC": "Quickly apply a combination of presets",
-
     // Cloud Settings - Uploader Types
     "SETTING_UPLOADER_PICGO": "PicGo",
     "SETTING_UPLOADER_PICGO_CORE": "PicGo-Core",
@@ -198,7 +195,7 @@ export default {
     // Folder Management
     "ERROR_CUSTOM_FOLDER_NOT_DEFINED": "Custom folder template is not defined.",
 
-    // Link Format Preset
+    // Link formatting
     "SUMMARY_LINK_TYPE": "Link Type: {0}",
     "SUMMARY_PATH_TYPE": "Path Type: {0}",
     "SUMMARY_FORMAT": "Format: {0}",
@@ -208,30 +205,15 @@ export default {
     "SUMMARY_WIDTH": "Width: {0}",
     "SUMMARY_FOLDER_TYPE": "Type: {0}",
 
-    // Presets labels and messages
-    "LABEL_DROP_PASTE_PRESETS": "Drop/paste presets",
-    "DESC_DROP_PASTE_PRESETS": "Quickly apply a combination of presets",
-    "TOOLTIP_SAVE_GLOBAL_PRESET": "Save current selection as a new Global Preset",
-    "TOOLTIP_DELETE_GLOBAL_PRESET": "Delete selected Global Preset",
     "CONFIRM_DELETE_TITLE": "Confirm Delete",
-    "CONFIRM_DELETE_GLOBAL_MSG": "Are you sure you want to delete the global preset \"{0}\"?",
-    "CONFIRM_DELETE_PRESET_MSG": "Are you sure you want to delete the preset \"{0}\"?",
     "TAB_FOLDER": "Folder",
     "TAB_FILENAME": "Filename",
     "TAB_CONVERSION": "Conversion",
     "TAB_LINK_FORMAT": "Link format",
     "TAB_RESIZE": "Resize",
-    "DESC_FOLDER_PRESETS": "Define where converted images will be stored. Choose from predefined locations or create custom paths using variables.",
-    "DESC_FILENAME_PRESETS": "Control how converted images are named. Use variables like {notename}, {timestamp}, {MD5}, {UUID} to create unique filenames.",
-    "DESC_CONVERSION_PRESETS": "Control the output format, quality, and resizing options for converted images.",
-    "DESC_LINK_FORMAT_PRESETS": "Determine how image links are inserted into notes.",
-    "DESC_RESIZE_PRESETS": "Configure non-destructive resizing options for images directly within the editor.",
     "BUTTON_EDIT": "Edit",
-    "BUTTON_ADD_NEW": "+ Add New",
-    "LABEL_PRESET_NAME": "Preset name",
     "LABEL_SKIP_RENAME_PATTERNS": "Skip rename patterns",
     "LABEL_SKIP_CONVERSION_PATTERNS": "Skip conversion patterns",
-    "NOTICE_NAME_REQUIRED": "Name required",
     "OPTION_FOLDER_SUBFOLDER": "In subfolder under current note",
     "OPTION_FOLDER_CUSTOM": "Custom",
     "OPTION_FOLDER_DEFAULT": "Default (Obsidian setting)",
@@ -357,11 +339,6 @@ export default {
     "SETTING_NEVER_PROCESS_DESC": "Filenames or patterns to ignore (comma separated)",
     "SETTING_SHOW_NOTIFICATION_NAME": "Show Space Saved Notification",
     "SETTING_SHOW_NOTIFICATION_DESC": "Show how much space was saved after processing",
-    "SETTING_MODAL_BEHAVIOR_NAME": "Modal Behavior",
-    "SETTING_MODAL_BEHAVIOR_DESC": "When to show options when pasting/dropping",
-    "SETTING_MODAL_BEHAVIOR_ALWAYS": "Always",
-    "SETTING_MODAL_BEHAVIOR_NEVER": "Never",
-    "SETTING_MODAL_BEHAVIOR_ASK": "Ask every time",
     "SETTING_REVERT_IF_LARGER_NAME": "Revert to original if larger",
     "SETTING_REVERT_IF_LARGER_DESC": "If the processed image is larger than the original, use the original image instead.",
 
@@ -534,19 +511,16 @@ export default {
     "LABEL_DIRECT_IMAGES": "Direct images",
     "LABEL_LINKED_IMAGES": "Linked images",
 
-    // Preset Selection Modal
-    "MODAL_PRESET_TITLE": "Image Converter",
     "BUTTON_VARIABLES": "{Variables}",
     "TOOLTIP_SHOW_VARIABLES": "Show available variables",
     "LABEL_FOLDER": "Folder",
     "LABEL_FILENAME": "Filename",
     "LABEL_FORMAT": "Format",
     "LABEL_LINK": "Link",
-    "BUTTON_EDIT_PRESETS": "Edit presets",
     "BUTTON_APPLY": "Apply",
     "PREVIEW_TITLE": "Preview",
 
-    "DESC_FOLDER_OVERWRITE": "Temporarily overwrite path defined in selected preset e.g.: assets/{YYYY}/{MM}",
+    "DESC_FOLDER_OVERWRITE": "Temporarily override the local folder template e.g.: assets/{YYYY}/{MM}",
     "PLACEHOLDER_FOLDER": "Where to save the image",
     "DESC_FILENAME_TEMPLATE": "e.g., {imagename}-{timestamp}",
     "PLACEHOLDER_FILENAME": "What to name the file",
@@ -941,12 +915,6 @@ export default {
     "MSG_DELETING_DOWNLOADED": "Deleting downloaded files...",
 
     // Settings Modals
-    "MODAL_SAVE_PRESET_TITLE": "Save global preset",
-    "MODAL_PRESET_NAME": "Preset Name",
-    "MODAL_PRESET_NAME_PLACEHOLDER": "Enter preset name",
-    "MODAL_SUMMARY": "Summary",
-    "MODAL_ENTER_PRESET_NAME": "Please enter a preset name.",
-    "MODAL_SECTION_PRESET": "{0} Preset: {1}",
     "MODAL_LABEL_TYPE": "Type",
     "MODAL_LABEL_SUBFOLDER_TEMPLATE": "Subfolder template",
     "MODAL_LABEL_CUSTOM_TEMPLATE": "Custom template",

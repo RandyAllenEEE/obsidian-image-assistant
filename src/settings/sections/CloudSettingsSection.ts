@@ -1,12 +1,12 @@
 import { Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
-import { PasteHandlingMode, PresetUIState } from "../types";
+import { PasteHandlingMode, SettingsUIState } from "../types";
 
 export function renderCloudSettingsSection(
     containerEl: HTMLElement,
     plugin: ImageConverterPlugin,
-    presetUIState: PresetUIState,
+    settingsUIState: SettingsUIState,
     refreshDisplay: () => void
 ): HTMLElement {
     // --- Paste Handling Settings Section ---
@@ -43,7 +43,7 @@ export function renderCloudSettingsSection(
 
     // Function to update chevron state
     const updateChevron = () => {
-        if (presetUIState.pasteHandlingSectionCollapsed) {
+        if (settingsUIState.pasteHandlingSectionCollapsed) {
             setIcon(chevronIcon, "chevron-right");
             contentWrapper.style.display = "none";
         } else {
@@ -60,7 +60,7 @@ export function renderCloudSettingsSection(
         // Prevent collapse when clicking the dropdown
         if ((e.target as HTMLElement).closest(".dropdown")) return;
 
-        presetUIState.pasteHandlingSectionCollapsed = !presetUIState.pasteHandlingSectionCollapsed;
+        settingsUIState.pasteHandlingSectionCollapsed = !settingsUIState.pasteHandlingSectionCollapsed;
         updateChevron();
     };
 

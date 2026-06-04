@@ -1,9 +1,9 @@
 import { Setting, setIcon, Notice } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
-import { PresetUIState } from "../types";
+import { SettingsUIState } from "../types";
 
-export function renderCleanerSettingsSection(containerEl: HTMLElement, plugin: ImageConverterPlugin, presetUIState: PresetUIState): void {
+export function renderCleanerSettingsSection(containerEl: HTMLElement, plugin: ImageConverterPlugin, settingsUIState: SettingsUIState): void {
     // --- Unused File Cleaner Settings Section ---
     const cleanerSection = containerEl.createDiv("image-converter-settings-section");
     cleanerSection.addClass("unused-file-cleaner-settings-section");
@@ -31,7 +31,7 @@ export function renderCleanerSettingsSection(containerEl: HTMLElement, plugin: I
 
     // Function to update chevron state
     const updateChevron = () => {
-        if (presetUIState.cleanerSectionCollapsed) {
+        if (settingsUIState.cleanerSectionCollapsed) {
             setIcon(chevronIcon, "chevron-right");
             settingsContentWrapper.style.display = "none";
         } else {
@@ -45,7 +45,7 @@ export function renderCleanerSettingsSection(containerEl: HTMLElement, plugin: I
 
     // Click handler for collapse/expand
     headerSetting.settingEl.onclick = () => {
-        presetUIState.cleanerSectionCollapsed = !presetUIState.cleanerSectionCollapsed;
+        settingsUIState.cleanerSectionCollapsed = !settingsUIState.cleanerSectionCollapsed;
         updateChevron();
     };
 

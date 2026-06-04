@@ -4,11 +4,10 @@ import ImageConverterPlugin from "../../main";
 import { createAnyLinkRegex } from "../../utils/RegexPatterns";
 import { ImageLinkPathReplacer } from "../../utils/ImageLinkPathReplacer";
 import { ImageAssistantSettings } from "../../settings/defaults";
-import { OutputFormat, ResizeMode, EnlargeReduce, ConversionPreset } from "../../settings/types";
+import { OutputFormat, ResizeMode, EnlargeReduce, SingleImageOperationDefaults } from "../../settings/types";
 import { t } from "../../lang/helpers";
 
-export interface SingleImageModalSettings {
-    conversionPresetName: string;
+export interface SingleImageModalSettings extends SingleImageOperationDefaults {
     outputFormat: OutputFormat;
     quality: number;
     colorDepth: number;
@@ -44,36 +43,16 @@ export class ProcessSingleImageModal extends Modal {
     }
 
     private loadModalSettings() {
-        const savedSettings = this.plugin.settings.singleImageModalSettings;
+        const savedSettings = this.plugin.settings.operationDefaults?.singleImage;
         this.modalSettings = { ...this.getInitialSettings(), ...savedSettings };
     }
 
     private getInitialSettings(): SingleImageModalSettings {
-        const resizeModeValue = this.plugin.settings.processCurrentNote.resizeMode as ResizeMode;
-        const avifPreset = this.plugin.settings.conversionPresets.find((preset: ConversionPreset) => preset.outputFormat === "AVIF");
-        const pngQuantPreset = this.plugin.settings.conversionPresets.find((preset: ConversionPreset) => preset.outputFormat === "PNGQUANT");
-
-        return {
-            conversionPresetName: this.plugin.settings.selectedConversionPreset,
-            outputFormat: this.plugin.settings.global.outputFormat,
-            quality: this.plugin.settings.global.quality,
-            colorDepth: this.plugin.settings.global.colorDepth,
-            resizeMode: resizeModeValue,
-            desiredWidth: this.plugin.settings.processCurrentNote.desiredWidth,
-            desiredHeight: this.plugin.settings.processCurrentNote.desiredHeight,
-            desiredLongestEdge: this.plugin.settings.processCurrentNote.desiredLength,
-            enlargeOrReduce: this.plugin.settings.processCurrentNote.enlargeOrReduce as EnlargeReduce,
-            allowLargerFiles: !this.plugin.settings.global.revertToOriginalIfLarger,
-            pngquantExecutablePath: pngQuantPreset?.pngquantExecutablePath || "",
-            pngquantQuality: pngQuantPreset?.pngquantQuality || "",
-            ffmpegExecutablePath: avifPreset?.ffmpegExecutablePath || "",
-            ffmpegCrf: avifPreset?.ffmpegCrf !== undefined ? avifPreset.ffmpegCrf : (this.plugin.settings.global.ffmpegCrf !== undefined ? this.plugin.settings.global.ffmpegCrf : 23),
-            ffmpegPreset: avifPreset?.ffmpegPreset || this.plugin.settings.global.ffmpegPreset || "medium",
-        };
+        return this.plugin.getDefaultSingleImageOperationSettings() as SingleImageModalSettings;
     }
 
     private saveModalSettings() {
-        this.plugin.settings.singleImageModalSettings = { ...this.modalSettings };
+        this.plugin.settings.operationDefaults.singleImage = { ...this.modalSettings };
         this.plugin.saveSettings();
     }
 
@@ -98,7 +77,7 @@ export class ProcessSingleImageModal extends Modal {
         const windowWidth = window.innerWidth;
         const maxWidth = 800;
         const modalWidth = Math.min(windowWidth * 0.9, maxWidth);
-        this.modalEl.setCssStyles({ width: `${modalWidth} px` });
+        this.modalEl.setCssStyles({ width: `${modalWidth}px` });
 
         this.renderSettings();
         await this.generatePreview();  // Initial preview, may be skipped.
@@ -112,12 +91,6 @@ export class ProcessSingleImageModal extends Modal {
 
     private renderConversionSettings() {
         this.conversionSettingsContainer.empty();
-
-        const currentPreset = this.plugin.getPresetByName(
-            this.modalSettings.conversionPresetName,
-            this.plugin.settings.conversionPresets,
-            "Conversion"
-        );
 
         new Setting(this.conversionSettingsContainer)
             .setName(t("MODAL_OUTPUT_FORMAT"))
@@ -181,14 +154,8 @@ export class ProcessSingleImageModal extends Modal {
                 .setName(t("MODAL_PNGQUANT_PATH"))
                 .setTooltip(t("TOOLTIP_PNGQUANT_PATH"))
                 .addText(text => {
-                    const pngquantPreset = this.plugin.settings.conversionPresets.find(preset => preset.outputFormat === "PNGQUANT");
-                    pngquantPreset?.pngquantExecutablePath || "";
-
                     text.setValue(this.modalSettings.pngquantExecutablePath)
                         .onChange(async value => {
-                            if (currentPreset) {
-                                currentPreset.pngquantExecutablePath = value;
-                            }
                             this.modalSettings.pngquantExecutablePath = value;
                             // NO PREVIEW for pngquant
                         });
@@ -213,14 +180,8 @@ export class ProcessSingleImageModal extends Modal {
                 .setName(t("MODAL_FFMPEG_PATH"))
                 .setTooltip(t("TOOLTIP_PNGQUANT_PATH"))
                 .addText(text => {
-                    const avifPreset = this.plugin.settings.conversionPresets.find(preset => preset.outputFormat === "AVIF");
-                    avifPreset?.ffmpegExecutablePath || "";
-
                     text.setValue(this.modalSettings.ffmpegExecutablePath)
                         .onChange(async value => {
-                            if (currentPreset) {
-                                currentPreset.ffmpegExecutablePath = value;
-                            }
                             this.modalSettings.ffmpegExecutablePath = value;
                             // NO PREVIEW for AVIF
                         });
@@ -391,9 +352,9 @@ export class ProcessSingleImageModal extends Modal {
 
         try {
             const fileBuffer = await this.app.vault.readBinary(this.imageFile);
-            const imageBlob = new Blob([fileBuffer], { type: this.imageFile.extension ? `image / ${this.imageFile.extension} ` : 'application/octet-stream' });
+            const imageBlob = new Blob([fileBuffer], { type: this.imageFile.extension ? `image/${this.imageFile.extension}` : 'application/octet-stream' });
 
-            // No need to get conversionPreset here; preview uses modalSettings
+            // Preview uses modal settings directly.
 
             const processedImageBuffer = await this.plugin.imageProcessor.processImage(
                 imageBlob,
@@ -406,11 +367,11 @@ export class ProcessSingleImageModal extends Modal {
                 this.modalSettings.desiredLongestEdge,
                 this.modalSettings.enlargeOrReduce,
                 this.modalSettings.allowLargerFiles,
-                undefined, // No special preset for preview
+                undefined,
                 this.plugin.settings
             );
 
-            const blob = new Blob([processedImageBuffer], { type: `image / ${this.modalSettings.outputFormat.toLowerCase()} ` });
+            const blob = new Blob([processedImageBuffer], { type: `image/${this.modalSettings.outputFormat.toLowerCase()}` });
             this.previewImageUrl = URL.createObjectURL(blob);
 
             const img = this.previewContainer.createEl("img", {
@@ -438,12 +399,12 @@ export class ProcessSingleImageModal extends Modal {
         //No Changes needed
         try {
             const fileBuffer = await this.app.vault.readBinary(this.imageFile);
-            const imageFile = new File([fileBuffer], this.imageFile.name, { type: this.imageFile.extension ? `image / ${this.imageFile.extension} ` : 'application/octet-stream' });
+            const imageFile = new File([fileBuffer], this.imageFile.name, { type: this.imageFile.extension ? `image/${this.imageFile.extension}` : 'application/octet-stream' });
 
             const destinationPath: string = this.imageFile.parent?.path || "";
             let newFilename: string = (this.modalSettings.outputFormat === "NONE" || this.modalSettings.outputFormat === "ORIGINAL")
                 ? this.imageFile.name
-                : `${this.imageFile.name.substring(0, this.imageFile.name.lastIndexOf("."))}.${this.modalSettings.outputFormat.toLowerCase()} `;
+                : `${this.imageFile.name.substring(0, this.imageFile.name.lastIndexOf("."))}.${this.modalSettings.outputFormat.toLowerCase()}`;
 
             //  Handle PNGQuant extension
             if (this.modalSettings.outputFormat === "PNGQUANT") {
@@ -452,22 +413,9 @@ export class ProcessSingleImageModal extends Modal {
 
             const fullPath: string = this.plugin.folderAndFilenameManagement.combinePath(destinationPath, newFilename);
 
-            // Get Conversion Preset
-            const conversionPreset = this.plugin.getPresetByName(
-                this.modalSettings.conversionPresetName,
-                this.plugin.settings.conversionPresets,
-                "Conversion"
-            );
-
             // Skip if the conversion is not needed
             if (this.modalSettings.outputFormat === "NONE" && this.modalSettings.resizeMode === "None") {
                 new Notice(`No processing needed for "${this.imageFile.name}".`, 1000);
-                this.close();
-                return;
-            }
-
-            if (conversionPreset && this.plugin.folderAndFilenameManagement.shouldSkipConversion(this.imageFile.name, conversionPreset)) {
-                new Notice(`Skipped conversion of image "${this.imageFile.name}" due to skip pattern match in the conversion preset.`, 2000);
                 this.close();
                 return;
             }
@@ -501,9 +449,6 @@ export class ProcessSingleImageModal extends Modal {
             } else {
                 // All other conversion cases (WEBP, JPEG, PNG, etc.)
                 // Pass pngquant settings if applicable
-                const avifPreset = this.plugin.settings.conversionPresets.find(
-                    preset => preset.outputFormat === "AVIF"
-                );
                 processedImageBuffer = await this.plugin.imageProcessor.processImage(
                     imageFile,
                     this.modalSettings.outputFormat,
@@ -515,35 +460,13 @@ export class ProcessSingleImageModal extends Modal {
                     this.modalSettings.desiredLongestEdge,
                     this.modalSettings.enlargeOrReduce,
                     this.modalSettings.allowLargerFiles,
-                    this.modalSettings.outputFormat === "PNGQUANT" ? { // Pass a dummy preset with pngquant settings
-                        name: "temp",
-                        outputFormat: "PNGQUANT",
-                        quality: 100,
-                        colorDepth: 1,
-                        resizeMode: "None",
-                        desiredWidth: 0,
-                        desiredHeight: 0,
-                        desiredLongestEdge: 0,
-                        enlargeOrReduce: "Auto",
-                        allowLargerFiles: false,
-                        skipConversionPatterns: "",
+                    ["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat) ? {
                         pngquantExecutablePath: this.modalSettings.pngquantExecutablePath,
                         pngquantQuality: this.modalSettings.pngquantQuality,
-                    } : this.modalSettings.outputFormat === "AVIF" ? {
-                        name: "temp", // Dummy name
-                        outputFormat: "AVIF",
-                        quality: 100,
-                        colorDepth: 1,
-                        resizeMode: "None",
-                        desiredWidth: 0,
-                        desiredHeight: 0,
-                        desiredLongestEdge: 0,
-                        enlargeOrReduce: "Auto",
-                        allowLargerFiles: false,
-                        skipConversionPatterns: "",
-                        ffmpegExecutablePath: avifPreset?.ffmpegExecutablePath || "",
+                        ffmpegExecutablePath: this.modalSettings.ffmpegExecutablePath,
                         ffmpegCrf: this.modalSettings.ffmpegCrf,
                         ffmpegPreset: this.modalSettings.ffmpegPreset,
+                        useSystemPathForBinary: this.plugin.settings.localProcessing.externalTools.useSystemPathForBinary,
                     } : undefined,
                     this.plugin.settings
                 );
@@ -551,7 +474,7 @@ export class ProcessSingleImageModal extends Modal {
 
 
             // --- File Creation/Replacement ---
-            if (processedImageBuffer && this.plugin.settings.global.revertToOriginalIfLarger && processedImageBuffer.byteLength > originalSize) {
+            if (processedImageBuffer && !this.modalSettings.allowLargerFiles && processedImageBuffer.byteLength > originalSize) {
                 this.plugin.showSizeComparisonNotification(originalSize, processedImageBuffer.byteLength);
                 new Notice(`Using original image for "${this.imageFile.name}" as processed image is larger.`, 1000);
                 // We don't create/modify a file, but the link *might* need updating (if format changed).
@@ -568,7 +491,7 @@ export class ProcessSingleImageModal extends Modal {
                         // Now modify the *renamed* file.
                         await this.app.vault.modifyBinary(renamedFile, processedImageBuffer);
                     } else {
-                        new Notice(`Error: Could not find renamed file at ${fullPath} `);
+                        new Notice(`Error: Could not find renamed file at ${fullPath}`);
                         return; // Exit if rename failed
                     }
                 } else {
@@ -607,7 +530,7 @@ export class ProcessSingleImageModal extends Modal {
 
         } catch (error) {
             console.error("Error processing image:", error);
-            new Notice(`Failed to process image: ${error.message} `, 2000);
+            new Notice(`Failed to process image: ${error.message}`, 2000);
         } finally {
             if (this.previewImageUrl) {
                 URL.revokeObjectURL(this.previewImageUrl);

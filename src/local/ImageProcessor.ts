@@ -2,7 +2,7 @@
 import { Notice, Platform, App, TFile, FileSystemAdapter, TFolder } from "obsidian";
 import { SupportedImageFormats } from "./SupportedImageFormats";
 import { ChildProcess, spawn } from 'child_process';
-import { ConversionPreset, ResizeMode, EnlargeReduce } from "../settings/types";
+import { LocalExternalToolSettings, ResizeMode, EnlargeReduce } from "../settings/types";
 import { ImageAssistantSettings, DEFAULT_SETTINGS } from "../settings/defaults";
 import * as piexif from "piexifjs"; // Import piexif library
 
@@ -23,7 +23,7 @@ interface Dimensions {
 export class ImageProcessor {
 
     supportedImageFormats: SupportedImageFormats
-    private preset: ConversionPreset | undefined;
+    private externalTools: LocalExternalToolSettings = DEFAULT_SETTINGS.localProcessing.externalTools;
     private settings: ImageAssistantSettings;
     private app: App;
 
@@ -60,7 +60,7 @@ export class ImageProcessor {
         desiredLongestEdge: number,
         enlargeOrReduce: EnlargeReduce,
         allowLargerFiles: boolean,
-        preset?: ConversionPreset, // Add preset parameter
+        externalTools?: LocalExternalToolSettings,
         settings?: ImageAssistantSettings
     ): Promise<ArrayBuffer> {
         // Process the image using the helper function
@@ -75,7 +75,7 @@ export class ImageProcessor {
             desiredLongestEdge,
             enlargeOrReduce,
             allowLargerFiles,
-            preset,
+            externalTools,
             settings
         );
 
@@ -117,11 +117,11 @@ export class ImageProcessor {
         desiredLongestEdge: number,
         enlargeOrReduce: EnlargeReduce,
         allowLargerFiles: boolean,
-        preset?: ConversionPreset, // Add preset parameter
+        externalTools?: LocalExternalToolSettings,
         settings?: ImageAssistantSettings
     ): Promise<ArrayBuffer> {
-        this.preset = preset; // Store the preset
         this.settings = settings ?? DEFAULT_SETTINGS;
+        this.externalTools = externalTools || this.settings.localProcessing?.externalTools || DEFAULT_SETTINGS.localProcessing.externalTools;
 
         // Resolve input to Blob and optionally Path (for zero-copy)
         let inputBlob: Blob;
@@ -132,7 +132,7 @@ export class ImageProcessor {
                 inputBlob = file;
             } else if (file instanceof TFile) {
                 // If it's a TFile, we can get the system path if adapter allows
-                if (this.settings.global.useSystemPathForBinary && this.app.vault.adapter instanceof FileSystemAdapter) {
+                if (this.externalTools.useSystemPathForBinary && this.app.vault.adapter instanceof FileSystemAdapter) {
                     inputPath = this.app.vault.adapter.getFullPath(file.path);
                 }
                 const data = await this.app.vault.readBinary(file);
@@ -433,9 +433,8 @@ export class ImageProcessor {
                     allowLargerFiles
                 );
             case 'PNGQUANT': {// Add case for PNGQUANT
-                // Retrieve PNGQUANT settings from preset if available, otherwise from global settings.
-                const pngquantExecutablePath = this.preset?.pngquantExecutablePath || this.settings.global.pngquantExecutablePath;
-                const pngquantQuality = this.preset?.pngquantQuality || this.settings.global.pngquantQuality;
+                const pngquantExecutablePath = this.externalTools.pngquantExecutablePath;
+                const pngquantQuality = this.externalTools.pngquantQuality;
                 // Check if executable path is set
                 if (!pngquantExecutablePath) {
                     new Notice("PNGQUANT executable path is not set. Please configure it in the plugin settings.");
@@ -462,10 +461,9 @@ export class ImageProcessor {
                 );
             }
             case 'AVIF': {
-                // Retrieve AVIF settings from preset if available, or from SingleImageModal
-                const ffmpegExecutablePath = this.preset?.ffmpegExecutablePath || this.settings.global.ffmpegExecutablePath;
-                const ffmpegCrf = this.preset?.ffmpegCrf || this.settings.global.ffmpegCrf;
-                const ffmpegPreset = this.preset?.ffmpegPreset || this.settings.global.ffmpegPreset;
+                const ffmpegExecutablePath = this.externalTools.ffmpegExecutablePath;
+                const ffmpegCrf = this.externalTools.ffmpegCrf;
+                const ffmpegPreset = this.externalTools.ffmpegPreset;
 
                 // Check if executable path is set
                 if (!ffmpegExecutablePath) {

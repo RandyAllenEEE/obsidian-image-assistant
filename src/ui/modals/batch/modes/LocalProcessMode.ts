@@ -16,16 +16,16 @@ export class LocalProcessMode implements IBatchMode {
     ) { }
 
     renderSettings(container: HTMLElement): void {
-        const option = this.plugin.settings.processCurrentNote;
+        const option = this.plugin.settings.operationDefaults.batchLocal;
 
         new Setting(container)
             .setName(t("BATCH_SETTING_TARGET_FORMAT" as any))
             .addDropdown(dropdown => {
-                dropdown.addOption('Original', t("BATCH_FORMAT_ORIGINAL" as any));
+                dropdown.addOption('disabled', t("BATCH_FORMAT_ORIGINAL" as any));
                 dropdown.addOption('webp', 'WebP');
                 dropdown.addOption('jpg', 'JPG');
                 dropdown.addOption('png', 'PNG');
-                dropdown.setValue(option.convertTo)
+                dropdown.setValue(option.convertTo === "Original" ? "disabled" : option.convertTo)
                     .onChange(async (value) => {
                         option.convertTo = value;
                         await this.plugin.saveSettings();
@@ -52,13 +52,95 @@ export class LocalProcessMode implements IBatchMode {
 
         new Setting(container)
             .setName(t("BATCH_SETTING_RESIZE" as any))
-            .addToggle(toggle => {
-                const resizeEnabled = option.resizeMode !== 'None';
-                toggle.setValue(resizeEnabled)
+            .addDropdown(dropdown => {
+                dropdown
+                    .addOption('None', 'None')
+                    .addOption('Fit', t("OPTION_RESIZE_FIT" as any))
+                    .addOption('Fill', t("OPTION_RESIZE_FILL" as any))
+                    .addOption('LongestEdge', t("OPTION_RESIZE_LONGEST" as any))
+                    .addOption('ShortestEdge', t("OPTION_RESIZE_SHORTEST" as any))
+                    .addOption('Width', t("OPTION_RESIZE_WIDTH" as any))
+                    .addOption('Height', t("OPTION_RESIZE_HEIGHT" as any))
+                    .setValue(option.resizeMode)
                     .onChange(async (value) => {
-                        option.resizeMode = value ? 'Fit' : 'None'; // Default to Fit if enabled
+                        option.resizeMode = value;
+                        await this.plugin.saveSettings();
+                        container.empty();
+                        this.renderSettings(container);
+                    });
+            });
+
+        if (["Fit", "Fill", "Width"].includes(option.resizeMode)) {
+            this.addNumberSetting(container, t("LABEL_WIDTH" as any), option.desiredWidth, async value => {
+                option.desiredWidth = value;
+                await this.plugin.saveSettings();
+            });
+        }
+
+        if (["Fit", "Fill", "Height"].includes(option.resizeMode)) {
+            this.addNumberSetting(container, t("LABEL_HEIGHT" as any), option.desiredHeight, async value => {
+                option.desiredHeight = value;
+                await this.plugin.saveSettings();
+            });
+        }
+
+        if (["LongestEdge", "ShortestEdge"].includes(option.resizeMode)) {
+            this.addNumberSetting(
+                container,
+                option.resizeMode === "LongestEdge" ? t("MODAL_DESIRED_LONG" as any) : t("MODAL_DESIRED_SHORT" as any),
+                option.desiredLength,
+                async value => {
+                    option.desiredLength = value;
+                    await this.plugin.saveSettings();
+                }
+            );
+        }
+
+        if (option.resizeMode !== "None") {
+            new Setting(container)
+                .setName(t("MODAL_ENLARGE_REDUCE" as any))
+                .addDropdown(dropdown => {
+                    dropdown
+                        .addOption("Always", t("OPTION_ALWAYS" as any))
+                        .addOption("Reduce", t("OPTION_REDUCE" as any))
+                        .addOption("Enlarge", t("OPTION_ENLARGE" as any))
+                        .addOption("Auto", t("OPTION_AUTO" as any))
+                        .setValue(option.enlargeOrReduce)
+                        .onChange(async value => {
+                            option.enlargeOrReduce = value as any;
+                            await this.plugin.saveSettings();
+                        });
+                });
+        }
+
+        new Setting(container)
+            .setName("Skip formats")
+            .addText(text => {
+                text.setValue(option.skipFormats)
+                    .onChange(async value => {
+                        option.skipFormats = value;
                         await this.plugin.saveSettings();
                     });
+                text.inputEl.setAttr('spellcheck', 'false');
+            });
+
+        new Setting(container)
+            .setName("Skip target format")
+            .addToggle(toggle => toggle.setValue(option.skipImagesInTargetFormat).onChange(async value => {
+                option.skipImagesInTargetFormat = value;
+                await this.plugin.saveSettings();
+            }));
+    }
+
+    private addNumberSetting(container: HTMLElement, name: string, value: number, onChange: (value: number) => Promise<void>): void {
+        new Setting(container)
+            .setName(name)
+            .addText(text => {
+                text.setValue(String(value))
+                    .onChange(async rawValue => {
+                        await onChange(parseInt(rawValue, 10) || 0);
+                    });
+                text.inputEl.setAttr('spellcheck', 'false');
             });
     }
 

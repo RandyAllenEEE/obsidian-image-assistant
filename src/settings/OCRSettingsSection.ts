@@ -2,19 +2,19 @@ import * as obsidian from "obsidian";
 import { Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../main";
 import { t } from "../lang/helpers";
-import { PresetUIState } from "./types";
+import { SettingsUIState } from "./types";
 
 /**
  * 渲染 OCR & LaTeX 设置区域
  * @param containerEl 容器元素
  * @param plugin 插件实例
- * @param presetUIState UI 状态
+ * @param settingsUIState UI 状态
  * @param refreshDisplay 回调函数，用于刷新界面
  */
 export function renderOCRSettingsSection(
     containerEl: HTMLElement,
     plugin: ImageConverterPlugin,
-    presetUIState: PresetUIState,
+    settingsUIState: SettingsUIState,
     refreshDisplay: () => void
 ): void {
     const ocrSection = containerEl.createDiv({ cls: "ocr-settings-section" });
@@ -42,7 +42,7 @@ export function renderOCRSettingsSection(
 
     // Initial State & Toggle
     const updateChevron = () => {
-        if (presetUIState.ocrSectionCollapsed) {
+        if (settingsUIState.ocrSectionCollapsed) {
             setIcon(chevronIcon, "chevron-right");
             settingsContentWrapper.style.display = "none";
         } else {
@@ -54,7 +54,7 @@ export function renderOCRSettingsSection(
 
     headerSetting.settingEl.onclick = (e) => {
         if ((e.target as HTMLElement).tagName === 'A') return;
-        presetUIState.ocrSectionCollapsed = !presetUIState.ocrSectionCollapsed;
+        settingsUIState.ocrSectionCollapsed = !settingsUIState.ocrSectionCollapsed;
         updateChevron();
     };
 
