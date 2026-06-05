@@ -3,6 +3,7 @@ import ImageConverterPlugin from '../../main';
 import { ImageProcessor } from '../ImageProcessor';
 import { FolderAndFilenameManagement } from '../FolderAndFilenameManagement';
 import { SingleImageProcessor } from './SingleImageProcessor';
+import { t } from '../../lang/helpers';
 
 // Unified Batch Tools
 import {
@@ -67,7 +68,7 @@ export class VaultBatchProcessor {
             const imageFiles = await this.collector.getAllImageFiles();
 
             if (imageFiles.length === 0) {
-                new Notice('No images found in the vault.');
+                new Notice(t("NOTICE_NO_IMAGES_IN_VAULT"));
                 return;
             }
 
@@ -83,13 +84,13 @@ export class VaultBatchProcessor {
             );
 
             if (filesToProcess.length === 0) {
-                new Notice('No images found that need processing.');
+                new Notice(t("NOTICE_NO_IMAGES_TO_PROCESS"));
                 return;
             }
 
             // 4. Confirm Dialog
             const action = await showBatchConfirmDialog(this.app, {
-                title: 'Process All Vault Images',
+                title: t("CMD_PROCESS_ALL_VAULT"),
                 totalCount: filesToProcess.length,
                 multiRefItems: [],
                 scopePath: '/',

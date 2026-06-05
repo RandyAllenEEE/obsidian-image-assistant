@@ -6,7 +6,7 @@ import { t } from "../../../../lang/helpers";
 
 export class LocalProcessMode implements IBatchMode {
     id = "local_process" as const;
-    name = t("BATCH_MODE_LOCAL" as any);
+    name = t("BATCH_MODE_LOCAL");
 
     constructor(
         private app: App,
@@ -19,9 +19,9 @@ export class LocalProcessMode implements IBatchMode {
         const option = this.plugin.settings.operationDefaults.batchLocal;
 
         new Setting(container)
-            .setName(t("BATCH_SETTING_TARGET_FORMAT" as any))
+            .setName(t("BATCH_SETTING_TARGET_FORMAT"))
             .addDropdown(dropdown => {
-                dropdown.addOption('disabled', t("BATCH_FORMAT_ORIGINAL" as any));
+                dropdown.addOption('disabled', t("BATCH_FORMAT_ORIGINAL"));
                 dropdown.addOption('webp', 'WebP');
                 dropdown.addOption('jpg', 'JPG');
                 dropdown.addOption('png', 'PNG');
@@ -33,8 +33,8 @@ export class LocalProcessMode implements IBatchMode {
             });
 
         new Setting(container)
-            .setName(t("BATCH_SETTING_QUALITY" as any))
-            .setDesc(t("BATCH_SETTING_QUALITY_DESC" as any))
+            .setName(t("BATCH_SETTING_QUALITY"))
+            .setDesc(t("BATCH_SETTING_QUALITY_DESC"))
             .addSlider(slider => {
                 slider.setLimits(10, 100, 5)
                     .setValue(option.quality * 100) // Quality is 0-1 usually in settings? Defaults says 0.75. Code used 80.
@@ -51,16 +51,16 @@ export class LocalProcessMode implements IBatchMode {
             });
 
         new Setting(container)
-            .setName(t("BATCH_SETTING_RESIZE" as any))
+            .setName(t("BATCH_SETTING_RESIZE"))
             .addDropdown(dropdown => {
                 dropdown
-                    .addOption('None', 'None')
-                    .addOption('Fit', t("OPTION_RESIZE_FIT" as any))
-                    .addOption('Fill', t("OPTION_RESIZE_FILL" as any))
-                    .addOption('LongestEdge', t("OPTION_RESIZE_LONGEST" as any))
-                    .addOption('ShortestEdge', t("OPTION_RESIZE_SHORTEST" as any))
-                    .addOption('Width', t("OPTION_RESIZE_WIDTH" as any))
-                    .addOption('Height', t("OPTION_RESIZE_HEIGHT" as any))
+                    .addOption('None', t("SETTING_RESIZE_NONE"))
+                    .addOption('Fit', t("OPTION_RESIZE_FIT"))
+                    .addOption('Fill', t("OPTION_RESIZE_FILL"))
+                    .addOption('LongestEdge', t("OPTION_RESIZE_LONGEST"))
+                    .addOption('ShortestEdge', t("OPTION_RESIZE_SHORTEST"))
+                    .addOption('Width', t("OPTION_RESIZE_WIDTH"))
+                    .addOption('Height', t("OPTION_RESIZE_HEIGHT"))
                     .setValue(option.resizeMode)
                     .onChange(async (value) => {
                         option.resizeMode = value;
@@ -71,14 +71,14 @@ export class LocalProcessMode implements IBatchMode {
             });
 
         if (["Fit", "Fill", "Width"].includes(option.resizeMode)) {
-            this.addNumberSetting(container, t("LABEL_WIDTH" as any), option.desiredWidth, async value => {
+            this.addNumberSetting(container, t("LABEL_WIDTH"), option.desiredWidth, async value => {
                 option.desiredWidth = value;
                 await this.plugin.saveSettings();
             });
         }
 
         if (["Fit", "Fill", "Height"].includes(option.resizeMode)) {
-            this.addNumberSetting(container, t("LABEL_HEIGHT" as any), option.desiredHeight, async value => {
+            this.addNumberSetting(container, t("LABEL_HEIGHT"), option.desiredHeight, async value => {
                 option.desiredHeight = value;
                 await this.plugin.saveSettings();
             });
@@ -87,7 +87,7 @@ export class LocalProcessMode implements IBatchMode {
         if (["LongestEdge", "ShortestEdge"].includes(option.resizeMode)) {
             this.addNumberSetting(
                 container,
-                option.resizeMode === "LongestEdge" ? t("MODAL_DESIRED_LONG" as any) : t("MODAL_DESIRED_SHORT" as any),
+                option.resizeMode === "LongestEdge" ? t("MODAL_DESIRED_LONG") : t("MODAL_DESIRED_SHORT"),
                 option.desiredLength,
                 async value => {
                     option.desiredLength = value;
@@ -98,13 +98,13 @@ export class LocalProcessMode implements IBatchMode {
 
         if (option.resizeMode !== "None") {
             new Setting(container)
-                .setName(t("MODAL_ENLARGE_REDUCE" as any))
+                .setName(t("MODAL_ENLARGE_REDUCE"))
                 .addDropdown(dropdown => {
                     dropdown
-                        .addOption("Always", t("OPTION_ALWAYS" as any))
-                        .addOption("Reduce", t("OPTION_REDUCE" as any))
-                        .addOption("Enlarge", t("OPTION_ENLARGE" as any))
-                        .addOption("Auto", t("OPTION_AUTO" as any))
+                        .addOption("Always", t("OPTION_ALWAYS"))
+                        .addOption("Reduce", t("OPTION_REDUCE"))
+                        .addOption("Enlarge", t("OPTION_ENLARGE"))
+                        .addOption("Auto", t("OPTION_AUTO"))
                         .setValue(option.enlargeOrReduce)
                         .onChange(async value => {
                             option.enlargeOrReduce = value as any;
@@ -114,7 +114,8 @@ export class LocalProcessMode implements IBatchMode {
         }
 
         new Setting(container)
-            .setName("Skip formats")
+            .setName(t("SETTING_SKIP_FORMATS"))
+            .setDesc(t("SETTING_SKIP_FORMATS_DESC"))
             .addText(text => {
                 text.setValue(option.skipFormats)
                     .onChange(async value => {
@@ -125,7 +126,8 @@ export class LocalProcessMode implements IBatchMode {
             });
 
         new Setting(container)
-            .setName("Skip target format")
+            .setName(t("SETTING_SKIP_TARGET"))
+            .setDesc(t("SETTING_SKIP_TARGET_DESC"))
             .addToggle(toggle => toggle.setValue(option.skipImagesInTargetFormat).onChange(async value => {
                 option.skipImagesInTargetFormat = value;
                 await this.plugin.saveSettings();
@@ -225,7 +227,7 @@ export class LocalProcessMode implements IBatchMode {
             const result = await this.plugin.batchImageProcessor.batchProcess(files);
             if (result.successful.length > 0) return result.successful[0];
             if (result.failed.length > 0) return result.failed[0];
-            return { success: false, item: task.source as TFile, error: "Unknown error" };
+            return { success: false, item: task.source as TFile, error: t("MSG_UNKNOWN_ERROR") };
         } catch (e) {
             return { success: false, item: task.source as TFile, error: e.message };
         }

@@ -197,16 +197,16 @@ export class UnifiedBatchProcessModal extends Modal {
             const total = selectedTasks.length;
 
             for (const task of selectedTasks) {
-                appendLog(`Processing: ${task.name}...`);
+                appendLog(t("BATCH_LOG_PROCESSING_ITEM", [task.name]));
 
                 const itemResult = await this.currentMode.processTask(task);
 
                 if (itemResult.success) {
                     result.successful.push(itemResult);
-                    appendLog(`✅ Success: ${task.name}`);
+                    appendLog(t("BATCH_LOG_SUCCESS_ITEM", [task.name]));
                 } else {
                     result.failed.push(itemResult);
-                    appendLog(`❌ Failed: ${task.name} - ${itemResult.error}`);
+                    appendLog(t("BATCH_LOG_FAILED_ITEM", [task.name, itemResult.error || ""]));
                 }
 
                 processed++;
@@ -232,8 +232,8 @@ export class UnifiedBatchProcessModal extends Modal {
             );
 
         } catch (e) {
-            appendLog(`Critical Error: ${e.message}`);
-            new Notice(`Batch Error: ${e.message}`);
+            appendLog(t("BATCH_LOG_CRITICAL_ERROR", [e.message]));
+            new Notice(t("MSG_BATCH_ERROR", [e.message]));
         }
     }
 }

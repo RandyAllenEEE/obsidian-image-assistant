@@ -3,6 +3,7 @@ import ImageConverterPlugin from '../../main';
 import { ImageProcessor } from '../ImageProcessor';
 import { FolderAndFilenameManagement } from '../FolderAndFilenameManagement';
 import { SingleImageProcessor } from './SingleImageProcessor';
+import { t } from '../../lang/helpers';
 
 // Unified Batch Tools
 import {
@@ -80,7 +81,7 @@ export class NoteBatchProcessor {
             linkedFiles = this.collector.deduplicateFiles(linkedFiles);
 
             if (linkedFiles.length === 0) {
-                new Notice('No images found in the note.');
+                new Notice(t("NOTICE_NO_IMAGES_IN_NOTE"));
                 return;
             }
 
@@ -96,7 +97,7 @@ export class NoteBatchProcessor {
             );
 
             if (filesToProcess.length === 0) {
-                new Notice('No images found that need processing.');
+                new Notice(t("NOTICE_NO_IMAGES_TO_PROCESS"));
                 return;
             }
 
@@ -107,7 +108,7 @@ export class NoteBatchProcessor {
             // Local batch didn't have confirm dialog before, adding it now as per plan.
 
             const action = await showBatchConfirmDialog(this.app, {
-                title: 'Process Note Images',
+                title: t("MENU_PROCESS_NOTE_IMAGES"),
                 totalCount: filesToProcess.length,
                 multiRefItems: [], // Local processing logic replaces in-place or updates links automatically safely
                 scopePath: noteFile.path,

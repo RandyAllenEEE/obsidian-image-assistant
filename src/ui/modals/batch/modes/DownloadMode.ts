@@ -9,7 +9,7 @@ import { getAllImageLinks } from "../../../../utils/RegexPatterns";
 
 export class DownloadMode implements IBatchMode {
     id = "download" as const;
-    name = t("BATCH_MODE_DOWNLOAD" as any);
+    name = t("BATCH_MODE_DOWNLOAD");
 
     constructor(
         private app: App,
@@ -165,7 +165,7 @@ export class DownloadMode implements IBatchMode {
             return {
                 success: false,
                 item: url,
-                error: "Unknown error"
+                error: t("MSG_UNKNOWN_ERROR")
             };
         } catch (e) {
             return {

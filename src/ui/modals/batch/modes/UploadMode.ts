@@ -10,7 +10,7 @@ import { buildAllowedPathSet } from "../../../../utils/batch";
 
 export class UploadMode implements IBatchMode {
     id = "upload" as const;
-    name = t("BATCH_MODE_UPLOAD" as any);
+    name = t("BATCH_MODE_UPLOAD");
 
     constructor(
         private app: App,
@@ -21,8 +21,8 @@ export class UploadMode implements IBatchMode {
 
     renderSettings(container: HTMLElement): void {
         new Setting(container)
-            .setName(t("BATCH_UPLOAD_CONFIG" as any))
-            .setDesc(t("BATCH_UPLOAD_DESC" as any))
+            .setName(t("BATCH_UPLOAD_CONFIG"))
+            .setDesc(t("BATCH_UPLOAD_DESC"))
             .addButton(b => b.setButtonText(t("MODAL_BUTTON_SETTINGS")).onClick(() => {
                 this.plugin.commandOpenSettingsTab();
             }));
@@ -136,7 +136,7 @@ export class UploadMode implements IBatchMode {
             return {
                 success: false,
                 item: file,
-                error: "Unknown error"
+                error: t("MSG_UNKNOWN_ERROR")
             };
         } catch (e) {
             return {
@@ -149,9 +149,9 @@ export class UploadMode implements IBatchMode {
 
     getReviewActions(): ReviewAction[] {
         return [
-            { id: "replace_only", label: t("BATCH_ACTION_REPLACE_ONLY" as any), style: 'primary' },
-            { id: "replace_delete", label: t("BATCH_ACTION_REPLACE_DELETE" as any), style: 'danger' },
-            { id: "undo", label: t("BATCH_ACTION_UNDO" as any), style: 'default' }
+            { id: "replace_only", label: t("BATCH_REPLACE_LINKS_ONLY"), style: 'primary' },
+            { id: "replace_delete", label: t("BATCH_REPLACE_DELETE_LOCAL"), style: 'danger' },
+            { id: "undo", label: t("BATCH_UNDO_UPLOAD"), style: 'default' }
         ];
     }
 

@@ -6,6 +6,7 @@ import { ResizeMode, EnlargeReduce } from '../../settings/types';
 import { BatchResult } from '../../types/BatchTypes';
 import { ConcurrentQueue } from '../../utils/AsyncLock';
 import { ImageLinkPathReplacer } from '../../utils/ImageLinkPathReplacer';
+import { t } from '../../lang/helpers';
 
 /**
  * SingleImageProcessor - Shared logic for processing a single image.
@@ -70,7 +71,7 @@ export class SingleImageProcessor {
                     // Usually "Revert to original" means keep original file entirely.
                     // If so, we shouldn't create a new file with .webp extension containing .png header.
                     // We should probably just SKIP processing.
-                    return { success: true, error: "Skipped: Size reduction insufficient" };
+                    return { success: true, error: t("MSG_SIZE_REDUCTION_INSUFFICIENT") };
                 }
             }
 

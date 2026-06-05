@@ -3,6 +3,7 @@ import ImageConverterPlugin from '../../main';
 import { ImageProcessor } from '../ImageProcessor';
 import { FolderAndFilenameManagement } from '../FolderAndFilenameManagement';
 import { SingleImageProcessor } from './SingleImageProcessor';
+import { t } from '../../lang/helpers';
 
 // Unified Batch Tools
 import {
@@ -43,7 +44,7 @@ export class FolderBatchProcessor {
             // 1. Validate Folder
             const folder = this.app.vault.getAbstractFileByPath(folderPath);
             if (!(folder instanceof TFolder)) {
-                new Notice('Error: Invalid folder path.');
+                new Notice(t("NOTICE_INVALID_FOLDER"));
                 return;
             }
 
@@ -57,11 +58,14 @@ export class FolderBatchProcessor {
                 desiredLength,
                 enlargeOrReduce,
                 skipFormats: batchSkipFormats,
+                skipImagesInTargetFormat: batchSkipImagesInTargetFormat,
             } = this.plugin.settings.operationDefaults.batchLocal;
 
             const allowLargerFiles = this.plugin.settings.localProcessing.conversion.allowLargerFiles;
 
-            const outputFormat = (convertTo === 'disabled' || convertTo === 'Original') ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
+            const isKeepOriginalFormat = convertTo === 'disabled' || convertTo === 'Original';
+            const targetFormat = convertTo;
+            const outputFormat = isKeepOriginalFormat ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
             const skipFormats = this.collector.parseSkipFormats(batchSkipFormats);
 
             // 3. Collect Images
@@ -69,23 +73,29 @@ export class FolderBatchProcessor {
             const images = this.collector.getImageFilesInFolder(folder, recursive);
 
             if (images.length === 0) {
-                new Notice('No images found in the folder.');
+                new Notice(t("NOTICE_NO_IMAGES_IN_FOLDER"));
                 return;
             }
 
             // 4. Filter Files
             const filesToProcess = images.filter(image =>
-                !skipFormats.includes(image.extension.toLowerCase())
+                this.collector.shouldProcessImage(
+                    image,
+                    isKeepOriginalFormat,
+                    targetFormat,
+                    skipFormats,
+                    batchSkipImagesInTargetFormat
+                )
             );
 
             if (filesToProcess.length === 0) {
-                new Notice('No images found that need processing (all skipped).');
+                new Notice(t("NOTICE_NO_IMAGES_SKIPPED"));
                 return;
             }
 
             // 5. Confirm Dialog
             const action = await showBatchConfirmDialog(this.app, {
-                title: 'Process Folder Images',
+                title: t("MENU_PROCESS_FOLDER_IMAGES"),
                 totalCount: filesToProcess.length,
                 multiRefItems: [], // Local processing logic replaces in-place or updates links automatically safely
                 scopePath: folderPath,

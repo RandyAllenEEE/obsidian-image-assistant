@@ -69,11 +69,11 @@ function renderFolder(container: HTMLElement, context: RenderContext): void {
         .setName(t("TAB_FOLDER"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("DEFAULT", "Default (Obsidian setting)")
-                .addOption("ROOT", "Root folder")
-                .addOption("CURRENT", "Same folder as current note")
-                .addOption("SUBFOLDER", "Subfolder")
-                .addOption("CUSTOM", "Custom")
+                .addOption("DEFAULT", t("OPTION_FOLDER_DEFAULT"))
+                .addOption("ROOT", t("OPTION_FOLDER_ROOT"))
+                .addOption("CURRENT", t("OPTION_FOLDER_CURRENT"))
+                .addOption("SUBFOLDER", t("OPTION_FOLDER_SUBFOLDER"))
+                .addOption("CUSTOM", t("OPTION_FOLDER_CUSTOM"))
                 .setValue(destination.type)
                 .onChange(async value => {
                     destination.type = value as any;
@@ -84,7 +84,7 @@ function renderFolder(container: HTMLElement, context: RenderContext): void {
 
     if (destination.type === "SUBFOLDER") {
         new Setting(container)
-            .setName("Subfolder template")
+            .setName(t("MODAL_LABEL_SUBFOLDER_TEMPLATE"))
             .addText(text => {
                 text.setValue(destination.subfolderTemplate || "")
                     .onChange(async value => {
@@ -97,7 +97,7 @@ function renderFolder(container: HTMLElement, context: RenderContext): void {
 
     if (destination.type === "CUSTOM") {
         new Setting(container)
-            .setName("Custom folder template")
+            .setName(t("LABEL_CUSTOM_PATH"))
             .addText(text => {
                 text.setValue(destination.customTemplate || "")
                     .onChange(async value => {
@@ -135,13 +135,13 @@ function renderFilename(container: HTMLElement, context: RenderContext): void {
         });
 
     new Setting(container)
-        .setName("Conflict resolution")
+        .setName(t("LABEL_CONFLICT_RESOLUTION"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("increment", "Increment")
-                .addOption("reuse", "Reuse")
-                .addOption("skip", "Skip")
-                .addOption("overwrite", "Overwrite")
+                .addOption("increment", t("OPTION_INCREMENT"))
+                .addOption("reuse", t("OPTION_REUSE"))
+                .addOption("skip", t("OPTION_SKIP"))
+                .addOption("overwrite", t("OPTION_OVERWRITE"))
                 .setValue(filename.conflictResolution)
                 .onChange(async value => {
                     filename.conflictResolution = value as any;
@@ -265,7 +265,7 @@ function renderConversion(container: HTMLElement, context: RenderContext): void 
         });
 
     new Setting(container)
-        .setName("Minimum savings")
+        .setName(t("LABEL_MINIMUM_SAVINGS"))
         .addText(text => text.setValue(String(conversion.minimumCompressionSavingsInKB)).onChange(async value => {
             conversion.minimumCompressionSavingsInKB = parseInt(value, 10) || 0;
             await context.plugin.saveSettings();
@@ -327,7 +327,7 @@ function renderResizeFields(container: HTMLElement, conversion: { resizeMode: Re
         });
 
     new Setting(container)
-        .setName("Allow larger files")
+        .setName(t("MODAL_LABEL_ALLOW_LARGER"))
         .addToggle(toggle => toggle.setValue(conversion.allowLargerFiles).onChange(async value => {
             conversion.allowLargerFiles = value;
             await context.plugin.saveSettings();
@@ -341,8 +341,8 @@ function renderLink(container: HTMLElement, context: RenderContext): void {
         .setName(t("TAB_LINK_FORMAT"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("wikilink", "Wikilink")
-                .addOption("markdown", "Markdown")
+                .addOption("wikilink", t("OPTION_WIKILINK"))
+                .addOption("markdown", t("OPTION_MARKDOWN"))
                 .setValue(link.linkFormat)
                 .onChange(async value => {
                     link.linkFormat = value as any;
@@ -351,12 +351,12 @@ function renderLink(container: HTMLElement, context: RenderContext): void {
         });
 
     new Setting(container)
-        .setName("Path format")
+        .setName(t("LABEL_PATH_FORMAT"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("shortest", "Shortest")
-                .addOption("relative", "Relative")
-                .addOption("absolute", "Absolute")
+                .addOption("shortest", t("OPTION_PATH_SHORTEST"))
+                .addOption("relative", t("OPTION_RELATIVE"))
+                .addOption("absolute", t("OPTION_ABSOLUTE"))
                 .setValue(link.pathFormat)
                 .onChange(async value => {
                     link.pathFormat = value as any;
@@ -365,14 +365,14 @@ function renderLink(container: HTMLElement, context: RenderContext): void {
         });
 
     new Setting(container)
-        .setName("Prepend current dir")
+        .setName(t("LABEL_PREPEND_CURRENT_DIR"))
         .addToggle(toggle => toggle.setValue(link.prependCurrentDir).onChange(async value => {
             link.prependCurrentDir = value;
             await context.plugin.saveSettings();
         }));
 
     new Setting(container)
-        .setName("Hide folders")
+        .setName(t("LABEL_HIDE_FOLDERS"))
         .addToggle(toggle => toggle.setValue(link.hideFolders).onChange(async value => {
             link.hideFolders = value;
             await context.plugin.saveSettings();
@@ -429,12 +429,12 @@ function renderEmbedResize(container: HTMLElement, context: RenderContext): void
     }
 
     new Setting(container)
-        .setName("Scale mode")
+        .setName(t("MODAL_LABEL_SCALE_MODE"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("auto", "Auto")
-                .addOption("reduce", "Reduce")
-                .addOption("enlarge", "Enlarge")
+                .addOption("auto", t("OPTION_AUTO"))
+                .addOption("reduce", t("OPTION_REDUCE"))
+                .addOption("enlarge", t("OPTION_ENLARGE"))
                 .setValue(resize.resizeScaleMode)
                 .onChange(async value => {
                     resize.resizeScaleMode = value as ResizeScaleMode;
@@ -443,11 +443,11 @@ function renderEmbedResize(container: HTMLElement, context: RenderContext): void
         });
 
     new Setting(container)
-        .setName("Units")
+        .setName(t("LABEL_RESIZE_UNITS"))
         .addDropdown(dropdown => {
             dropdown
-                .addOption("pixels", "Pixels")
-                .addOption("percentage", "Percentage")
+                .addOption("pixels", t("OPTION_PIXELS"))
+                .addOption("percentage", t("OPTION_PERCENTAGE"))
                 .setValue(resize.resizeUnits)
                 .onChange(async value => {
                     resize.resizeUnits = value as ResizeUnits;
@@ -456,7 +456,7 @@ function renderEmbedResize(container: HTMLElement, context: RenderContext): void
         });
 
     new Setting(container)
-        .setName("Maintain aspect ratio")
+        .setName(t("MODAL_LABEL_MAINTAIN_ASPECT"))
         .addToggle(toggle => toggle.setValue(resize.maintainAspectRatio).onChange(async value => {
             resize.maintainAspectRatio = value;
             await context.plugin.saveSettings();
