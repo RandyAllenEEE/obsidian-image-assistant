@@ -37,11 +37,13 @@ export default {
     "SETTING_WORK_ON_NETWORK_DESC": "也上传来自 URL 的图片",
     "SETTING_NETWORK_BLACKLIST": "网络图片域名黑名单",
     "SETTING_NETWORK_BLACKLIST_DESC": "用逗号分隔的域名列表，这些域名将被排除（例如：example.com, test.org）",
+    "SETTING_REMOTE_SERVER_MODE": "远程服务器模式",
+    "SETTING_REMOTE_SERVER_MODE_DESC": "向远程 PicGo/PicList 服务器发送库内相对路径。启用后将关闭网络图片上传。",
+    "SETTING_WORK_ON_NETWORK_REMOTE_DISABLED_DESC": "远程服务器模式启用时，网络图片上传不可用。",
+    "NOTICE_NETWORK_DISABLED_IN_REMOTE_MODE": "远程服务器模式下已关闭网络图片上传。",
 
     "SETTING_APPLY_IMAGE": "剪贴板同时包含文本和图片时上传",
     "SETTING_APPLY_IMAGE_DESC": "即使剪贴板也包含文本，仍然上传图片",
-    "SETTING_DELETE_SOURCE": "上传后删除本地源文件",
-    "SETTING_DELETE_SOURCE_DESC": "成功上传后自动删除本地文件",
 
     // Cloud Settings - Uploader Types
     "SETTING_UPLOADER_PICGO": "PicGo",
@@ -177,6 +179,10 @@ export default {
     // Image Processor
     "ERROR_PNGQUANT_NOT_SET": "PNGQUANT 可执行文件路径未设置。请在插件设置中配置。",
     "ERROR_FFMPEG_NOT_SET": "FFmpeg 可执行文件路径未设置。请在插件设置中配置。",
+    "NOTICE_FFMPEG_NOT_FOUND": "未找到 FFmpeg 可执行文件。",
+    "NOTICE_FFMPEG_DETECTED": "已找到 FFmpeg 可执行文件：{0}",
+    "NOTICE_ENCODER_DETECTED": "已检测到 AVIF 编码器：{0}",
+    "NOTICE_ENCODER_NOT_FOUND": "当前 FFmpeg 构建中未找到可用的 AV1 编码器。",
 
     // Uploader
     "ERROR_MOBILE_MUST_REMOTE": "移动端必须使用远程服务器模式。",
@@ -256,10 +262,6 @@ export default {
 
     // Image Alignment
     "SETTING_IMG_ALIGNMENT_SECTION": "图片对齐",
-    "SETTING_IMG_ALIGNMENT_CACHE_LOC": "图片对齐缓存位置",
-    "SETTING_IMG_ALIGNMENT_CACHE_LOC_DESC": "选择存储图片对齐缓存文件的位置。注意：需要重启应用生效。",
-    "SETTING_IMG_ALIGNMENT_CACHE_INTERVAL": "图片对齐缓存清理间隔",
-    "SETTING_IMG_ALIGNMENT_CACHE_INTERVAL_DESC": "清理图片对齐缓存中冗余条目的间隔时间（分钟）。默认：1小时（0为禁用）",
 
     // Drag & Scroll Resize
     "SETTING_DRAG_RESIZE_SECTION": "拖拽和滚轮调整大小",
@@ -414,6 +416,7 @@ export default {
     "MODAL_FFMPEG_PATH": "FFmpeg 可执行文件路径",
     "MODAL_FFMPEG_CRF": "FFmpeg CRF",
     "MODAL_FFMPEG_PRESET": "FFmpeg 预设",
+    "MODAL_AVIF_ENCODER": "AVIF 编码器",
     "MODAL_RESIZE_MODE": "调整大小方式",
     "MODAL_DESIRED_WIDTH": "目标宽度",
     "MODAL_DESIRED_HEIGHT": "目标高度",
@@ -910,8 +913,14 @@ export default {
     "OPTION_PNGQUANT": "pngquant (仅限 PNG)",
     "OPTION_AVIF": "AVIF (通过 ffmpeg)",
     "TOOLTIP_PNGQUANT_PATH": "提供二进制文件的完整路径。它可以位于库内或文件系统中的任何位置。",
+    "TOOLTIP_FFMPEG_PATH": "提供 FFmpeg 可执行文件的完整路径。它可以位于库内或文件系统中的任何位置。",
     "TOOLTIP_PNGQUANT_QUALITY": "指示 pngquant 使用满足或超过最大质量所需的最小颜色数量。min 和 max 是 0（最差）到 100（完美）范围内的数字。",
     "DESC_FFMPEG_CRF": "较低的值意味着更好的质量（更大的文件大小）。0 是无损的。",
+    "DESC_FFMPEG_CRF_RANGE": "较低的值意味着更好的质量。当前编码器支持 CRF {0}-{1}。",
+    "DESC_AVIF_ENCODER_DETECTION": "为当前 FFmpeg 路径检测最佳可用 AV1 编码器。硬件编码器会优先使用，但需要先通过快速验证。",
+    "DESC_AVIF_ENCODER_CURRENT": "已检测到编码器：{0}",
+    "BUTTON_FIND_FFMPEG": "查找 FFmpeg",
+    "BUTTON_DETECT_ENCODER": "检测编码器",
     "OPTION_AUTO": "自动",
 
     // Upload Modals Tooltips & Messages
@@ -975,8 +984,11 @@ export default {
     "MSG_FAIL_FIND_BASE64": "未找到 Base64 图片链接",
     "MSG_FAIL_FIND_IMAGE": "在当前笔记中未找到图片链接。",
     "MSG_FAIL_FIND_CLOUD": "在当前笔记中未找到云端图片链接。",
-    "MSG_CLOUD_DELETE_FAIL_HISTORY": "云端图片链接已移除，但无法从云储存中删除。历史记录已移除。",
-    "MSG_CLOUD_DELETE_UNSUPPORTED": "云端图片链接已移除。({0} 不支持自动删除)。历史记录已移除。",
+    "MSG_CLOUD_DELETE_FAIL_HISTORY": "云端图片链接已移除，但云端文件未删除：未找到上传历史记录。PicList 删除需要上传历史。",
+    "MSG_CLOUD_DELETE_UNSUPPORTED": "云端图片链接已移除，但云端文件未删除：{0} 不支持自动删除。",
+    "MSG_CLOUD_DELETE_MISSING_SERVER": "云端图片链接已移除，但云端文件未删除：未配置 PicList 删除服务器。",
+    "MSG_CLOUD_DELETE_API_FAILED": "云端图片链接已移除，但云端删除失败：{0}",
+    "MSG_CLOUD_DELETE_REQUEST_FAILED": "云端图片链接已移除，但删除请求失败：{0}",
     "SETTING_OCR_SUBSECTION_GENERAL": "常规",
     "SETTING_OCR_SUBSECTION_CONFIG": "配置",
     "SETTING_OCR_SIMPLETEX_SETTINGS": "SimpleTex 设置",

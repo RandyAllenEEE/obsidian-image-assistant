@@ -3,6 +3,7 @@ import { FolderAndFilenameManagement } from '../../../src/local/FolderAndFilenam
 import { VariableProcessor } from '../../../src/local/VariableProcessor';
 import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
 import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
+import type { LocalConversionSettings, LocalDestinationSettings, LocalFilenameSettings } from '../../../src/settings/types';
 import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
 
 function makeDeps(opts?: { attachmentFolderPath?: string }) {
@@ -43,9 +44,9 @@ describe('FolderAndFilenameManagement destination resolution', () => {
   it('3.1 DEFAULT uses attachmentFolderPath; resolves relative ./ under active note parent', async () => {
     const { ffm } = makeDeps({ attachmentFolderPath: './assets' });
 const file = new File([new Uint8Array([1])], 'img.png', { type: 'image/png' });
-    const conv: ConversionPreset = { ...DEFAULT_SETTINGS.conversionPresets[0] } as any;
-    const fname: FilenamePreset = { name: 'Custom', customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
-    const folder: FolderPreset = { type: 'DEFAULT', name: 'Default' };
+    const conv: LocalConversionSettings = { ...DEFAULT_SETTINGS.localProcessing.conversion };
+    const fname: LocalFilenameSettings = { customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
+    const folder: LocalDestinationSettings = { type: 'DEFAULT' };
     const res = await ffm.determineDestination(file, active as any, conv, fname, folder);
     expect(res.destinationPath).toBe('Notes/Topic/assets');
   });
@@ -53,9 +54,9 @@ const file = new File([new Uint8Array([1])], 'img.png', { type: 'image/png' });
   it('3.2 ROOT resolves to vault root path', async () => {
     const { ffm } = makeDeps();
     const file = new File([new Uint8Array([1])], 'img.png', { type: 'image/png' });
-    const conv: ConversionPreset = { ...DEFAULT_SETTINGS.conversionPresets[0] } as any;
-    const fname: FilenamePreset = { name: 'Custom', customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
-    const folder: FolderPreset = { type: 'ROOT', name: 'Root' };
+    const conv: LocalConversionSettings = { ...DEFAULT_SETTINGS.localProcessing.conversion };
+    const fname: LocalFilenameSettings = { customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
+    const folder: LocalDestinationSettings = { type: 'ROOT' };
     const res = await ffm.determineDestination(file, active as any, conv, fname, folder);
     expect(res.destinationPath).toBe('/');
   });
@@ -63,20 +64,19 @@ const file = new File([new Uint8Array([1])], 'img.png', { type: 'image/png' });
   it('3.3 CURRENT resolves to active note parent', async () => {
     const { ffm } = makeDeps();
     const file = new File([new Uint8Array([1])], 'img.png', { type: 'image/png' });
-    const conv: ConversionPreset = { ...DEFAULT_SETTINGS.conversionPresets[0] } as any;
-    const fname: FilenamePreset = { name: 'Custom', customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
-    const folder: FolderPreset = { type: 'CURRENT', name: 'Current' };
+    const conv: LocalConversionSettings = { ...DEFAULT_SETTINGS.localProcessing.conversion };
+    const fname: LocalFilenameSettings = { customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
+    const folder: LocalDestinationSettings = { type: 'CURRENT' };
     const res = await ffm.determineDestination(file, active as any, conv, fname, folder);
     expect(res.destinationPath).toBe('Notes/Topic');
   });
 
   it('3.4 SUBFOLDER processes template, sanitizes segments, and joins under active parent', async () => {
-    const { ffm, settings } = makeDeps();
-    settings.subfolderTemplate = '{notename}/pics:*?';
+    const { ffm } = makeDeps();
     const file = new File([new Uint8Array([1])], 'img.png', { type: 'image/png' });
-    const conv: ConversionPreset = { ...DEFAULT_SETTINGS.conversionPresets[0] } as any;
-    const fname: FilenamePreset = { name: 'Custom', customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
-    const folder: FolderPreset = { type: 'SUBFOLDER', name: 'Sub' };
+    const conv: LocalConversionSettings = { ...DEFAULT_SETTINGS.localProcessing.conversion };
+    const fname: LocalFilenameSettings = { customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
+    const folder: LocalDestinationSettings = { type: 'SUBFOLDER', subfolderTemplate: '{notename}/pics:*?' };
     const res = await ffm.determineDestination(file, active as any, conv, fname, folder);
     // Invalid characters :*? mapped to underscores and preserved (no collapsing)
     expect(res.destinationPath).toBe('Notes/Topic/Active/pics___');
@@ -85,9 +85,9 @@ const file = new File([new Uint8Array([1])], 'img.png', { type: 'image/png' });
   it('3.5 CUSTOM without template falls back to default attachment folder', async () => {
     const { ffm } = makeDeps({ attachmentFolderPath: 'attachments' });
     const file = new File([new Uint8Array([1])], 'img.png', { type: 'image/png' });
-    const conv: ConversionPreset = { ...DEFAULT_SETTINGS.conversionPresets[0] } as any;
-    const fname: FilenamePreset = { name: 'Custom', customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
-    const folder: FolderPreset = { type: 'CUSTOM', name: 'Custom (missing)' };
+    const conv: LocalConversionSettings = { ...DEFAULT_SETTINGS.localProcessing.conversion };
+    const fname: LocalFilenameSettings = { customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
+    const folder: LocalDestinationSettings = { type: 'CUSTOM' };
     const res = await ffm.determineDestination(file, active as any, conv, fname, folder);
     expect(res.destinationPath).toBe('attachments');
   });

@@ -4,6 +4,7 @@ import { ImageProcessor } from '../ImageProcessor';
 import { FolderAndFilenameManagement } from '../FolderAndFilenameManagement';
 import { SingleImageProcessor } from './SingleImageProcessor';
 import { t } from '../../lang/helpers';
+import { toBatchOutputFormat } from './BatchFormat';
 
 // Unified Batch Tools
 import {
@@ -57,10 +58,7 @@ export class VaultBatchProcessor {
 
             const targetFormat = convertTo;
             const isKeepOriginalFormat = convertTo === "disabled" || convertTo === "Original";
-            const outputFormat =
-                isKeepOriginalFormat
-                    ? "ORIGINAL"
-                    : (convertTo.toUpperCase() as "WEBP" | "JPEG" | "PNG" | "ORIGINAL");
+            const outputFormat = toBatchOutputFormat(convertTo);
             const skipFormats = this.collector.parseSkipFormats(skipFormatsSetting);
 
             // 2. Collect Images
@@ -68,6 +66,7 @@ export class VaultBatchProcessor {
             const imageFiles = await this.collector.getAllImageFiles();
 
             if (imageFiles.length === 0) {
+                this.progressManager.cancel();
                 new Notice(t("NOTICE_NO_IMAGES_IN_VAULT"));
                 return;
             }
@@ -84,6 +83,7 @@ export class VaultBatchProcessor {
             );
 
             if (filesToProcess.length === 0) {
+                this.progressManager.cancel();
                 new Notice(t("NOTICE_NO_IMAGES_TO_PROCESS"));
                 return;
             }
@@ -98,7 +98,10 @@ export class VaultBatchProcessor {
                 mode: 'local'
             });
 
-            if (action === 'cancel') return;
+            if (action === 'cancel') {
+                this.progressManager.cancel();
+                return;
+            }
 
             // 5. Execute Batch
             const tasks: BatchTask<TFile>[] = BatchExecutor.createTasks(

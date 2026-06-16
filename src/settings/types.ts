@@ -1,5 +1,6 @@
 // Basic types
 export type OutputFormat = "ORIGINAL" | "WEBP" | "PNG" | "JPEG" | "AVIF" | "PNGQUANT" | "NONE";
+export type AvifEncoder = "libaom-av1" | "libsvtav1" | "av1_nvenc" | "av1_qsv" | "av1_amf" | "av1_vaapi" | "av1_mf";
 
 import type { EmbedResizeSettings } from "./NonDestructiveResizeSettings";
 import type { LinkFormat, PathFormat } from "./LinkFormatSettings";
@@ -29,7 +30,6 @@ export interface CloudUploadSettings {
     workOnNetWork: boolean;
     newWorkBlackDomains: string;
     applyImage: boolean;
-    deleteSource: boolean;
     downloadPath: string;
     uploadConcurrency: number;
     cloudLinkFormat: 'markdown' | 'wikilink';
@@ -79,6 +79,8 @@ export interface SingleImageModalSettings {
     ffmpegExecutablePath: string;
     ffmpegCrf: number;
     ffmpegPreset: string;
+    ffmpegDetectedEncoder?: AvifEncoder;
+    ffmpegDetectedEncoderPath?: string;
 }
 
 export interface LocalDestinationSettings {
@@ -113,6 +115,8 @@ export interface LocalExternalToolSettings {
     ffmpegExecutablePath: string;
     ffmpegCrf: number;
     ffmpegPreset: string;
+    ffmpegDetectedEncoder?: AvifEncoder;
+    ffmpegDetectedEncoderPath?: string;
     useSystemPathForBinary: boolean;
 }
 
@@ -191,8 +195,6 @@ export interface ImageAssistantSettings {
         enabled: boolean;
         default: 'left' | 'center' | 'right';
         enableEditModeWrap: boolean;
-        cacheCleanupInterval: number;
-        cacheLocation: ".obsidian" | "plugin";
     };
 
     interactiveResize: {

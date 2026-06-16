@@ -19,6 +19,7 @@ export abstract class BasePasteHandler {
      * Can be overridden by subclasses if they need specific handling (e.g. text paste).
      */
     async handlePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
+        if (evt.defaultPrevented) return;
         if (!evt.clipboardData) return;
 
         const items = this.collectClipboardData(evt);

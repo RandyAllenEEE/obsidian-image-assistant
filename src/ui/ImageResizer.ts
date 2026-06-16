@@ -10,7 +10,7 @@ export interface ResizeState {
 }
 
 
-export class ImageResizer {
+export class ImageResizer extends Component {
 
     editor: Editor | null = null;
     markdownView: MarkdownView | null = null;
@@ -37,14 +37,25 @@ export class ImageResizer {
     };
 
     private resizeBuffer: {
-        [imageHash: string]: {
+        [imageKey: string]: {
             width: number;
             height: number;
         };
     } = {};
 
-    // Debounce the cache update
-    private debouncedSaveToCache: Debouncer<
+    private lastValidDimensions: {
+        [imageKey: string]: {
+            width: number;
+            height: number;
+        };
+    } = {};
+
+    private resizeRetryTimers: {
+        [imageKey: string]: number;
+    } = {};
+
+    // Debounce markdown link updates from scroll resizing
+    private debouncedSaveDimensions: Debouncer<
         [image: HTMLImageElement, newWidth: number, newHeight: number],
         void
     >;
@@ -67,6 +78,7 @@ export class ImageResizer {
 
 
     constructor(private plugin: ImageConverterPlugin) {
+        super();
         this.linkFormatter = new LinkFormatter(this.plugin.app);
         this.throttledUpdateImageLink = this.throttle(
             (
@@ -75,11 +87,7 @@ export class ImageResizer {
                 newHeight: number,
                 currentHandle: string | null
             ) => {
-                // Delegate to StateManager for updates
-                // this.updateMarkdownLink(image, newWidth, newHeight, currentHandle);
-                if (this.plugin.imageStateManager) {
-                    this.plugin.imageStateManager.updateState(image, { width: newWidth, height: newHeight });
-                }
+                this.updateMarkdownLinkSafely(image, newWidth, newHeight, currentHandle);
             },
             100
 
@@ -89,8 +97,8 @@ export class ImageResizer {
         this.scrollwheelModifier = this.plugin.settings.interactiveResize.scrollModifier;
 
         // Initialize the debounced function
-        this.debouncedSaveToCache = debounce(
-            this.saveDimensionsToCache,
+        this.debouncedSaveDimensions = debounce(
+            this.saveDimensionsToLink,
             this.SCROLL_DEBOUNCE_MS,
             true
         );
@@ -109,50 +117,81 @@ export class ImageResizer {
         }
     }
 
-    onload(markdownView: MarkdownView) { // Accept MarkdownView
+    onload(markdownView?: MarkdownView) {
+        if (markdownView) {
+            this.attachView(markdownView);
+        }
+    }
+
+    public onActiveViewChange(markdownView: MarkdownView) {
+        this.cachedEditorMaxWidth = null;
+        this.attachView(markdownView);
+    }
+
+    public attachView(markdownView: MarkdownView) {
+        if (this.markdownView === markdownView && this.eventScope) {
+            this.editor = markdownView.editor;
+            return;
+        }
+
+        this.detachView();
+
         this.markdownView = markdownView;
         this.editor = markdownView.editor;
 
-        // Reset old scope (if any) to avoid duplicate listeners across layout changes
-        if (this.eventScope) {
-            // Use onunload for compatibility with test mocks
-            (this.eventScope as any).onunload?.();
-            this.eventScope = null;
-        }
-
         // Only register events if master switch is enabled
         if (this.plugin.settings.interactiveResize.enabled) {
-            // Create a fresh scope for this view
             this.eventScope = new Component();
+            this.addChild(this.eventScope);
             this.registerEditorEvents();
+        }
+    }
+
+    public detachView(forceCleanup = true) {
+        this.cleanupHandles(forceCleanup);
+        this.unloadEventScope();
+
+        this.editor = null;
+        this.markdownView = null;
+        this.cachedEditorMaxWidth = null;
+    }
+
+    private unloadEventScope() {
+        if (!this.eventScope) return;
+
+        const scope = this.eventScope;
+        this.eventScope = null;
+
+        if (typeof (this as any).removeChild === 'function') {
+            this.removeChild(scope);
+        } else {
+            (scope as any).onunload?.();
         }
     }
 
     onunload() {
         // Clean up any active resize operation
         if (this.rafId) {
-            cancelAnimationFrame(this.rafId);
+            window.cancelAnimationFrame(this.rafId);
             this.rafId = null;
         }
 
-        // Unload and reset event scope (removes DOM listeners registered via scope)
-        if (this.eventScope) {
-            (this.eventScope as any).onunload?.();
-            this.eventScope = null;
-        }
-
         if (this.scrollTimeout) {
-            clearTimeout(this.scrollTimeout);
+            window.clearTimeout(this.scrollTimeout);
             this.scrollTimeout = null;
         }
 
+        for (const timerId of Object.values(this.resizeRetryTimers)) {
+            window.clearTimeout(timerId);
+        }
+        this.resizeRetryTimers = {};
+
         // Cancel any pending debounced/throttled operations
-        if (this.debouncedSaveToCache?.cancel) {
-            this.debouncedSaveToCache.cancel();
+        if (this.debouncedSaveDimensions?.cancel) {
+            this.debouncedSaveDimensions.cancel();
         }
 
-        // Clean up DOM elements
-        this.cleanupHandles();
+        this.detachView(true);
 
         // Reset state
         this.resizeState = {
@@ -175,6 +214,7 @@ export class ImageResizer {
         this.editor = null;
         this.markdownView = null;
 
+        super.onunload();
     }
 
     onLayoutChange(markdownView: MarkdownView) {
@@ -183,7 +223,7 @@ export class ImageResizer {
 
         // Handle layout changes (e.g., reposition handles)
         this.cleanupHandles();
-        this.onload(markdownView);
+        this.attachView(markdownView);
         if (this.lastMouseEvent) {
             this.handleImageHover(this.lastMouseEvent);
         }
@@ -224,10 +264,11 @@ export class ImageResizer {
         // 1. Hover Detection
         this.eventScope.registerDomEvent(this.markdownView.containerEl, 'mouseover', this.handleImageHover);
 
-        // 2. Drag Handling: Mouse down, move, up events for handles
-        this.eventScope.registerDomEvent(document as any, 'mousedown', this.handleMouseDown);
-        this.eventScope.registerDomEvent(document as any, 'mousemove', this.handleMouseMove);
-        this.eventScope.registerDomEvent(document as any, 'mouseup', this.handleMouseUp);
+        // 2. Drag Handling: bind to the active view's document, including popout windows.
+        const viewDocument = this.markdownView.containerEl.ownerDocument ?? document;
+        this.eventScope.registerDomEvent(viewDocument as any, 'mousedown', this.handleMouseDown);
+        this.eventScope.registerDomEvent(viewDocument as any, 'mousemove', this.handleMouseMove);
+        this.eventScope.registerDomEvent(viewDocument as any, 'mouseup', this.handleMouseUp);
 
         // 3. Register mousewheel event for resizing
         this.eventScope.registerDomEvent(this.markdownView.containerEl, 'wheel', this.handleMouseWheel as any, { passive: false });
@@ -275,10 +316,9 @@ export class ImageResizer {
             return;
         }
 
-        // **Check for active MarkdownView**
         const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-        // Early exit: No active MarkdownView or target is not within the active view
-        if (!activeView || !activeView.containerEl.contains(target)) {
+        const activeViewContainer = activeView?.containerEl ?? this.markdownView?.containerEl;
+        if (!activeViewContainer?.contains(target)) {
             this.cleanupHandles();
             return;
         }
@@ -366,8 +406,28 @@ export class ImageResizer {
      * Cleans up any existing resize handles or borders applied to the active image.
      * Resets the cursor and clears the active image and last mouse event references.
      */
-    private cleanupHandles() {
-        if (this.resizeState.isResizing || !this.activeImage) return;
+    private cleanupOrphanedResizeContainers() {
+        const root = this.markdownView?.containerEl ?? document;
+        root.querySelectorAll('.image-resize-container').forEach((container) => {
+            const image = container.querySelector('img');
+            if (image && container.parentNode) {
+                container.parentNode.insertBefore(image, container);
+            }
+
+            if (typeof (container as HTMLElement & { detach?: () => void }).detach === 'function') {
+                (container as HTMLElement & { detach: () => void }).detach();
+            } else {
+                container.remove();
+            }
+        });
+    }
+
+    private cleanupHandles(force = false) {
+        if (this.resizeState.isResizing && !force) return;
+        if (!this.activeImage) {
+            if (force) this.cleanupOrphanedResizeContainers();
+            return;
+        }
 
         const handleContainer = this.activeImage.matchParent(
             ".image-resize-container"
@@ -403,6 +463,18 @@ export class ImageResizer {
         if (this.activeImage.hasClass("image-resize-border")) {
             this.activeImage.removeClass("image-resize-border");
             this.activeImage.style.cursor = 'default';
+        }
+
+        const activeFile = this.plugin.app.workspace.getActiveFile();
+        if (activeFile) {
+            const imageKey = this.getImageKey(this.activeImage, activeFile.path);
+            delete this.lastValidDimensions[imageKey];
+            if (this.resizeRetryTimers[imageKey]) {
+                window.clearTimeout(this.resizeRetryTimers[imageKey]);
+                delete this.resizeRetryTimers[imageKey];
+            }
+        } else {
+            this.lastValidDimensions = {};
         }
 
         this.activeImage = null;
@@ -468,7 +540,7 @@ export class ImageResizer {
             event.preventDefault();
             event.stopPropagation();
             this.startResize(event, target);
-            this.resizeState.isDragging = true; // Set isDragging to true
+            this.resizeState.isDragging = this.resizeState.isResizing;
             return;
         }
 
@@ -480,7 +552,7 @@ export class ImageResizer {
             event.preventDefault();
             event.stopPropagation();
             this.startResize(event, target); // Treat image as resize target
-            this.resizeState.isDragging = true; // Set isDragging to true
+            this.resizeState.isDragging = this.resizeState.isResizing;
             return;
         }
     };
@@ -524,12 +596,12 @@ export class ImageResizer {
             : (resizeTarget as HTMLElement).getAttr("data-handle-type") || null;
 
         // Get initial dimensions and calculate aspect ratio
-        const rect = this.activeImage.getBoundingClientRect();
-        if (rect) {
+        const dimensions = this.readPositiveDimensions(this.activeImage);
+        if (dimensions) {
             this.startX = event.clientX;
             this.startY = event.clientY;
-            this.initialWidth = rect.width;
-            this.initialHeight = rect.height;
+            this.initialWidth = dimensions.width;
+            this.initialHeight = dimensions.height;
             this.initialAspectRatio = this.initialWidth / this.initialHeight;
 
             // Ensure inline styles are initialized to pixel values so subsequent updates are visible
@@ -544,6 +616,7 @@ export class ImageResizer {
         } else {
             // If no rect found, cancel resize
             this.resizeState.isResizing = false;
+            this.resizeState.isDragging = false;
         }
     }
     /**
@@ -669,11 +742,12 @@ export class ImageResizer {
 
         // Cancel any existing animation frame request to prevent conflicts
         if (this.rafId) {
-            cancelAnimationFrame(this.rafId);
+            window.cancelAnimationFrame(this.rafId);
         }
 
         // Request a new animation frame to handle the resize calculations and updates
-        this.rafId = requestAnimationFrame(runResizeCalc);
+        const ownerWindow = this.activeImage?.ownerDocument.defaultView ?? window;
+        this.rafId = ownerWindow.requestAnimationFrame(runResizeCalc);
     };
 
     /**
@@ -708,17 +782,43 @@ export class ImageResizer {
         // Remove global lock class
         this.activeImage.removeClass("is-resizing");
 
-        // Reset the current handle
-        this.currentHandle = null;
+        const completedHandle = this.currentHandle;
 
         // Determine final dimensions in a DOM-agnostic way (happy-dom often returns 0 for offset* values)
         const widthStyle = parseInt(this.activeImage.style.width || '0', 10);
         const heightStyle = parseInt(this.activeImage.style.height || '0', 10);
         const finalWidth = Number.isFinite(widthStyle) && widthStyle > 0 ? widthStyle : Math.round(this.initialWidth);
         const finalHeight = Number.isFinite(heightStyle) && heightStyle > 0 ? heightStyle : Math.round(this.initialHeight);
+        const activeFile = this.plugin.app.workspace.getActiveFile();
+        const notePath = activeFile?.path ?? "";
+        const resolvedDimensions = this.resolveValidDimensions(
+            this.activeImage,
+            notePath,
+            finalWidth,
+            finalHeight,
+            this.initialWidth,
+            this.initialHeight
+        );
 
-        // Update the markdown link with the final dimensions VIA MANAGER
-        this.updateMarkdownLink(this.activeImage, finalWidth, finalHeight, this.currentHandle);
+        if (resolvedDimensions.isValid) {
+            this.updateMarkdownLinkSafely(
+                this.activeImage,
+                resolvedDimensions.width,
+                resolvedDimensions.height,
+                completedHandle
+            );
+        } else {
+            this.scheduleDimensionRetry(
+                this.activeImage,
+                notePath,
+                completedHandle,
+                this.initialWidth,
+                this.initialHeight
+            );
+        }
+
+        // Reset the current handle
+        this.currentHandle = null;
 
         // Mark flags
         this.resizeState.isDragging = false;
@@ -771,12 +871,11 @@ export class ImageResizer {
         this.resizeState.isScrolling = true;
         this.activeImage = image;
 
-        // Get initial dimensions
-        const rect = image.getBoundingClientRect();
-        if (!rect) return;
+        const dimensions = this.readPositiveDimensions(image);
+        if (!dimensions) return;
 
-        this.initialWidth = rect.width;
-        this.initialHeight = rect.height;
+        this.initialWidth = dimensions.width;
+        this.initialHeight = dimensions.height;
         this.initialAspectRatio = this.initialWidth / this.initialHeight;
 
         // Calculate new dimensions
@@ -791,6 +890,29 @@ export class ImageResizer {
             newHeight = newWidth / aspectRatio; // Always maintain aspect ratio for scroll resize
         }
 
+        // Get active file and image name
+        const activeFile = this.plugin.app.workspace.getActiveFile();
+        if (!activeFile) {
+            console.warn("Could not get active file for image:", image);
+            return;
+        }
+        const notePath = activeFile.path;
+        const resolvedDimensions = this.resolveValidDimensions(
+            image,
+            notePath,
+            newWidth,
+            newHeight,
+            this.initialWidth,
+            this.initialHeight
+        );
+        if (!resolvedDimensions.isValid) {
+            this.scheduleDimensionRetry(image, notePath, null, this.initialWidth, this.initialHeight);
+            return;
+        }
+
+        newWidth = resolvedDimensions.width;
+        newHeight = resolvedDimensions.height;
+
         // Update visual dimensions immediately
         // Prefer the declared style width units to decide whether to keep % or use px
         const declaredWidth = image.style.width || "";
@@ -801,28 +923,13 @@ export class ImageResizer {
         }
         image.style.height = `${newHeight}px`;
 
-        // Get active file and image name
-        const activeFile = this.plugin.app.workspace.getActiveFile();
-        if (!activeFile) {
-            console.warn("Could not get active file for image:", image);
-            return;
-        }
-        const notePath = activeFile.path;
         const imageName = this.getImageName(image);
         if (!imageName) return;
 
         // Check if alignment is enabled
         const isAlignmentEnabled = this.plugin.settings.alignment.enabled;
 
-        // 注：我们不再使用缓存和 hash，改为基于 Pipe Syntax
-        /*
-        // Only get the image hash if alignment is enabled
-        let imageHash = null;
-        if (isAlignmentEnabled && this.plugin.ImageAlignmentManager) {
-            imageHash = this.plugin.ImageAlignmentManager.getImageHash(notePath, imageName);
-        }
-        */
-        const imageHash = imageName; // 临时使用 imageName 作为 key
+        const imageKey = this.getImageKey(image, notePath);
 
         // Check if the image has a positional class
         const hasPositionalClass = isAlignmentEnabled && Array.from(image.classList).some(className =>
@@ -831,7 +938,7 @@ export class ImageResizer {
 
         // Buffer the dimensions (only if needed for later use, e.g., debouncing and alignment is enabled)
         if (isAlignmentEnabled) {
-            this.resizeBuffer[imageHash!] = { // Use imageHash! only if isAlignmentEnabled is true
+            this.resizeBuffer[imageKey] = {
                 width: newWidth,
                 height: newHeight,
             };
@@ -843,14 +950,14 @@ export class ImageResizer {
             this.throttledUpdateImageLink(image, newWidth, newHeight, null);
         }
 
-        // Debounced update to the markdown link and cache (only if alignment is enabled)
+        // Debounced update to the markdown link (only if alignment is enabled)
         if (isAlignmentEnabled) {
-            this.debouncedSaveToCache(image, newWidth, newHeight);
+            this.debouncedSaveDimensions(image, newWidth, newHeight);
         }
 
         // Reset scroll state after delay
         if (this.scrollTimeout) {
-            clearTimeout(this.scrollTimeout);
+            window.clearTimeout(this.scrollTimeout);
         }
 
         this.scrollTimeout = window.setTimeout(() => {
@@ -908,6 +1015,10 @@ export class ImageResizer {
         let newWidth;
         const computedWidth = getComputedStyle(img).width;
         const declaredWidth = (img as HTMLElement).style?.width || "";
+        const measuredDimensions = img instanceof HTMLImageElement ? this.readPositiveDimensions(img) : null;
+        const baseWidth = measuredDimensions?.width ?? img.clientWidth;
+        const baseHeight = measuredDimensions?.height ?? img.clientHeight;
+
         if (declaredWidth.endsWith('%')) {
             // Handle elements with percentage widths declared in style
             newWidth = parseFloat(declaredWidth) * scaleFactor;
@@ -918,12 +1029,12 @@ export class ImageResizer {
             newWidth = Math.max(1, Math.min(newWidth, 100));
         } else {
             // Handle images and videos with pixel widths
-            newWidth = img.clientWidth * scaleFactor;
+            newWidth = baseWidth * scaleFactor;
             newWidth = Math.max(22, newWidth); // Minimum width
         }
 
         // Calculate height maintaining aspect ratio
-        const aspectRatio = img.clientWidth / img.clientHeight;
+        const aspectRatio = baseWidth > 0 && baseHeight > 0 ? baseWidth / baseHeight : 1;
         let newHeight = Math.max(22, newWidth / aspectRatio);
 
         // Round values
@@ -991,6 +1102,130 @@ export class ImageResizer {
 
         // If we reach the end of the file and it's all callout, return the last line
         return editor.lastLine();
+    }
+
+    private isValidDimensionPair(width: number, height: number): boolean {
+        return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0;
+    }
+
+    private readPositiveDimensions(image: HTMLImageElement): { width: number; height: number } | null {
+        const rect = image.getBoundingClientRect?.();
+        const styleWidth = parseFloat(image.style.width || "");
+        const styleHeight = parseFloat(image.style.height || "");
+        const candidates = [
+            rect ? { width: rect.width, height: rect.height } : null,
+            { width: styleWidth, height: styleHeight },
+            { width: image.clientWidth, height: image.clientHeight },
+            { width: image.naturalWidth, height: image.naturalHeight },
+        ];
+
+        for (const candidate of candidates) {
+            if (candidate && this.isValidDimensionPair(candidate.width, candidate.height)) {
+                return {
+                    width: candidate.width,
+                    height: candidate.height,
+                };
+            }
+        }
+
+        return null;
+    }
+
+    private getImageKey(image: HTMLImageElement, notePath: string): string {
+        return `${notePath || "unknown"}::${this.getImageName(image) ?? image.getAttribute("src") ?? "unknown-image"}`;
+    }
+
+    private resolveValidDimensions(
+        image: HTMLImageElement,
+        notePath: string,
+        newWidth: number,
+        newHeight: number,
+        fallbackWidth?: number,
+        fallbackHeight?: number
+    ): { width: number; height: number; isValid: boolean } {
+        const imageKey = this.getImageKey(image, notePath);
+        const sources: Array<{ width: number; height: number } | null | undefined> = [
+            { width: newWidth, height: newHeight },
+            this.lastValidDimensions[imageKey],
+            this.readPositiveDimensions(image),
+            fallbackWidth !== undefined && fallbackHeight !== undefined
+                ? { width: fallbackWidth, height: fallbackHeight }
+                : undefined,
+        ];
+
+        for (const source of sources) {
+            if (source && this.isValidDimensionPair(source.width, source.height)) {
+                const rounded = {
+                    width: Math.round(source.width),
+                    height: Math.round(source.height),
+                };
+                this.lastValidDimensions[imageKey] = rounded;
+                return { ...rounded, isValid: true };
+            }
+        }
+
+        return { width: newWidth, height: newHeight, isValid: false };
+    }
+
+    private scheduleRetry(imageKey: string, callback: () => void, delayMs = 80): void {
+        if (this.resizeRetryTimers[imageKey]) {
+            window.clearTimeout(this.resizeRetryTimers[imageKey]);
+        }
+
+        this.resizeRetryTimers[imageKey] = window.setTimeout(() => {
+            delete this.resizeRetryTimers[imageKey];
+            callback();
+        }, delayMs);
+    }
+
+    private scheduleDimensionRetry(
+        image: HTMLImageElement,
+        notePath: string,
+        currentHandle: string | null,
+        fallbackWidth?: number,
+        fallbackHeight?: number
+    ): void {
+        const imageKey = this.getImageKey(image, notePath);
+
+        this.scheduleRetry(imageKey, () => {
+            const dimensions = this.readPositiveDimensions(image);
+            const resolvedDimensions = this.resolveValidDimensions(
+                image,
+                notePath,
+                dimensions?.width ?? 0,
+                dimensions?.height ?? 0,
+                fallbackWidth,
+                fallbackHeight
+            );
+
+            if (!resolvedDimensions.isValid) {
+                console.warn("[ImageResizer] Skipping resize link update because dimensions are invalid:", {
+                    imageKey,
+                    width: dimensions?.width,
+                    height: dimensions?.height,
+                });
+                return;
+            }
+
+            this.updateMarkdownLinkSafely(
+                image,
+                resolvedDimensions.width,
+                resolvedDimensions.height,
+                currentHandle
+            );
+        });
+    }
+
+    private updateMarkdownLinkSafely(
+        image: HTMLImageElement,
+        newWidth: number,
+        newHeight: number,
+        currentHandle: string | null
+    ): void {
+        this.updateMarkdownLink(image, newWidth, newHeight, currentHandle)
+            .catch((error) => {
+                console.error("[ImageResizer] Failed to update image dimensions:", error);
+            });
     }
 
     /**
@@ -1359,56 +1594,38 @@ export class ImageResizer {
     }
 
     /**
- * Saves the buffered dimensions to the cache and updates the markdown link.
- * This method is called by the debounced function.
- * 
+ * Updates the markdown link with debounced scroll dimensions.
+ *
  * @param image The image element being resized.
  * @param newWidth The new width of the image.
  * @param newHeight The new height of the image.
  */
-    private saveDimensionsToCache = async (image: HTMLImageElement, newWidth: number, newHeight: number) => {
-        // Update markdown link
-        this.updateMarkdownLink(image, newWidth, newHeight, null);
-
-        // Save to cache using the buffered dimensions
-        const activeFile = this.plugin.app.workspace.getActiveFile();
-        if (!activeFile) return;
-
-        const notePath = activeFile.path;
+    private saveDimensionsToLink = async (image: HTMLImageElement, newWidth: number, newHeight: number) => {
         const imageName = this.getImageName(image);
         if (!imageName) return;
-
-        // 注：我们不再使用缓存和 hash，改为基于 Pipe Syntax
-        // 尺寸更新已经在 throttledUpdateImageLink 中处理，这里不需要再保存到缓存
-        /*
-        const imageHash = this.plugin.ImageAlignmentManager!.getImageHash(
+        const activeFile = this.plugin.app.workspace.getActiveFile();
+        const notePath = activeFile?.path ?? "";
+        const resolvedDimensions = this.resolveValidDimensions(
+            image,
             notePath,
-            imageName
+            newWidth,
+            newHeight
         );
-        const bufferedDimensions = this.resizeBuffer[imageHash];
-    
-        if (bufferedDimensions && this.plugin.settings.isImageAlignmentEnabled && this.plugin.ImageAlignmentManager) {
-            const cachedAlignment = this.plugin.ImageAlignmentManager.getImageAlignment(notePath, imageName);
-            if (cachedAlignment) {
-                await this.plugin.ImageAlignmentManager.saveImageAlignmentToCache(
-                    notePath,
-                    imageName,
-                    cachedAlignment.position,
-                    `${Math.round(bufferedDimensions.width)}px`,
-                    `${Math.round(bufferedDimensions.height)}px`,
-                    cachedAlignment.wrap
-                );
-            }
-    
-            // Remove the dimensions from the buffer after saving
-            delete this.resizeBuffer[imageHash];
-        }
-        */
 
-        // 使用 imageName 作为 key 清理 buffer
-        const imageKey = imageName;
-        if (this.resizeBuffer[imageKey]) {
-            delete this.resizeBuffer[imageKey];
+        if (!resolvedDimensions.isValid) {
+            this.scheduleDimensionRetry(image, notePath, null);
+            return;
+        }
+
+        this.updateMarkdownLinkSafely(
+            image,
+            resolvedDimensions.width,
+            resolvedDimensions.height,
+            null
+        );
+
+        if (this.resizeBuffer[imageName]) {
+            delete this.resizeBuffer[imageName];
         }
     };
 

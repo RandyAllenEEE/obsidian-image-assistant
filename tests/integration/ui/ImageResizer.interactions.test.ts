@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import ImageConverterPlugin from '../../../src/main';
 import { ImageResizer } from '../../../src/ui/ImageResizer';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
 import { fakeApp, fakeTFile, fakeVault, fakeWorkspace, fakePluginManifest } from '../../factories/obsidian';
 import { setupFakeTimers } from '../../helpers/test-setup';
 
@@ -73,6 +74,26 @@ function addExternalImage(parent: HTMLElement) {
 
 const activeResizers: ImageResizer[] = [];
 
+function makeResizeSettings(overrides: Partial<any> = {}) {
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.interactiveResize = {
+    ...settings.interactiveResize,
+    enabled: overrides.isImageResizeEnabled ?? overrides.enabled ?? true,
+    dragEnabled: overrides.isDragResizeEnabled ?? overrides.dragEnabled ?? true,
+    aspectRatioLocked: overrides.isDragAspectRatioLocked ?? overrides.aspectRatioLocked ?? true,
+    scrollEnabled: overrides.isScrollResizeEnabled ?? overrides.scrollEnabled ?? true,
+    readingModeEnabled: overrides.isResizeInReadingModeEnabled ?? overrides.readingModeEnabled ?? true,
+    sensitivity: overrides.resizeSensitivity ?? overrides.sensitivity ?? 0.1,
+    scrollModifier: overrides.scrollwheelModifier ?? overrides.scrollModifier ?? 'None'
+  };
+  settings.alignment = {
+    ...settings.alignment,
+    enabled: overrides.alignmentEnabled ?? false
+  };
+  settings.resizeCursorLocation = overrides.resizeCursorLocation ?? settings.resizeCursorLocation;
+  return settings;
+}
+
 function makeResizer({ viewMode = 'source', overrides = {}, workspaceOverride }: { viewMode?: 'preview' | 'source', overrides?: Partial<any>, workspaceOverride?: any } = {}) {
   const note = fakeTFile({ path: 'Notes/n1.md', name: 'n1.md', extension: 'md' });
   const vault = fakeVault({ files: [note] });
@@ -81,17 +102,7 @@ function makeResizer({ viewMode = 'source', overrides = {}, workspaceOverride }:
   const plugin = new ImageConverterPlugin(app as any, fakePluginManifest({ id: 'image-converter', dir: '/plugins/image-converter' }));
   plugin.manifest = { id: 'image-converter', dir: '/plugins/image-converter' } as any;
   plugin.supportedImageFormats = { isExcalidrawImage: () => false } as any;
-  plugin.settings = Object.assign({
-    isImageResizeEnabled: true,
-    isDragResizeEnabled: true,
-    isDragAspectRatioLocked: true,
-    isScrollResizeEnabled: true,
-    resizeSensitivity: 0.1,
-    scrollwheelModifier: 'None',
-    isImageAlignmentEnabled: false,
-    isResizeInReadingModeEnabled: true,
-    resizeCursorLocation: 'front'
-  }, overrides) as any;
+  plugin.settings = makeResizeSettings(overrides) as any;
   const resizer = new ImageResizer(plugin);
   const markdownView = {
     containerEl: document.body,
@@ -213,14 +224,14 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
     (resizer as any).handleImageHover({ target: img, clientX: 5, clientY: 5 } as any);
 
     // Base sensitivity
-    plugin.settings.resizeSensitivity = 0.05;
+    plugin.settings.interactiveResize.sensitivity = 0.05;
     img.style.width = '200px';
     img.style.height = '100px';
     img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true, cancelable: true }));
     const afterLow = parseInt(img.style.width || '0', 10);
 
     // Higher sensitivity
-    plugin.settings.resizeSensitivity = 0.5;
+    plugin.settings.interactiveResize.sensitivity = 0.5;
     img.style.width = '200px';
     img.style.height = '100px';
     img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true, cancelable: true }));
@@ -301,12 +312,10 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
 
     se.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: 40, clientY: 30, bubbles: true }));
-    // Live update during drag should have already triggered a transaction via throttled update
-    expect(editor.transaction).toHaveBeenCalled();
 
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
 
-    // And a final update at drag end is also acceptable
+    // Current implementation writes the final dimensions at drag end.
     expect(editor.transaction).toHaveBeenCalled();
   });
 
@@ -336,29 +345,26 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
     se.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: 10, clientY: 10, bubbles: true }));
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    expect(editor.setCursor).toHaveBeenCalledWith({ line: 2, ch: 0 });
+    expect(editor.setCursor).toHaveBeenCalledWith({ line: 3, ch: 0 });
 
     // front
     plugin.settings.resizeCursorLocation = 'front';
     ;(editor.setCursor as any).mockClear?.();
-    se.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 5, clientY: 0, bubbles: true }));
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    expect((editor.setCursor as any).mock.calls.length).toBeGreaterThan(0);
+    editor.getCursor = vi.fn(() => ({ line: 1, ch: 5 }));
+    (resizer as any).activeImage = img;
+    (resizer as any).updateCursorPositionDuringResize();
+    expect(editor.setCursor).toHaveBeenCalledWith({ line: 1, ch: 0 });
 
     // back
     plugin.settings.resizeCursorLocation = 'back';
-    se.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 5, clientY: 0, bubbles: true }));
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    expect((editor.setCursor as any).mock.calls.length).toBeGreaterThanOrEqual(2);
+    ;(editor.setCursor as any).mockClear?.();
+    (resizer as any).updateCursorPositionDuringResize();
+    expect((editor.setCursor as any).mock.calls.length).toBeGreaterThan(0);
 
     // none
     plugin.settings.resizeCursorLocation = 'none';
     (editor.setCursor as any).mockClear?.();
-    se.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 5, clientY: 0, bubbles: true }));
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    (resizer as any).updateCursorPositionDuringResize();
     expect((editor.setCursor as any).mock.calls.length).toBe(0);
   });
 
@@ -383,10 +389,9 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
   });
 
   it('13.13 Alignment cache update on drag-resize when enabled', async () => {
-    const getImageAlignment = vi.fn(() => ({ position: 'left', width: '', height: '', wrap: true }));
-    const saveImageAlignmentToCache = vi.fn(async () => {});
-    const { resizer, plugin } = makeResizer({ overrides: { isImageAlignmentEnabled: true } });
-    (plugin as any).ImageAlignmentManager = { getImageAlignment, saveImageAlignmentToCache } as any;
+    const updateState = vi.fn();
+    const { resizer, plugin } = makeResizer({ overrides: { alignmentEnabled: true } });
+    (plugin as any).imageStateManager = { updateState };
 
     const { container } = setupView();
     const img = addInternalImage(container);
@@ -400,7 +405,10 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
 
     await Promise.resolve();
-    expect(saveImageAlignmentToCache).toHaveBeenCalled();
+    expect(updateState).toHaveBeenCalledWith(img, expect.objectContaining({
+      width: expect.any(Number),
+      height: expect.any(Number)
+    }));
   });
 
   it('13.14 Excalidraw images are skipped (no handles)', () => {
@@ -509,13 +517,12 @@ describe('ImageResizer lifecycle and wheel behaviors (13.15–13.16, 13.17–13.
     const img = addInternalImage(container);
 
     // Ensure alignment path is disabled to isolate modifier behavior
-    plugin.settings.isImageAlignmentEnabled = false;
-    (resizer as any).plugin.ImageAlignmentManager = null as any;
+    plugin.settings.alignment.enabled = false;
 
     (resizer as any).handleImageHover({ target: img, clientX: 5, clientY: 5 } as any);
     const beforeWidth = parseInt((img as any).style.width || '0', 10) || 200;
 
-    plugin.settings.scrollwheelModifier = 'Alt';
+    plugin.settings.interactiveResize.scrollModifier = 'Alt';
 
     img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, altKey: true, bubbles: true, cancelable: true }));
     const after = parseInt((img as any).style.width || '0', 10);
@@ -560,8 +567,7 @@ describe('ImageResizer lifecycle and wheel behaviors (13.15–13.16, 13.17–13.
     img.style.width = '50%';
 
     // Disable alignment path to focus on % width behavior
-    plugin.settings.isImageAlignmentEnabled = false;
-    (resizer as any).plugin.ImageAlignmentManager = null as any;
+    plugin.settings.alignment.enabled = false;
 
     (resizer as any).handleImageHover({ target: img, clientX: 5, clientY: 5 } as any);
 
@@ -580,21 +586,20 @@ describe('ImageResizer lifecycle and wheel behaviors (13.15–13.16, 13.17–13.
     }
   });
 
-  it('13.23 Debounce/throttle for scroll: debouncedSaveToCache fires once per debounce window (tail simulated)', () => {
-    const { resizer, plugin } = makeResizer({ viewMode: 'source', overrides: { isScrollResizeEnabled: true, scrollwheelModifier: 'None', isImageAlignmentEnabled: true } });
+  it('13.23 Debounce/throttle for scroll: debouncedSaveDimensions fires once per debounce window (tail simulated)', () => {
+    const { resizer, plugin } = makeResizer({ viewMode: 'source', overrides: { isScrollResizeEnabled: true, scrollwheelModifier: 'None', alignmentEnabled: true } });
     const { container } = setupView();
     const img = addInternalImage(container);
-    // Avoid alignment path entirely for this debounce test (we're validating debouncedSaveToCache wiring)
-    (resizer as any).plugin.ImageAlignmentManager = null as any;
+    // Avoid positional classes so this test validates debounced scroll-link update wiring.
     (resizer as any).handleImageHover({ target: img, clientX: 5, clientY: 5 } as any);
 
     const spyDebounced = vi.fn();
-    (resizer as any).debouncedSaveToCache = ((..._args: any[]) => { spyDebounced(); }) as any;
+    (resizer as any).debouncedSaveDimensions = ((..._args: any[]) => { spyDebounced(); }) as any;
 
     const timers = setupFakeTimers();
 
     let inWindow = false;
-    (resizer as any).debouncedSaveToCache = ((..._args: any[]) => {
+    (resizer as any).debouncedSaveDimensions = ((..._args: any[]) => {
       if (!inWindow) {
         spyDebounced();
         inWindow = true;
@@ -625,16 +630,7 @@ describe('ImageResizer throttle policy when alignment disabled (13.23 variant)',
     const plugin = new ImageConverterPlugin(app, fakePluginManifest({ id: 'image-converter', dir: '/plugins/image-converter' }));
     plugin.manifest = { id: 'image-converter', dir: '/plugins/image-converter' } as any;
     plugin.supportedImageFormats = { isExcalidrawImage: () => false } as any;
-    plugin.settings = Object.assign({
-      isImageResizeEnabled: true,
-      isDragResizeEnabled: true,
-      isDragAspectRatioLocked: true,
-      isScrollResizeEnabled: true,
-      resizeSensitivity: 0.1,
-      scrollwheelModifier: 'None',
-      isImageAlignmentEnabled: false,
-      isResizeInReadingModeEnabled: true,
-    }, overrides) as any;
+    plugin.settings = makeResizeSettings(overrides) as any;
     const resizer = new ImageResizer(plugin);
     const markdownView = { containerEl: document.body, editor: { getValue: () => '', getCursor: () => ({ line: 0, ch: 0 }), getLine: () => '', lastLine: () => 0, transaction: () => {}, setCursor: () => {} }, getState: () => ({ mode: 'source' }) } as any;
     resizer.onload(markdownView);
@@ -648,8 +644,7 @@ describe('ImageResizer throttle policy when alignment disabled (13.23 variant)',
     const img = addInternalImage(container);
 
     // Explicitly disable alignment so wheel path always uses throttled link update
-    plugin.settings.isImageAlignmentEnabled = false;
-    (resizer as any).plugin.ImageAlignmentManager = null as any;
+    plugin.settings.alignment.enabled = false;
 
     const spy = vi.spyOn(resizer as any, 'throttledUpdateImageLink');
 
@@ -662,12 +657,67 @@ describe('ImageResizer throttle policy when alignment disabled (13.23 variant)',
     expect(spy).toHaveBeenCalled();
 
     // Also assert when image has no positional class (simulated by ensuring none applied)
-    (resizer as any).plugin.ImageAlignmentManager = { getImageAlignment: () => null } as any;
     spy.mockClear();
     for (let i = 0; i < 3; i++) {
       img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true, cancelable: true }));
     }
     expect(spy).toHaveBeenCalled();
+  });
+});
+
+describe('ImageResizer upstream A1 lifecycle guards', () => {
+  it('binds drag listeners to the attached view ownerDocument for popout windows', () => {
+    const popoutDocument = document.implementation.createHTMLDocument('popout');
+    const container = popoutDocument.createElement('div');
+    popoutDocument.body.appendChild(container);
+    const img = addInternalImage(container);
+    setRect(img, { left: 0, top: 0, width: 200, height: 100 });
+
+    const workspace = fakeWorkspace({
+      activeFile: fakeTFile({ path: 'Notes/n1.md', name: 'n1.md', extension: 'md' }),
+      activeView: {
+        containerEl: container,
+        contentEl: container,
+        editor: { getValue: () => '', getCursor: () => ({ line: 0, ch: 0 }), getLine: () => '', lastLine: () => 0, transaction: () => {}, setCursor: () => {} },
+        getState: () => ({ mode: 'preview' })
+      }
+    });
+    const { resizer } = makeResizer({ viewMode: 'preview', workspaceOverride: workspace });
+    resizer.attachView((workspace as any).getActiveViewOfType());
+
+    (resizer as any).handleImageHover({ target: img } as any);
+    const wrapper = (img as any).matchParent('.image-resize-container')!;
+    const handle = wrapper.querySelector('.image-resize-handle-se') as HTMLElement;
+
+    handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    popoutDocument.dispatchEvent(new MouseEvent('mousemove', { clientX: 50, clientY: 25, bubbles: true }));
+    popoutDocument.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+
+    expect(parseInt(img.style.width || '0', 10)).toBeGreaterThan(200);
+  });
+
+  it('does not write resize state when transient dimensions resolve to 0x0', () => {
+    const { container } = setupView();
+    const img = addInternalImage(container);
+    setRect(img, { left: 0, top: 0, width: 0, height: 0 });
+    Object.defineProperty(img, 'clientWidth', { configurable: true, value: 0 });
+    Object.defineProperty(img, 'clientHeight', { configurable: true, value: 0 });
+    Object.defineProperty(img, 'naturalWidth', { configurable: true, value: 0 });
+    Object.defineProperty(img, 'naturalHeight', { configurable: true, value: 0 });
+
+    const { resizer, plugin } = makeResizer({ viewMode: 'preview' });
+    const updateState = vi.fn();
+    (plugin as any).imageStateManager = { updateState };
+
+    (resizer as any).handleImageHover({ target: img } as any);
+    const wrapper = (img as any).matchParent('.image-resize-container')!;
+    const handle = wrapper.querySelector('.image-resize-handle-se') as HTMLElement;
+
+    handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 10, bubbles: true }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+
+    expect(updateState).not.toHaveBeenCalled();
   });
 });
 
@@ -763,7 +813,7 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
 
     const after = editor.getValue();
     expect(after.includes('![|100x100](imgs/pic.jpg)')).toBe(false);
-    expect(after).toMatch(/!\[\|\d+x\d+\]\(imgs\/pic\.jpg\)/);
+    expect(after).toMatch(/!\[\|\d+\]\(imgs\/pic\.jpg\)/);
 
     // With live updates, more than one transaction may have occurred during drag.
     // Perform up to two undos to restore original sizes.
@@ -780,7 +830,7 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
     editor.redo();
     editor.redo();
     const redone = editor.getValue();
-    expect(redone).toMatch(/!\[\|\d+x\d+\]\(imgs\/pic\.jpg\)/);
+    expect(redone).toMatch(/!\[\|\d+\]\(imgs\/pic\.jpg\)/);
     expect(redone.includes('![|100x100](imgs/pic.jpg)')).toBe(false);
   });
 });

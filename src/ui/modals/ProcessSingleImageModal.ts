@@ -4,8 +4,10 @@ import ImageConverterPlugin from "../../main";
 import { createAnyLinkRegex } from "../../utils/RegexPatterns";
 import { ImageLinkPathReplacer } from "../../utils/ImageLinkPathReplacer";
 import { ImageAssistantSettings } from "../../settings/defaults";
-import { OutputFormat, ResizeMode, EnlargeReduce, SingleImageOperationDefaults } from "../../settings/types";
+import { AvifEncoder, OutputFormat, ResizeMode, EnlargeReduce, SingleImageOperationDefaults } from "../../settings/types";
 import { t } from "../../lang/helpers";
+import { AVIF_ENCODER_CONFIGS, ImageProcessor } from "../../local/ImageProcessor";
+import { findFfmpegExecutablePath, normalizeExecutablePath } from "../../utils/ffmpegPath";
 
 export interface SingleImageModalSettings extends SingleImageOperationDefaults {
     outputFormat: OutputFormat;
@@ -22,6 +24,8 @@ export interface SingleImageModalSettings extends SingleImageOperationDefaults {
     ffmpegExecutablePath: string;
     ffmpegCrf: number;
     ffmpegPreset: string;
+    ffmpegDetectedEncoder?: AvifEncoder;
+    ffmpegDetectedEncoderPath?: string;
 }
 
 export class ProcessSingleImageModal extends Modal {
@@ -111,10 +115,14 @@ export class ProcessSingleImageModal extends Modal {
                 dropdown.onChange(async (value: OutputFormat) => {
                     const currentPngquantPath = this.modalSettings.pngquantExecutablePath;
                     const currentFfmpegPath = this.modalSettings.ffmpegExecutablePath;
+                    const currentFfmpegDetectedEncoder = this.modalSettings.ffmpegDetectedEncoder;
+                    const currentFfmpegDetectedEncoderPath = this.modalSettings.ffmpegDetectedEncoderPath;
 
                     this.modalSettings.outputFormat = value;
                     this.modalSettings.pngquantExecutablePath = currentPngquantPath;
                     this.modalSettings.ffmpegExecutablePath = currentFfmpegPath;
+                    this.modalSettings.ffmpegDetectedEncoder = currentFfmpegDetectedEncoder;
+                    this.modalSettings.ffmpegDetectedEncoderPath = currentFfmpegDetectedEncoderPath;
 
                     this.renderConversionSettings();
                     await this.generatePreview(); // Regenerate preview (conditional)
@@ -176,24 +184,69 @@ export class ProcessSingleImageModal extends Modal {
         }
 
         if (this.modalSettings.outputFormat === "AVIF") {
+            const activeEncoder = this.getActiveAvifEncoder();
+            const encoderConfig = activeEncoder
+                ? AVIF_ENCODER_CONFIGS[activeEncoder]
+                : AVIF_ENCODER_CONFIGS["libaom-av1"];
+
             new Setting(this.conversionSettingsContainer)
                 .setName(t("MODAL_FFMPEG_PATH"))
-                .setTooltip(t("TOOLTIP_PNGQUANT_PATH"))
+                .setTooltip(t("TOOLTIP_FFMPEG_PATH"))
                 .addText(text => {
                     text.setValue(this.modalSettings.ffmpegExecutablePath)
                         .onChange(async value => {
+                            const previousPath = normalizeExecutablePath(this.modalSettings.ffmpegExecutablePath);
+                            const nextPath = normalizeExecutablePath(value);
+                            if (previousPath !== nextPath) {
+                                ImageProcessor.clearAvifEncoderCache(previousPath);
+                                this.modalSettings.ffmpegDetectedEncoder = undefined;
+                                this.modalSettings.ffmpegDetectedEncoderPath = undefined;
+                            }
                             this.modalSettings.ffmpegExecutablePath = value;
                             // NO PREVIEW for AVIF
                         });
                     text.inputEl.setAttr('spellcheck', 'false');
+                })
+                .addExtraButton(button => {
+                    button
+                        .setIcon("search")
+                        .setTooltip(t("BUTTON_FIND_FFMPEG"))
+                        .onClick(async () => {
+                            const foundPath = await findFfmpegExecutablePath(this.app);
+                            if (!foundPath) {
+                                new Notice(t("NOTICE_FFMPEG_NOT_FOUND"));
+                                return;
+                            }
+                            const previousPath = normalizeExecutablePath(this.modalSettings.ffmpegExecutablePath);
+                            this.modalSettings.ffmpegExecutablePath = foundPath;
+                            this.modalSettings.ffmpegDetectedEncoder = undefined;
+                            this.modalSettings.ffmpegDetectedEncoderPath = undefined;
+                            ImageProcessor.clearAvifEncoderCache(previousPath);
+                            this.syncFfmpegSettingsToGlobal();
+                            await this.plugin.saveSettings();
+                            new Notice(t("NOTICE_FFMPEG_DETECTED", [foundPath]));
+                            this.renderConversionSettings();
+                        });
+                });
+
+            new Setting(this.conversionSettingsContainer)
+                .setName(t("MODAL_AVIF_ENCODER"))
+                .setDesc(activeEncoder
+                    ? t("DESC_AVIF_ENCODER_CURRENT", [activeEncoder])
+                    : t("DESC_AVIF_ENCODER_DETECTION"))
+                .addExtraButton(button => {
+                    button
+                        .setIcon("cpu")
+                        .setTooltip(t("BUTTON_DETECT_ENCODER"))
+                        .onClick(() => this.detectAvifEncoderForModal());
                 });
 
             new Setting(this.conversionSettingsContainer)
                 .setName(t("MODAL_FFMPEG_CRF"))
-                .setDesc(t("DESC_FFMPEG_CRF"))
+                .setDesc(t("DESC_FFMPEG_CRF_RANGE", [encoderConfig.crfMin, encoderConfig.crfMax]))
                 .addSlider(slider => {
-                    slider.setLimits(0, 63, 1)
-                        .setValue(this.modalSettings.ffmpegCrf)
+                    slider.setLimits(encoderConfig.crfMin, encoderConfig.crfMax, 1)
+                        .setValue(Math.max(encoderConfig.crfMin, Math.min(encoderConfig.crfMax, this.modalSettings.ffmpegCrf)))
                         .setDynamicTooltip()
                         .onChange(async (value) => {
                             this.modalSettings.ffmpegCrf = value;
@@ -204,18 +257,7 @@ export class ProcessSingleImageModal extends Modal {
             new Setting(this.conversionSettingsContainer)
                 .setName(t("MODAL_FFMPEG_PRESET"))
                 .addDropdown(dropdown => {
-                    dropdown.addOptions({
-                        "ultrafast": "ultrafast",
-                        "superfast": "superfast",
-                        "veryfast": "veryfast",
-                        "faster": "faster",
-                        "fast": "fast",
-                        "medium": "medium",
-                        "slow": "slow",
-                        "slower": "slower",
-                        "veryslow": "veryslow",
-                        "placebo": "placebo",
-                    });
+                    this.getAvifPresetOptions(activeEncoder, this.modalSettings.ffmpegPreset).forEach(option => dropdown.addOption(option, option));
                     dropdown.setValue(this.modalSettings.ffmpegPreset);
                     dropdown.onChange(async (value) => {
                         this.modalSettings.ffmpegPreset = value;
@@ -466,6 +508,8 @@ export class ProcessSingleImageModal extends Modal {
                         ffmpegExecutablePath: this.modalSettings.ffmpegExecutablePath,
                         ffmpegCrf: this.modalSettings.ffmpegCrf,
                         ffmpegPreset: this.modalSettings.ffmpegPreset,
+                        ffmpegDetectedEncoder: this.modalSettings.ffmpegDetectedEncoder,
+                        ffmpegDetectedEncoderPath: this.modalSettings.ffmpegDetectedEncoderPath,
                         useSystemPathForBinary: this.plugin.settings.localProcessing.externalTools.useSystemPathForBinary,
                     } : undefined,
                     this.plugin.settings
@@ -573,5 +617,84 @@ export class ProcessSingleImageModal extends Modal {
             this.previewImageUrl = null;
         }
         this.contentEl.empty();
+    }
+
+    private getActiveAvifEncoder(): AvifEncoder | undefined {
+        const encoder = this.modalSettings.ffmpegDetectedEncoder;
+        if (!encoder || !(encoder in AVIF_ENCODER_CONFIGS)) return undefined;
+
+        const encoderPath = this.modalSettings.ffmpegDetectedEncoderPath;
+        if (!encoderPath) return encoder;
+
+        return normalizeExecutablePath(encoderPath) === normalizeExecutablePath(this.modalSettings.ffmpegExecutablePath)
+            ? encoder
+            : undefined;
+    }
+
+    private getAvifPresetOptions(encoder?: AvifEncoder, currentPreset: string = ""): string[] {
+        if (!encoder) {
+            return [
+                "ultrafast",
+                "superfast",
+                "veryfast",
+                "faster",
+                "fast",
+                "medium",
+                "slow",
+                "slower",
+                "veryslow",
+                "placebo",
+            ];
+        }
+
+        const config = encoder ? AVIF_ENCODER_CONFIGS[encoder] : AVIF_ENCODER_CONFIGS["libaom-av1"];
+        const options = config.supportsPreset && config.presetNames?.length
+            ? config.presetNames
+            : ["medium"];
+        return currentPreset && !options.includes(currentPreset)
+            ? [currentPreset, ...options]
+            : options;
+    }
+
+    private syncFfmpegSettingsToGlobal(): void {
+        const tools = this.plugin.settings.localProcessing.externalTools;
+        tools.ffmpegExecutablePath = this.modalSettings.ffmpegExecutablePath;
+        tools.ffmpegCrf = this.modalSettings.ffmpegCrf;
+        tools.ffmpegPreset = this.modalSettings.ffmpegPreset;
+        tools.ffmpegDetectedEncoder = this.modalSettings.ffmpegDetectedEncoder;
+        tools.ffmpegDetectedEncoderPath = this.modalSettings.ffmpegDetectedEncoderPath;
+    }
+
+    private async detectAvifEncoderForModal(): Promise<void> {
+        const executablePath = normalizeExecutablePath(this.modalSettings.ffmpegExecutablePath);
+        if (!executablePath) {
+            new Notice(t("ERROR_FFMPEG_NOT_SET"));
+            return;
+        }
+
+        ImageProcessor.clearAvifEncoderCache(executablePath);
+        const encoder = await this.plugin.imageProcessor.detectAvifEncoder(
+            executablePath,
+            this.modalSettings.ffmpegDetectedEncoder,
+            { forceProbe: true }
+        );
+
+        if (!encoder) {
+            this.modalSettings.ffmpegDetectedEncoder = undefined;
+            this.modalSettings.ffmpegDetectedEncoderPath = undefined;
+            this.syncFfmpegSettingsToGlobal();
+            await this.plugin.saveSettings();
+            new Notice(t("NOTICE_ENCODER_NOT_FOUND"));
+            this.renderConversionSettings();
+            return;
+        }
+
+        this.modalSettings.ffmpegExecutablePath = executablePath;
+        this.modalSettings.ffmpegDetectedEncoder = encoder;
+        this.modalSettings.ffmpegDetectedEncoderPath = executablePath;
+        this.syncFfmpegSettingsToGlobal();
+        await this.plugin.saveSettings();
+        new Notice(t("NOTICE_ENCODER_DETECTED", [encoder]));
+        this.renderConversionSettings();
     }
 }

@@ -4,6 +4,7 @@ import { ImageProcessor } from '../ImageProcessor';
 import { FolderAndFilenameManagement } from '../FolderAndFilenameManagement';
 import { SingleImageProcessor } from './SingleImageProcessor';
 import { t } from '../../lang/helpers';
+import { toBatchOutputFormat } from './BatchFormat';
 
 // Unified Batch Tools
 import {
@@ -58,7 +59,7 @@ export class NoteBatchProcessor {
 
             const isKeepOriginalFormat = convertTo === 'disabled' || convertTo === 'Original';
             const targetFormat = convertTo;
-            const outputFormat = isKeepOriginalFormat ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
+            const outputFormat = toBatchOutputFormat(convertTo);
             const skipFormats = this.collector.parseSkipFormats(batchSkipFormats);
 
             // 2. Collect Images
@@ -81,6 +82,7 @@ export class NoteBatchProcessor {
             linkedFiles = this.collector.deduplicateFiles(linkedFiles);
 
             if (linkedFiles.length === 0) {
+                this.progressManager.cancel();
                 new Notice(t("NOTICE_NO_IMAGES_IN_NOTE"));
                 return;
             }
@@ -97,6 +99,7 @@ export class NoteBatchProcessor {
             );
 
             if (filesToProcess.length === 0) {
+                this.progressManager.cancel();
                 new Notice(t("NOTICE_NO_IMAGES_TO_PROCESS"));
                 return;
             }
@@ -116,7 +119,10 @@ export class NoteBatchProcessor {
                 mode: 'local'
             });
 
-            if (action === 'cancel') return;
+            if (action === 'cancel') {
+                this.progressManager.cancel();
+                return;
+            }
 
             // 5. Execute Batch
             const tasks: BatchTask<TFile>[] = BatchExecutor.createTasks(

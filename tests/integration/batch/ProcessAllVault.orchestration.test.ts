@@ -1,185 +1,108 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BatchImageProcessor } from '../../../src/local/BatchImageProcessor';
-import { fakeApp, fakeVault, fakeTFile } from '../../factories/obsidian';
+import { describe, it, expect, vi } from 'vitest';
 
-function makePluginStub(overrides: any = {}) {
+vi.mock('../../../src/utils/batch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/utils/batch')>();
   return {
-    settings: {
-      ProcessAllVaultconvertTo: 'webp',
-      ProcessAllVaultquality: 0.8,
-      ProcessAllVaultResizeModalresizeMode: 'None',
-      ProcessAllVaultResizeModaldesiredWidth: 0,
-      ProcessAllVaultResizeModaldesiredHeight: 0,
-      ProcessAllVaultResizeModaldesiredLength: 0,
-      ProcessAllVaultEnlargeOrReduce: 'Always',
-      allowLargerFiles: true,
-      ProcessAllVaultSkipFormats: '',
-      ProcessAllVaultskipImagesInTargetFormat: true,
-      ...overrides.settings
-    },
-    supportedImageFormats: {
-      isSupported: vi.fn((_mime?: string, name?: string) => /\.(png|jpg|jpeg|webp)$/i.test(name || ''))
-    },
-    addStatusBarItem: vi.fn(() => ({ setText: vi.fn(), remove: vi.fn() })),
-    ...overrides
-  } as any;
+    ...actual,
+    showBatchConfirmDialog: vi.fn(async () => 'process-only')
+  };
+});
+
+import { BatchImageProcessor } from '../../../src/local/BatchImageProcessor';
+import { showBatchConfirmDialog } from '../../../src/utils/batch';
+import { fakeApp, fakeVault, fakeTFile } from '../../factories/obsidian';
+import {
+  makeBatchPlugin,
+  makeFolderAndFilenameManagement,
+  makeImageProcessor,
+  processedPaths
+} from './helpers';
+
+function makeVaultFixture(batchLocalOverrides: Record<string, unknown> = {}) {
+  const note1 = fakeTFile({ path: 'notes/n1.md', name: 'n1.md', extension: 'md' });
+  const note2 = fakeTFile({ path: 'notes/n2.md', name: 'n2.md', extension: 'md' });
+  const canvas = fakeTFile({ path: 'canvas/board.canvas', name: 'board.canvas', extension: 'canvas' });
+  const files = [
+    note1,
+    note2,
+    canvas,
+    fakeTFile({ path: 'images/a.png', name: 'a.png', extension: 'png' }),
+    fakeTFile({ path: 'images/b.jpg', name: 'b.jpg', extension: 'jpg' }),
+    fakeTFile({ path: 'more/b.jpg', name: 'b.jpg', extension: 'jpg' }),
+    fakeTFile({ path: 'images/dup.png', name: 'dup.png', extension: 'png' })
+  ];
+
+  const fileContents = new Map<string, string>([
+    [canvas.path, JSON.stringify({
+      nodes: [
+        { id: '1', type: 'file', file: 'images/dup.png' },
+        { id: '2', type: 'file', file: 'images/a.png' }
+      ]
+    })]
+  ]);
+
+  const app = fakeApp({ vault: fakeVault({ files, fileContents }) }) as any;
+  const plugin = makeBatchPlugin(batchLocalOverrides);
+  const imageProcessor = makeImageProcessor();
+  const folderAndFilenameManagement = makeFolderAndFilenameManagement(app);
+  const bip = new BatchImageProcessor(app, plugin, imageProcessor as any, folderAndFilenameManagement as any);
+
+  return { app, plugin, imageProcessor, folderAndFilenameManagement, bip };
 }
 
-describe('BatchImageProcessor — Vault-wide orchestration', () => {
-  let app: any;
-  let plugin: any;
-  let imageProcessor: any;
-  let folderAndFilenameManagement: any;
-  let n1: any; let n2: any; let c1: any;
-  let aPng: any; let aJpg1: any; let aJpg2: any; let dupRef: any;
-
-  beforeEach(() => {
-    // Files: two notes, one canvas, several images (some duplicates referenced)
-    n1 = fakeTFile({ path: 'notes/n1.md' });
-    n2 = fakeTFile({ path: 'notes/n2.md' });
-    c1 = fakeTFile({ path: 'canvas/board.canvas', extension: 'canvas', name: 'board.canvas' });
-
-    aPng = fakeTFile({ path: 'images/a.png' });
-    aJpg1 = fakeTFile({ path: 'images/b.jpg' });
-    aJpg2 = fakeTFile({ path: 'more/b.jpg' }); // duplicate name but different path
-    dupRef = fakeTFile({ path: 'images/dup.png' });
-
-    const files = [n1, n2, c1, aPng, aJpg1, aJpg2, dupRef];
-    const vault = fakeVault({ files }) as any;
-
-    // resolvedLinks to include duplicates of images across notes
-    const metadataCache = {
-      resolvedLinks: {
-        [n1.path]: { [aPng.path]: 1, [dupRef.path]: 2 },
-        [n2.path]: { [aJpg1.path]: 1, [dupRef.path]: 1 }
-      }
-    };
-
-    // Seed canvas JSON with references to dupRef and aPng — no mock, just write content
-    // (This test file uses a synchronous beforeEach; the fake vault.modify is async but
-    // we don't need to await here because we call modify later in test cases as needed.)
-
-    app = fakeApp({ vault, metadataCache }) as any;
-    // Write canvas content to vault so getAllImageFiles picks up references
-    (vault as any).modify(c1, JSON.stringify({ nodes: [
-      { id: '1', type: 'file', file: 'images/dup.png' },
-      { id: '2', type: 'file', file: 'images/a.png' }
-    ] }));
-    app.fileManager = {
-      renameFile: vi.fn(async (file: any, newPath: string) => {
-        await app.vault.rename(file, newPath);
-      })
-    };
-
-    plugin = makePluginStub();
-
-    imageProcessor = {
-      processImage: vi.fn(async (_blob: Blob) => new ArrayBuffer(4))
-    };
-
-    folderAndFilenameManagement = {
-      handleNameConflicts: vi.fn(async (_dir: string, name: string) => name.replace(/\.webp$/, '.webp'))
-    };
-  });
-
-  it('4.7/4.14 Given duplicates across notes/canvas, When processing vault-wide, Then each image processed once (dedup) and links updated everywhere', async () => {
-    const bip = new BatchImageProcessor(app, plugin, imageProcessor as any, folderAndFilenameManagement as any);
-
-    // Seed note contents to verify updates after rename
-    await app.vault.modify(n1, '![a](images/a.png) and ![d](images/dup.png)');
-    await app.vault.modify(n2, '![b](images/b.jpg) and ![d](images/dup.png)');
+describe('BatchImageProcessor vault-wide orchestration', () => {
+  it('processes each vault image once even when canvas references repeat it', async () => {
+    const { app, imageProcessor, bip } = makeVaultFixture();
 
     await bip.processAllVaultImages();
 
-    // Processed: a.png, b.jpg (once), more/b.jpg, dup.png (once)
-    // Ensure links updated for dup.png → dup.webp in both notes
-    const content1 = await app.vault.read(n1);
-    const content2 = await app.vault.read(n2);
-    expect(content1).toContain('images/dup.webp');
-    expect(content2).toContain('images/dup.webp');
-    // And rename attempted for dup
-    const renameArgs = (app.fileManager.renameFile as any).mock.calls;
-    const oldPaths = renameArgs.map((callArgs: any[]) => (callArgs[0] as any).path);
-    const newPaths = renameArgs.map((callArgs: any[]) => callArgs[1] as string);
-    expect(oldPaths.some((pathStr: string) => pathStr.endsWith('images/dup.png')) || newPaths.some((pathStr: string) => pathStr.endsWith('images/dup.webp'))).toBe(true);
+    expect(processedPaths(imageProcessor)).toEqual([
+      'images/a.png',
+      'images/b.jpg',
+      'more/b.jpg',
+      'images/dup.png'
+    ]);
+    expect(showBatchConfirmDialog).toHaveBeenCalledWith(
+      app,
+      expect.objectContaining({ totalCount: 4, scopePath: '/', mode: 'local' })
+    );
   });
 
-  it('4.12 Given convertTo set, When renaming, Then new filenames use target extension and conflicts handled', async () => {
-    const bip = new BatchImageProcessor(app, plugin, imageProcessor as any, folderAndFilenameManagement as any);
-
-    // Force a name conflict so conflict resolver is invoked
-    await (app.vault as any).create('images/a.webp', '');
+  it('normalizes jpg conversion for vault-wide processing', async () => {
+    const { imageProcessor, folderAndFilenameManagement, bip } = makeVaultFixture({ convertTo: 'jpg' });
 
     await bip.processAllVaultImages();
 
-    const renameCalls = (app.fileManager.renameFile as any).mock.calls.map((callArgs: any[]) => callArgs[1] as string);
-    expect(renameCalls.every((newPathStr: string) => newPathStr.endsWith('.webp'))).toBe(true);
-    expect(folderAndFilenameManagement.handleNameConflicts).toHaveBeenCalled();
+    expect(imageProcessor.processImage.mock.calls[0][1]).toBe('JPEG');
+    expect(folderAndFilenameManagement.createUniqueBinary).toHaveBeenCalledWith(
+      'images',
+      'a.jpg',
+      expect.any(ArrayBuffer),
+      'increment'
+    );
   });
 
-  it('4.10 Skip target format (vault): when convertTo=webp and skipImagesInTargetFormat=true, webp files are skipped', async () => {
-    // Fresh, isolated environment to avoid mutated TFile state across tests
-    const noteFile = fakeTFile({ path: 'notes/m.md' });
-    const keep = fakeTFile({ path: 'images/keep.webp' });
-    const toConvert = fakeTFile({ path: 'images/x.png' });
-    const vaultIso = fakeVault({ files: [noteFile, keep, toConvert] }) as any;
-    const appIso = fakeApp({ vault: vaultIso, metadataCache: { resolvedLinks: { [noteFile.path]: { [keep.path]: 1, [toConvert.path]: 1 } } } as any }) as any;
-    appIso.fileManager = { renameFile: vi.fn(async (file: any, newPath: string) => { await appIso.vault.rename(file, newPath); }) };
-    const pluginIso = makePluginStub({ settings: { ProcessAllVaultconvertTo: 'webp', ProcessAllVaultskipImagesInTargetFormat: true } });
-    const imgIso = { processImage: vi.fn(async (_blob: Blob) => new ArrayBuffer(4)) };
-    const ffmIso = { handleNameConflicts: vi.fn(async (_dir: string, name: string) => name) };
-    const bipIso = new BatchImageProcessor(appIso as any, pluginIso as any, imgIso as any, ffmIso as any);
+  it('skips files that are already in the target format when configured', async () => {
+    const keep = fakeTFile({ path: 'images/keep.webp', name: 'keep.webp', extension: 'webp' });
+    const toConvert = fakeTFile({ path: 'images/x.png', name: 'x.png', extension: 'png' });
+    const app = fakeApp({ vault: fakeVault({ files: [keep, toConvert] }) }) as any;
+    const plugin = makeBatchPlugin({ convertTo: 'webp', skipImagesInTargetFormat: true });
+    const imageProcessor = makeImageProcessor();
+    const folderAndFilenameManagement = makeFolderAndFilenameManagement(app);
+    const bip = new BatchImageProcessor(app, plugin, imageProcessor as any, folderAndFilenameManagement as any);
 
-    // Verify skip-target-format selection logic and that PNG would be processed
-    const decisionKeep = (bipIso as any).shouldProcessImage(keep, false, 'webp', [], true);
-    const decisionConvert = (bipIso as any).shouldProcessImage(toConvert, false, 'webp', [], true);
-    expect(decisionKeep).toBe(false);
-    expect(decisionConvert).toBe(true);
+    await bip.processAllVaultImages();
 
-    // Run to ensure it executes without errors (rename may be stubbed in some envs)
-    await bipIso.processAllVaultImages();
-
-    // Ensure we did not attempt to rename keep.webp
-    const renameArgs = (appIso.fileManager.renameFile as any).mock.calls.map((callArgs: any[]) => callArgs[0] as any);
-    expect(renameArgs.some((fileArg: any) => fileArg.path.endsWith('keep.webp'))).toBe(false);
+    expect(processedPaths(imageProcessor)).toEqual(['images/x.png']);
   });
 
-  it('4.13 Given fixed inputs, When processing vault-wide, Then order of processing is stable', async () => {
-    // Helper to build a fresh vault and return rename order (newPath basenames)
-    const runOnce = async () => {
-      const n1l = fakeTFile({ path: 'notes/n1.md' });
-      const n2l = fakeTFile({ path: 'notes/n2.md' });
-      const c1l = fakeTFile({ path: 'canvas/board.canvas', extension: 'canvas', name: 'board.canvas' });
-      const aP = fakeTFile({ path: 'images/a.png' });
-      const b1 = fakeTFile({ path: 'images/b.jpg' });
-      const b2 = fakeTFile({ path: 'more/b.jpg' });
-      const du = fakeTFile({ path: 'images/dup.png' });
-      const vaultL = fakeVault({ files: [n1l, n2l, c1l, aP, b1, b2, du] }) as any;
-      (vaultL.read as any).mockImplementation(async (file: any) => {
-        if (file.path.endsWith('.canvas')) {
-          return JSON.stringify({ nodes: [
-            { id: '1', type: 'file', file: 'images/dup.png' },
-            { id: '2', type: 'file', file: 'images/a.png' }
-          ]});
-        }
-        return '';
-      });
-      const appL = fakeApp({ vault: vaultL, metadataCache: { resolvedLinks: {
-        [n1l.path]: { [aP.path]: 1, [du.path]: 2 },
-        [n2l.path]: { [b1.path]: 1, [du.path]: 1 }
-      } } as any }) as any;
-      appL.fileManager = { renameFile: vi.fn(async (file: any, newPath: string) => { await appL.vault.rename(file, newPath); }) };
-      const pluginL = makePluginStub();
-      const imgL = { processImage: vi.fn(async (_blob: Blob) => new ArrayBuffer(4)) };
-      const ffmL = { handleNameConflicts: vi.fn(async (_dir: string, name: string) => name) };
-      const bipL = new BatchImageProcessor(appL, pluginL, imgL as any, ffmL as any);
-      await bipL.processAllVaultImages();
-      const order = (appL.fileManager.renameFile as any).mock.calls.map((callArgs: any[]) => (callArgs[1] as string).split('/').pop());
-      return order;
-    };
+  it('keeps vault-wide processing order stable for fixed inputs', async () => {
+    const first = makeVaultFixture();
+    const second = makeVaultFixture();
 
-    const firstRun = await runOnce();
-    const secondRun = await runOnce();
-    expect(secondRun).toEqual(firstRun);
+    await first.bip.processAllVaultImages();
+    await second.bip.processAllVaultImages();
+
+    expect(processedPaths(second.imageProcessor)).toEqual(processedPaths(first.imageProcessor));
   });
 });

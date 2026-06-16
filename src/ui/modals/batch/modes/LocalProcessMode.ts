@@ -3,6 +3,7 @@ import ImageConverterPlugin from "../../../../main";
 import { BatchTask, BatchItemResult, BatchResult, BatchScope } from "../../../../types/BatchTypes";
 import { IBatchMode, ReviewAction } from "./IBatchMode";
 import { t } from "../../../../lang/helpers";
+import { ImageFileCollector } from "../../../../utils/batch/ImageFileCollector";
 
 export class LocalProcessMode implements IBatchMode {
     id = "local_process" as const;
@@ -146,31 +147,39 @@ export class LocalProcessMode implements IBatchMode {
             });
     }
 
+    private isFileLike(item: unknown): item is TFile {
+        return item instanceof TFile || (
+            !!item &&
+            typeof (item as any).path === 'string' &&
+            typeof (item as any).name === 'string' &&
+            typeof (item as any).extension === 'string'
+        );
+    }
+
+    private isFolderLike(item: unknown): item is TFolder {
+        return item instanceof TFolder || (
+            !!item &&
+            typeof (item as any).path === 'string' &&
+            Array.isArray((item as any).children)
+        );
+    }
+
     async loadTasks(): Promise<BatchTask[]> {
         const tasks: BatchTask[] = [];
         let files: TFile[] = [];
 
-        if (this.scope === "note" && this.target instanceof TFile) {
+        if (this.scope === "note" && this.isFileLike(this.target)) {
             const cache = this.app.metadataCache.getFileCache(this.target);
             if (cache && cache.embeds) {
                 for (const embed of cache.embeds) {
                     const file = this.app.metadataCache.getFirstLinkpathDest(embed.link, this.target.path);
-                    if (file && this.plugin.supportedImageFormats.isSupported(file.extension, file.name)) {
+                    if (this.isFileLike(file) && this.plugin.supportedImageFormats.isSupported(file.extension, file.name)) {
                         files.push(file);
                     }
                 }
             }
-        } else if (this.scope === "folder" && this.target instanceof TFolder) {
-            const collectImages = (folder: TFolder) => {
-                for (const child of folder.children) {
-                    if (child instanceof TFile && this.plugin.supportedImageFormats.isSupported(child.extension, child.name)) {
-                        files.push(child);
-                    } else if (child instanceof TFolder) {
-                        collectImages(child);
-                    }
-                }
-            };
-            collectImages(this.target);
+        } else if (this.scope === "folder" && this.isFolderLike(this.target)) {
+            files = new ImageFileCollector(this.app, this.plugin).getImageFilesInFolder(this.target, true);
         } else if (this.scope === "vault") {
             files = this.app.vault.getFiles().filter(f => this.plugin.supportedImageFormats.isSupported(f.extension, f.name));
         }
@@ -191,43 +200,12 @@ export class LocalProcessMode implements IBatchMode {
     }
 
     async processTask(task: BatchTask): Promise<BatchItemResult> {
-        // Delegate to BatchImageProcessor
-        // Wait, batchProcess takes TFile[] and does loop.
-        // processTask is single item.
-        // Does BatchImageProcessor have single file method?
-        // Checking usage: `this.plugin.batchImageProcessor.batchProcess(files)`
-        // If we want granular control here, we need single method.
-        // But the previous modal called `batchProcess(files)` in one go for ALL files.
-        // If we change to `processTask` loop, we change behavior (serial vs parallel inside processor).
-        // `BatchImageProcessor` likely has a queue.
-
-        // However, IBatchMode interface assumes loop in the Orchestrator (or delegating batch execution).
-        // BUT my interface design `processTask` implies Orchestrator loops.
-        // If I want to match legacy behavior exactly where `batchProcess` took the whole list:
-        // I might need `executeBatch(tasks)` method in IBatchMode instead of `processTask`.
-
-        // Given refactoring goal is to split logic, implementing `processTask` is cleaner IF `BatchImageProcessor` supports it.
-        // If `BatchImageProcessor` ONLY supports batch, I should wrapper it.
-        // `plugin.batchImageProcessor` is not standard.
-        // Let's assume for now I will use `executeBatch` pattern or loop.
-
-        // Actually, to correctly support the detailed progress bar which updates PER ITEM, 
-        // the original `executeBatch` called `batchProcess` which likely handled its own progress or returned a result at end?
-        // Original: `this.batchResult = await this.plugin.batchImageProcessor.batchProcess(files);`
-        // It waited for WHOLE process.
-        // So `processTask` loop in UI would allow BETTER progress bar!
-        // I will assume I can process single file.
-        // `BatchImageProcessor` likely has `processImage(file)`.
-
-        // If I can't check BatchImageProcessor code, I'll take a safe bet:
-        // I will implement `processTask` that calls `batchProcess([file])` (array of one).
-
         try {
-            const files = [task.source as TFile];
-            const result = await this.plugin.batchImageProcessor.batchProcess(files);
+            const file = task.source as TFile;
+            const result = await this.plugin.batchImageProcessor.batchProcess([file]);
             if (result.successful.length > 0) return result.successful[0];
             if (result.failed.length > 0) return result.failed[0];
-            return { success: false, item: task.source as TFile, error: t("MSG_UNKNOWN_ERROR") };
+            return { success: false, item: file, error: t("MSG_UNKNOWN_ERROR") };
         } catch (e) {
             return { success: false, item: task.source as TFile, error: e.message };
         }

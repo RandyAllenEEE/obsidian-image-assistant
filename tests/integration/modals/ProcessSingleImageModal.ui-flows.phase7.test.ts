@@ -407,7 +407,6 @@ const [crfSlider] = sliders;
       combinePath: (dir: string, name: string) => (dir ? `${dir}/${name}` : name),
       shouldSkipConversion: () => false
     };
-    (plugin as any).getPresetByName = vi.fn(() => null);
     (plugin as any).showSizeComparisonNotification = vi.fn();
 
     // Prepare workspace editor
@@ -463,7 +462,6 @@ const [crfSlider] = sliders;
       combinePath: (dir: string, name: string) => (dir ? `${dir}/${name}` : name),
       shouldSkipConversion: () => false
     };
-    (plugin as any).getPresetByName = vi.fn(() => null);
     (plugin as any).showSizeComparisonNotification = vi.fn();
 
     // Prepare workspace editor with markdown link to image
@@ -523,14 +521,13 @@ const [crfSlider] = sliders;
 
     // Settings saved with current modal state
     expect(saveSpy).toHaveBeenCalled();
-    expect((plugin as any).settings.singleImageModalSettings.quality).toBe(77);
+    expect((plugin as any).settings.operationDefaults.singleImage.quality).toBe(77);
   });
 
   it('7.9 Settings persistence loads on open and saves on close', async () => {
     const plugin = await makePlugin(app);
     // Seed existing singleImageModalSettings
-    (plugin as any).settings.singleImageModalSettings = {
-      conversionPresetName: 'Default',
+    (plugin as any).settings.operationDefaults.singleImage = {
       outputFormat: 'PNG',
       quality: 55,
       colorDepth: 1,
@@ -557,10 +554,10 @@ const [crfSlider] = sliders;
     ;(modal as any).modalSettings.quality = 60;
     await modal.onClose();
     expect(saveSpy).toHaveBeenCalled();
-    expect((plugin as any).settings.singleImageModalSettings.quality).toBe(60);
+    expect((plugin as any).settings.operationDefaults.singleImage.quality).toBe(60);
   });
 
-  it('7.11 PNGQUANT path change persists into preset', async () => {
+  it('7.11 PNGQUANT path change persists into modal state', async () => {
     const plugin = await makePlugin(app);
     (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
 
@@ -573,14 +570,14 @@ const [crfSlider] = sliders;
     formatSelect.dispatchEvent(new Event('change'));
     await Promise.resolve();
 
-    // If the preset reference isn’t updated live, modal state should capture the path
+    // Modal state should capture the path; this plugin no longer keeps legacy conversion presets.
     const pathInput = Array.from(container.querySelectorAll('.conversion-settings-container input[type="text"]'))[0] as HTMLInputElement;
     pathInput.value = 'D:/bin/pngquant.exe';
     pathInput.dispatchEvent(new Event('change'));
 
     // Close modal to trigger save of modal settings into plugin.settings
     await modal.onClose();
-    expect((plugin as any).settings.singleImageModalSettings.pngquantExecutablePath).toBe('D:/bin/pngquant.exe');
+    expect((plugin as any).settings.operationDefaults.singleImage.pngquantExecutablePath).toBe('D:/bin/pngquant.exe');
   });
 
   it('7.13 AVIF ffmpeg fields captured in state', async () => {

@@ -19,6 +19,7 @@ export class DropHandler {
     }
 
     async handleDrop(evt: DragEvent, editor: Editor): Promise<void> {
+        if (evt.defaultPrevented) return;
         if (!evt.dataTransfer) return;
 
         const pos = editor.posAtMouse(evt);

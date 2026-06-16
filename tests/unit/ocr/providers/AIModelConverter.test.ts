@@ -14,9 +14,7 @@ describe('AIModelConverter', () => {
     beforeEach(() => {
         mockApp = {
             secretStorage: {
-                // Mock getSecret to return a string synchronously for testing
-                // Note: Real Obsidian API returns Promise, but tests run synchronously
-                getSecret: vi.fn().mockReturnValue('test-api-key')
+                getSecret: vi.fn().mockResolvedValue('test-api-key')
             }
         } as any;
 

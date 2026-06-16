@@ -22,14 +22,18 @@ export class PasteHandler extends BasePasteHandler {
     async processFiles(files: File[], editor: Editor): Promise<void> {
         const activeFile = this.app.workspace.getActiveFile();
         if (!activeFile) {
-            if (!activeFile) {
-                NotificationManager.showWarning("No active file found!", 3000);
-                return;
-            }
+            NotificationManager.showWarning("No active file found!", 3000);
+            return;
+        }
+
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeView) {
+            new Notice(t("MSG_NO_ACTIVE_VIEW") || "No active Markdown view detected.");
+            return;
         }
 
         const filePromises = files.map((file) => {
-            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
+            const inserter = new EditorContentInserter(activeView);
             inserter.insertLoadingText(`${t("LOADING_PROCESS") || "Processing"} ${file.name}...`);
 
             return async () => {

@@ -18,7 +18,7 @@ describe('Integration-lite: Quality Effect (1.41)', () => {
   beforeEach(() => {
     const app = fakeApp() as any;
     supportedFormats = new SupportedImageFormats(app);
-    processor = new ImageProcessor(supportedFormats);
+    processor = new ImageProcessor(app, supportedFormats);
   });
 
   it('Given a fixed input, When quality is reduced, Then output size is smaller or equal (WEBP)', async () => {

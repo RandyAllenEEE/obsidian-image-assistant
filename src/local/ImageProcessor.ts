@@ -2,8 +2,9 @@
 import { Notice, Platform, App, TFile, FileSystemAdapter, TFolder } from "obsidian";
 import { SupportedImageFormats } from "./SupportedImageFormats";
 import { ChildProcess, spawn } from 'child_process';
-import { LocalExternalToolSettings, ResizeMode, EnlargeReduce } from "../settings/types";
+import { LocalExternalToolSettings, ResizeMode, EnlargeReduce, AvifEncoder } from "../settings/types";
 import { ImageAssistantSettings, DEFAULT_SETTINGS } from "../settings/defaults";
+import { normalizeExecutablePath } from "../utils/ffmpegPath";
 import * as piexif from "piexifjs"; // Import piexif library
 
 
@@ -20,16 +21,109 @@ interface Dimensions {
     aspectRatio: number;
 }
 
+interface AvifEncoderConfig {
+    crfMin: number;
+    crfMax: number;
+    supportsPreset: boolean;
+    useCpuUsed?: boolean;
+    presetNames?: string[];
+    supportsStillPicture?: boolean;
+    platformHint: 'software' | 'nvidia' | 'intel' | 'amd' | 'vaapi' | 'mediafoundation';
+}
+
+export const AVIF_ENCODER_CONFIGS: Record<AvifEncoder, AvifEncoderConfig> = {
+    'libaom-av1': {
+        crfMin: 0,
+        crfMax: 63,
+        supportsPreset: true,
+        useCpuUsed: true,
+        presetNames: ['0', '1', '2', '3', '4', '5', '6', '7', '8'],
+        supportsStillPicture: true,
+        platformHint: 'software',
+    },
+    'libsvtav1': {
+        crfMin: 0,
+        crfMax: 63,
+        supportsPreset: true,
+        presetNames: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'],
+        platformHint: 'software',
+    },
+    'av1_nvenc': {
+        crfMin: 0,
+        crfMax: 51,
+        supportsPreset: true,
+        presetNames: ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'],
+        platformHint: 'nvidia',
+    },
+    'av1_qsv': { crfMin: 0, crfMax: 51, supportsPreset: false, platformHint: 'intel' },
+    'av1_amf': { crfMin: 0, crfMax: 255, supportsPreset: false, platformHint: 'amd' },
+    'av1_vaapi': { crfMin: 0, crfMax: 255, supportsPreset: false, platformHint: 'vaapi' },
+    'av1_mf': { crfMin: 0, crfMax: 100, supportsPreset: false, platformHint: 'mediafoundation' },
+};
+
+const AVIF_ENCODER_PRIORITY: AvifEncoder[] = [
+    'av1_nvenc',
+    'av1_qsv',
+    'av1_amf',
+    'av1_mf',
+    'av1_vaapi',
+    'libsvtav1',
+    'libaom-av1',
+];
+
 export class ImageProcessor {
 
     supportedImageFormats: SupportedImageFormats
     private externalTools: LocalExternalToolSettings = DEFAULT_SETTINGS.localProcessing.externalTools;
     private settings: ImageAssistantSettings;
     private app: App;
+    private static avifEncoderDetectionCache: Map<string, AvifEncoder> = new Map();
 
     constructor(app: App, supportedImageFormats: SupportedImageFormats) {
         this.app = app;
         this.supportedImageFormats = supportedImageFormats;
+    }
+
+    public static clearAvifEncoderCache(executablePath?: string): void {
+        if (!executablePath) {
+            ImageProcessor.avifEncoderDetectionCache.clear();
+            return;
+        }
+        ImageProcessor.avifEncoderDetectionCache.delete(normalizeExecutablePath(executablePath));
+    }
+
+    public async detectAvifEncoder(
+        executablePath: string,
+        cachedEncoder?: string,
+        options: { forceProbe?: boolean } = {}
+    ): Promise<AvifEncoder | null> {
+        const normalizedPath = normalizeExecutablePath(executablePath);
+
+        if (!options.forceProbe && this.isValidAvifEncoder(cachedEncoder)) {
+            ImageProcessor.avifEncoderDetectionCache.set(normalizedPath, cachedEncoder);
+            return cachedEncoder;
+        }
+
+        const cached = ImageProcessor.avifEncoderDetectionCache.get(normalizedPath);
+        if (!options.forceProbe && cached) return cached;
+
+        const probe = await this.runFfmpegProbe(normalizedPath, ['-encoders'], 3000);
+        if (!probe.output) return null;
+
+        const candidates = AVIF_ENCODER_PRIORITY.filter(encoder => {
+            if (encoder === 'av1_mf' && !Platform.isWin) return false;
+            if (encoder === 'av1_vaapi' && !Platform.isLinux) return false;
+            return probe.output.includes(encoder);
+        });
+
+        for (const candidate of candidates) {
+            if (await this.validateAvifEncoder(normalizedPath, candidate)) {
+                ImageProcessor.avifEncoderDetectionCache.set(normalizedPath, candidate);
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     // ... imports ...
@@ -126,6 +220,7 @@ export class ImageProcessor {
         // Resolve input to Blob and optionally Path (for zero-copy)
         let inputBlob: Blob;
         let inputPath: string | null = null;
+        let filename = (file instanceof TFile) ? file.name : (typeof file === 'string' ? path.basename(file) : 'image');
 
         try {
             if (file instanceof Blob) {
@@ -178,7 +273,6 @@ export class ImageProcessor {
                 );
             }
 
-            const filename = (file instanceof TFile) ? file.name : (typeof file === 'string' ? path.basename(file) : 'image');
             const detected = await this.supportedImageFormats.getMimeTypeFromFile(inputBlob instanceof File ? inputBlob : new File([inputBlob], filename));
 
             if (!detected || detected === 'unknown') {
@@ -253,12 +347,13 @@ export class ImageProcessor {
                             inputPath
                         );
                     } catch (unexpected) {
+                        this.notifyProcessingFailure(filename, format, unexpected);
                         return inputBlob.arrayBuffer();
                     }
             }
         } catch (error) {
             console.error('Error processing image:', error);
-            new Notice(`Failed to process image: ${error.message}`);
+            this.notifyProcessingFailure(filename, format, error);
             return (file instanceof Blob) ? file.arrayBuffer() : new ArrayBuffer(0); // Fallback
         }
     }
@@ -271,12 +366,12 @@ export class ImageProcessor {
     private async checkCommandAvailability(executablePath: string): Promise<boolean> {
         if (!executablePath) return false;
 
+        const normalizedPath = normalizeExecutablePath(executablePath);
+
         // First check if file exists (if it's an absolute path)
         try {
-            // Basic check: if it looks like a path, try to stats it
-            // Simple logic: if it contains a separator, treat as path
-            if (executablePath.includes(path.sep) || executablePath.includes('/')) {
-                await fs.access(executablePath);
+            if (/[\\/]/.test(normalizedPath) || /^[A-Za-z]:/.test(normalizedPath)) {
+                await fs.access(normalizedPath);
                 return true;
             }
         } catch {
@@ -285,15 +380,170 @@ export class ImageProcessor {
 
         // Secondary check: try to spawn with --version or -version
         return new Promise((resolve) => {
-            const process = spawn(executablePath, ['-version']);
-            process.on('error', () => resolve(false));
-            process.on('close', (code) => resolve(code === 0));
+            const process = Platform.isWin
+                ? spawn(normalizedPath, ['-version'], { windowsHide: true })
+                : spawn(normalizedPath, ['-version']);
+            let settled = false;
+            const settle = (value: boolean) => {
+                if (settled) return;
+                settled = true;
+                resolve(value);
+            };
+            process.on('error', () => settle(false));
+            process.on('close', (code) => settle(code === 0 || code === null));
             // Add timeout in case it hangs
             setTimeout(() => {
-                process.kill();
-                resolve(false);
+                try { process.kill(); } catch { }
+                settle(false);
             }, 2000);
         });
+    }
+
+    private async validateAvifEncoder(executablePath: string, encoder: AvifEncoder): Promise<boolean> {
+        const result = await this.runFfmpegProbe(
+            executablePath,
+            [
+                '-hide_banner',
+                '-f', 'lavfi',
+                '-i', 'color=c=black:s=64x64:d=0.1:r=1',
+                '-frames:v', '1',
+                '-c:v', encoder,
+                '-f', 'null',
+                '-',
+            ],
+            2000
+        );
+
+        const errorOutput = result.output;
+        const failed =
+            result.timedOut ||
+            (result.code !== 0 && result.code !== null) ||
+            errorOutput.includes('Cannot load') ||
+            errorOutput.includes('Could not open encoder') ||
+            errorOutput.includes('could not open') ||
+            errorOutput.includes('No NVENC capable devices') ||
+            errorOutput.includes('nvcuda.dll') ||
+            errorOutput.includes('Error');
+
+        return !failed;
+    }
+
+    private async detectSoftwareAvifEncoder(executablePath: string): Promise<AvifEncoder | null> {
+        const result = await this.runFfmpegProbe(executablePath, ['-encoders'], 3000);
+        if (result.output.includes('libsvtav1') && await this.validateAvifEncoder(executablePath, 'libsvtav1')) {
+            return 'libsvtav1';
+        }
+        if (result.output.includes('libaom-av1') && await this.validateAvifEncoder(executablePath, 'libaom-av1')) {
+            return 'libaom-av1';
+        }
+        return null;
+    }
+
+    private runFfmpegProbe(
+        executablePath: string,
+        args: string[],
+        timeoutMs: number
+    ): Promise<{ code: number | null; output: string; timedOut: boolean }> {
+        return new Promise((resolve) => {
+            let ffmpeg: ChildProcess | null = null;
+            let output = "";
+            let settled = false;
+            let timeout: ReturnType<typeof setTimeout> | null = null;
+
+            const settle = (code: number | null, timedOut = false) => {
+                if (settled) return;
+                settled = true;
+                if (timeout) clearTimeout(timeout);
+                resolve({ code, output, timedOut });
+            };
+
+            try {
+                ffmpeg = Platform.isWin
+                    ? spawn(executablePath, args, { windowsHide: true })
+                    : spawn(executablePath, args);
+            } catch (error) {
+                console.error('Failed to spawn FFmpeg probe:', error);
+                settle(1);
+                return;
+            }
+
+            ffmpeg.stdout?.on('data', (data: Buffer) => {
+                output += data.toString();
+            });
+            ffmpeg.stderr?.on('data', (data: Buffer) => {
+                output += data.toString();
+            });
+            ffmpeg.on('close', (code: number | null) => settle(code));
+            ffmpeg.on('exit', (code: number | null) => settle(code));
+            ffmpeg.on('error', (error: Error) => {
+                console.error('FFmpeg probe error:', error);
+                settle(1);
+            });
+
+            timeout = setTimeout(() => {
+                try { ffmpeg?.kill?.('SIGTERM'); } catch { }
+                settle(1, true);
+            }, timeoutMs);
+        });
+    }
+
+    private isValidAvifEncoder(encoder: string | undefined): encoder is AvifEncoder {
+        return !!encoder && Object.prototype.hasOwnProperty.call(AVIF_ENCODER_CONFIGS, encoder);
+    }
+
+    private getCachedAvifEncoder(normalizedPath: string): AvifEncoder | undefined {
+        const cachedEncoder = this.externalTools.ffmpegDetectedEncoder;
+        const cachedPath = this.externalTools.ffmpegDetectedEncoderPath;
+        if (!this.isValidAvifEncoder(cachedEncoder)) return undefined;
+        if (cachedPath && normalizeExecutablePath(cachedPath) !== normalizedPath) return undefined;
+        return cachedEncoder;
+    }
+
+    private rememberAvifEncoder(normalizedPath: string, encoder: AvifEncoder): void {
+        ImageProcessor.avifEncoderDetectionCache.set(normalizedPath, encoder);
+        this.externalTools.ffmpegDetectedEncoder = encoder;
+        this.externalTools.ffmpegDetectedEncoderPath = normalizedPath;
+    }
+
+    private validateAvifCrf(crf: number, encoder: AvifEncoder): number {
+        const config = AVIF_ENCODER_CONFIGS[encoder];
+        return Math.max(config.crfMin, Math.min(config.crfMax, crf));
+    }
+
+    private addAvifEncoderSpecificArgs(args: string[], encoderConfig: AvifEncoderConfig, preset: string): void {
+        if (encoderConfig.supportsPreset) {
+            if (encoderConfig.useCpuUsed) {
+                args.push('-cpu-used', this.mapAvifPresetToCpuUsed(preset));
+            } else {
+                args.push('-preset', this.mapEncoderPreset(preset, encoderConfig));
+            }
+        }
+        if (encoderConfig.supportsStillPicture) {
+            args.push('-still-picture', '1');
+        }
+    }
+
+    private mapEncoderPreset(preset: string, encoderConfig: AvifEncoderConfig): string {
+        if (!encoderConfig.presetNames?.length) return preset;
+        if (encoderConfig.presetNames.includes(preset)) return preset;
+
+        const numericMap: Record<string, string> = {
+            placebo: '0',
+            veryslow: '1',
+            slower: '2',
+            slow: '4',
+            medium: encoderConfig.presetNames[Math.floor(encoderConfig.presetNames.length / 2)],
+            fast: encoderConfig.presetNames[Math.max(0, encoderConfig.presetNames.length - 4)],
+            faster: encoderConfig.presetNames[Math.max(0, encoderConfig.presetNames.length - 3)],
+            veryfast: encoderConfig.presetNames[Math.max(0, encoderConfig.presetNames.length - 2)],
+            superfast: encoderConfig.presetNames[encoderConfig.presetNames.length - 1],
+            ultrafast: encoderConfig.presetNames[encoderConfig.presetNames.length - 1],
+        };
+
+        const mapped = numericMap[preset] ?? preset;
+        return encoderConfig.presetNames.includes(mapped)
+            ? mapped
+            : encoderConfig.presetNames[Math.floor(encoderConfig.presetNames.length / 2)];
     }
 
     /**
@@ -461,7 +711,7 @@ export class ImageProcessor {
                 );
             }
             case 'AVIF': {
-                const ffmpegExecutablePath = this.externalTools.ffmpegExecutablePath;
+                const ffmpegExecutablePath = normalizeExecutablePath(this.externalTools.ffmpegExecutablePath);
                 const ffmpegCrf = this.externalTools.ffmpegCrf;
                 const ffmpegPreset = this.externalTools.ffmpegPreset;
 
@@ -519,8 +769,23 @@ export class ImageProcessor {
         desiredHeight: number,
         desiredLongestEdge: number,
         enlargeOrReduce: EnlargeReduce,
-        inputPath: string | null = null
+        inputPath: string | null = null,
+        forcedEncoder?: AvifEncoder,
+        fallbackAttempted = false
     ): Promise<ArrayBuffer> {
+        const normalizedExecutablePath = normalizeExecutablePath(executablePath);
+        const cachedEncoder = this.getCachedAvifEncoder(normalizedExecutablePath);
+        const encoder = forcedEncoder ?? await this.detectAvifEncoder(normalizedExecutablePath, cachedEncoder);
+
+        if (!encoder) {
+            const errorMessage = "No AV1 encoder found in FFmpeg. Please install FFmpeg with AV1 support.";
+            new Notice(errorMessage);
+            throw new Error(errorMessage);
+        }
+
+        this.rememberAvifEncoder(normalizedExecutablePath, encoder);
+        const encoderConfig = AVIF_ENCODER_CONFIGS[encoder];
+        const validatedCrf = this.validateAvifCrf(crf, encoder);
 
         let resizedBlob: Blob = file;
         let useDirectFile = false;
@@ -554,26 +819,26 @@ export class ImageProcessor {
             const inputArg = useDirectFile && inputPath ? inputPath : 'pipe:0'; // Input path or stdin pipe
 
             if (hasTransparency) {
-                // For images with transparency
-                let filterChain = 'format=rgba';
-                if (scaleFilter) {
-                    filterChain += `,${scaleFilter}`;
-                }
+                const scaleComponent = scaleFilter ? `,${scaleFilter}` : '';
+                const filterComplex = [
+                    `[0:v]format=rgba${scaleComponent},split[c][t]`,
+                    '[c]format=yuv444p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv[c444]',
+                    '[t]alphaextract,format=gray,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=pc[a]',
+                ].join(';');
 
                 args = [
                     '-i', inputArg,
-                    '-map', '0',
-                    '-map', '0',
-                    '-filter:v:0', filterChain,
-                    '-filter:v:1', 'alphaextract',
-                    '-c:v', 'libaom-av1',
-                    '-crf', crf.toString(),
-                    '-preset', preset,
-                    '-still-picture', '1',
-                    '-y',
-                    '-f', 'avif',
-                    tempFilePath
+                    '-filter_complex', filterComplex,
+                    '-map', '[c444]',
+                    '-map', '[a]',
+                    '-frames:v:0', '1',
+                    '-frames:v:1', '1',
+                    '-c:v', encoder,
+                    '-crf', validatedCrf.toString(),
+                    '-b:v', '0',
                 ];
+                this.addAvifEncoderSpecificArgs(args, encoderConfig, preset);
+                args.push('-y', '-f', 'avif', tempFilePath);
             } else {
                 // For images without transparency
                 let filterChain = 'format=yuv420p';
@@ -583,112 +848,175 @@ export class ImageProcessor {
 
                 args = [
                     '-i', inputArg,
+                    '-frames:v', '1',
                     '-filter:v', filterChain,
-                    '-c:v', 'libaom-av1',
-                    '-crf', crf.toString(),
-                    '-preset', preset,
-                    '-still-picture', '1',
-                    '-y',
-                    '-f', 'avif',
-                    tempFilePath
+                    '-c:v', encoder,
+                    '-crf', validatedCrf.toString(),
+                    '-b:v', '0',
                 ];
+                this.addAvifEncoderSpecificArgs(args, encoderConfig, preset);
+                args.push('-pix_fmt', 'yuv420p', '-y', '-f', 'avif', tempFilePath);
             }
 
             let ffmpeg: ChildProcess | null = null;
+            let errorData = "";
+            let settled = false;
+            let safetyTimeout: ReturnType<typeof setTimeout> | null = null;
+
+            const cleanupTempFile = async () => {
+                try {
+                    await fs.unlink(tempFilePath);
+                } catch {
+                    // Temp files are best-effort cleanup.
+                }
+            };
+
+            const clearSafetyTimeout = () => {
+                if (safetyTimeout) {
+                    clearTimeout(safetyTimeout);
+                    safetyTimeout = null;
+                }
+            };
+
+            const fail = async (error: Error) => {
+                if (settled) return;
+                settled = true;
+                clearSafetyTimeout();
+                await cleanupTempFile();
+                reject(error);
+            };
+
+            const failOrFallback = async (error: Error) => {
+                if (settled) return;
+                clearSafetyTimeout();
+                await cleanupTempFile();
+
+                const isHardwareEncoder = encoderConfig.platformHint !== 'software';
+                const isHardwareError =
+                    errorData.includes('Cannot load') ||
+                    errorData.includes('could not open') ||
+                    errorData.includes('Could not open encoder') ||
+                    errorData.includes('nvcuda.dll') ||
+                    errorData.includes('No NVENC capable devices');
+
+                if (isHardwareEncoder && isHardwareError && !fallbackAttempted) {
+                    const softwareFallback = await this.detectSoftwareAvifEncoder(normalizedExecutablePath);
+                    if (softwareFallback) {
+                        this.rememberAvifEncoder(normalizedExecutablePath, softwareFallback);
+                        new Notice(`Hardware encoder unavailable. Falling back to ${softwareFallback}.`);
+                        try {
+                            const result = await this.processWithFFmpeg(
+                                file,
+                                normalizedExecutablePath,
+                                crf,
+                                preset,
+                                resizeMode,
+                                desiredWidth,
+                                desiredHeight,
+                                desiredLongestEdge,
+                                enlargeOrReduce,
+                                inputPath,
+                                softwareFallback,
+                                true
+                            );
+                            if (!settled) {
+                                settled = true;
+                                resolve(result);
+                            }
+                            return;
+                        } catch (fallbackError) {
+                            if (!settled) {
+                                settled = true;
+                                reject(fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError)));
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                if (!settled) {
+                    settled = true;
+                    reject(error);
+                }
+            };
+
+            const succeed = async () => {
+                if (settled) return;
+                settled = true;
+                clearSafetyTimeout();
+
+                try {
+                    const fileBuffer = await fs.readFile(tempFilePath);
+                    resolve(this.nodeBufferToArrayBuffer(fileBuffer));
+                } catch (readError) {
+                    console.error("Error reading temporary file:", readError);
+                    reject(new Error(`Failed to read the processed image from the temporary file: ${readError}`));
+                } finally {
+                    await cleanupTempFile();
+                }
+            };
+
+            const completeFromExitCode = (code: number | null) => {
+                if (code !== null && code !== 0) {
+                    const errorMessage = `FFmpeg failed with code ${code}: ${errorData}`;
+                    console.error(errorMessage);
+                    void failOrFallback(new Error(errorMessage));
+                    return;
+                }
+
+                void succeed();
+            };
 
             try {
                 if (Platform.isWin) {
-                    ffmpeg = spawn(executablePath, args, { windowsHide: true });
+                    ffmpeg = spawn(normalizedExecutablePath, args, { windowsHide: true });
                 } else {
-                    ffmpeg = spawn(executablePath, args);
+                    ffmpeg = spawn(normalizedExecutablePath, args);
                 }
             } catch (spawnError) {
                 const errorMessage = `Failed to spawn FFmpeg: ${spawnError instanceof Error ? spawnError.message : String(spawnError)}`;
                 console.error(errorMessage);
-                reject(new Error(errorMessage));
+                void fail(new Error(errorMessage));
                 return;
             }
-
-            // Fallback: ensure process terminates to unblock tests when mocks emit 'exit' instead of 'close'
-            const onExit = (code: number) => {
-                // Mirror close handler logic to reject on non-zero
-                ffmpeg?.removeAllListeners('close');
-                if (code !== 0) {
-                    const errorMessage = `FFmpeg failed with code ${code}: ${errorData}`;
-                    console.error(errorMessage);
-                    // Clean up temp file on error
-                    try { fs.unlink(tempFilePath); } catch { }
-                    reject(new Error(errorMessage));
-                }
-            };
-            ffmpeg.on('exit', onExit as any);
 
             if (!ffmpeg) {
-                reject(new Error("Failed to spawn FFmpeg process."));
+                void fail(new Error("Failed to spawn FFmpeg process."));
                 return;
             }
-
-            // No need for outputData array now, we're writing to a file.
-            let errorData = "";
 
             ffmpeg.stderr?.on('data', (data: Buffer) => {
                 errorData += data.toString();
             });
 
-            ffmpeg.on('close', async (code: number) => { // Make this callback async
-                if (code !== 0) {
-                    const errorMessage = `FFmpeg failed with code ${code}: ${errorData}`;
-                    console.error(errorMessage);
-                    // Clean up temp file on error
-                    try { await fs.unlink(tempFilePath); } catch { /* ignore errors during cleanup */ }
-                    reject(new Error(errorMessage));
-                    return;
-                }
-
-                try {
-                    // Read the temporary file and convert Buffer to ArrayBuffer
-                    const fileBuffer = await fs.readFile(tempFilePath);
-                    // Convert Node.js Buffer to ArrayBuffer (ensuring it's ArrayBuffer, not SharedArrayBuffer)
-                    const arrayBuffer: ArrayBuffer = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength) as ArrayBuffer;
-                    resolve(arrayBuffer);
-                } catch (readError) {
-                    console.error("Error reading temporary file:", readError);
-                    reject(new Error(`Failed to read the processed image from the temporary file: ${readError}`));
-                } finally {
-                    //  Clean up the temporary file.  VERY IMPORTANT.
-                    try {
-                        await fs.unlink(tempFilePath);
-                    } catch (unlinkError) {
-                        console.error("Error deleting temporary file:", unlinkError);
-                        //  Don't reject here; we already resolved/rejected.
-                    }
-                }
-            });
+            ffmpeg.on('close', (code: number | null) => completeFromExitCode(code));
+            ffmpeg.on('exit', (code: number | null) => completeFromExitCode(code));
 
             ffmpeg.on('error', (err: Error) => {
                 const errorMessage = `Error with FFmpeg process: ${err.message}`;
                 console.error(errorMessage);
-                // Clean up temp file on error (if it exists)
-                fs.unlink(tempFilePath).catch(e => { /* ignore errors during cleanup */ });
-                reject(new Error(errorMessage));
+                void fail(new Error(errorMessage));
             });
 
             // Safety timeout to avoid hanging tests in case mocks fail to emit expected events
-            const safetyTimeout = setTimeout(() => {
+            safetyTimeout = setTimeout(() => {
                 try { ffmpeg?.kill?.('SIGKILL'); } catch { }
-                reject(new Error('FFmpeg process timed out'));
+                void fail(new Error('FFmpeg process timed out'));
             }, 5000);
 
-            ffmpeg.on('close', () => clearTimeout(safetyTimeout));
-            ffmpeg.on('exit', () => clearTimeout(safetyTimeout));
-
             // Only write to stdin if NOT using direct file
-            if (!useDirectFile && imageData) {
-                ffmpeg.stdin?.write(Buffer.from(imageData));
-                ffmpeg.stdin?.end();
-            } else if (useDirectFile) {
-                // If using file input, close stdin to signal we won't send anything (just in case)
-                ffmpeg.stdin?.end();
+            try {
+                if (!useDirectFile && imageData) {
+                    ffmpeg.stdin?.write(Buffer.from(imageData));
+                    ffmpeg.stdin?.end();
+                } else if (useDirectFile) {
+                    // If using file input, close stdin to signal we won't send anything (just in case)
+                    ffmpeg.stdin?.end();
+                }
+            } catch (stdinError) {
+                const errorMessage = `Failed to write image data to FFmpeg: ${stdinError instanceof Error ? stdinError.message : String(stdinError)}`;
+                console.error(errorMessage);
+                void fail(new Error(errorMessage));
             }
         });
     }
@@ -945,11 +1273,7 @@ export class ImageProcessor {
                 new Promise<ArrayBuffer>((resolve) => {
                     canvas.toBlob(
                         async (blob) => {
-                            if (!blob) {
-                                resolve(new ArrayBuffer(0));
-                                return;
-                            }
-                            resolve(await blob.arrayBuffer());
+                            resolve(await this.blobToArrayBufferOrEmpty(blob, 'WebP toBlob'));
                         },
                         'image/webp',
                         quality
@@ -1313,11 +1637,7 @@ export class ImageProcessor {
                 new Promise<ArrayBuffer>((resolve) => {
                     canvas.toBlob(
                         async (blob) => {
-                            if (!blob) {
-                                resolve(new ArrayBuffer(0));
-                                return;
-                            }
-                            resolve(await blob.arrayBuffer());
+                            resolve(await this.blobToArrayBufferOrEmpty(blob, 'PNG toBlob'));
                         },
                         'image/png'
                     );
@@ -1405,127 +1725,87 @@ export class ImageProcessor {
         inputPath: string | null = null
     ): Promise<ArrayBuffer> {
 
-        // 1. Resize if necessary *before* passing to pngquant.
         let resizedBlob: Blob = file;
-        let useDirectFile = false;
 
         if (resizeMode !== 'None') {
             const resizedBuffer = await this.resizeImage(file, resizeMode, desiredWidth, desiredHeight, desiredLongestEdge, enlargeOrReduce);
             resizedBlob = new Blob([resizedBuffer], { type: file.type });
-        } else if (inputPath) {
-            useDirectFile = true;
         }
 
-        // 2. Get image data as ArrayBuffer (only if not using direct file)
-        const imageData = useDirectFile ? null : await resizedBlob.arrayBuffer();
+        // Keep pngquant on stdin/stdout to avoid source-file side effects.
+        const imageData = await resizedBlob.arrayBuffer();
 
         return new Promise((resolve, reject) => {
-            // 3. Construct the command.
-            // If using direct file, pass path. Else use '-' for stdin.
-            const args = ['--quality', quality, useDirectFile && inputPath ? inputPath : '-'];
+            const args = ['--quality', quality, '-'];
 
-            // If using direct file, we need to capture stdout to get the result ??
-            // pngquant by default writes to same file if --ext is used, or stdout if - is used.
-            // If we pass a filename, it might overwrite or need --ext.
-            // Wait, pngquant output behavior:
-            // "If you don't specify output filename, it will write to stdout." -> This applies if input is stdin?
-            // "If you specify input file, it normally overwrites or creates suffix."
-            // We want output to stdout so we can capture it.
-            // Does pngquant support writing to stdout when input is file?
-            // "pngquant --quality=65-80 input.png" -> writes input-fs8.png
-            // "pngquant --quality=65-80 - < input.png" -> writes to stdout
-            // "pngquant --quality=65-80 input.png --output -" ? (Depends on version)
-
-            // If pngquant doesn't easily support input-file -> stdout, then zero-copy might be complex without a temp output file.
-            // Checking docs: "To write to stdout, use -" as output filename? No locally installed man page.
-
-            // Re-evaluating risk: If I pass path, it creates a new file on disk. I want the buffer back.
-            // Better to stick to stdin for pngquant unless I'm sure about usage.
-            // OR use '--output -' if supported.
-            // Common pattern: `cat file | pngquant -` is what we do now (via memory).
-
-            // Let's stick to memory for PNGQuant for safety unless confirmed, OR check if we can read the output file.
-            // BUT FFmpeg DEFINITELY supports -i input.file -> stdout (or pipe).
-
-            // Start with FFmpeg optimization as it's more standard.
-            // For PNGQuant, I'll stick to piping for now to avoid side-effects on disk (overwriting source).
-            // Reverting "useDirectFile" for PNGQuant unless I use a temp file for output or confirm stdout support.
-
-            // Actually, if I use a temp file for output (which I do for AVIF), I could do that for PNGQuant too?
-            // But processWithPngquant currently captures stdout.
-
-            // Let's KEEP piping for PNGQuant for now to minimize regression risk, 
-            // but implement it for FFmpeg where I recently added temp file logic.
-
-            let pngquant: ChildProcess | null = null; // Initialize to null
+            let pngquant: ChildProcess | null = null;
 
             try {
-                if (Platform.isWin) { // Corrected: Use isWin
+                if (Platform.isWin) {
                     pngquant = spawn(executablePath, args, { windowsHide: true });
                 } else {
                     pngquant = spawn(executablePath, args);
                 }
             } catch (spawnError) {
-                // Handle spawn errors *immediately*.  This is crucial.
                 const errorMessage = `Failed to spawn pngquant: ${spawnError instanceof Error ? spawnError.message : String(spawnError)}`;
                 console.error(errorMessage);
                 reject(new Error(errorMessage));
-                return; // Exit early.
+                return;
             }
 
-
-            // --- Null Check and Early Return ---
             if (!pngquant) {
                 reject(new Error("Failed to spawn pngquant process."));
-                return; // *Crucially* return to prevent further execution
+                return;
             }
 
-            // 4. Data Handling: We use let for outputData because we might
-            //    reassign it in case of an error.
             const outputData: Buffer[] = [];
             let errorData = "";
 
-            // 5. Handle stdout.  pngquant writes the *processed image data* to stdout.
             pngquant.stdout?.on('data', (data: Buffer) => {
                 outputData.push(data);
             });
 
-            // 6. Handle stderr.  pngquant writes *errors* to stderr.
             pngquant.stderr?.on('data', (data: Buffer) => {
                 errorData += data.toString();
             });
 
-            // 7. Handle Process Exit
-            pngquant.on('close', (code: number) => {
+            let settled = false;
+
+            const complete = (code: number | null) => {
+                if (settled) return;
+                settled = true;
+
                 if (code !== 0) {
-                    // 8. Error:  If pngquant exits with a non-zero code, it's an error.
                     const errorMessage = `pngquant failed with code ${code}: ${errorData}`;
                     console.error(errorMessage);
                     reject(new Error(errorMessage));
                     return;
                 }
 
-                // 9. Success: If we get here, pngquant succeeded.  Concatenate the
-                //    Buffer chunks and convert to ArrayBuffer.
                 const resultBuffer = Buffer.concat(outputData);
-                // Convert Node.js Buffer to ArrayBuffer (ensuring it's ArrayBuffer, not SharedArrayBuffer)
-                const arrayBuffer: ArrayBuffer = resultBuffer.buffer.slice(resultBuffer.byteOffset, resultBuffer.byteOffset + resultBuffer.byteLength) as ArrayBuffer;
-                resolve(arrayBuffer);
-            });
+                resolve(this.nodeBufferToArrayBuffer(resultBuffer));
+            };
 
-            // 10. Handle Errors on the process itself (e.g., couldn't start).
+            pngquant.on('close', (code: number | null) => complete(code));
+            pngquant.on('exit', (code: number | null) => complete(code));
+
             pngquant.on('error', (err: Error) => {
+                if (settled) return;
+                settled = true;
                 const errorMessage = `Error with pngquant process: ${err.message}`;
                 console.error(errorMessage);
                 reject(new Error(errorMessage));
             });
 
-
-            // 11. Write the image data to pngquant's stdin.  This is how we
-            //     pass the image to be processed.
-            if (imageData) {
+            try {
                 pngquant.stdin?.write(Buffer.from(imageData));
-                pngquant.stdin?.end(); // Close stdin - *important*!
+                pngquant.stdin?.end();
+            } catch (stdinError) {
+                if (settled) return;
+                settled = true;
+                const errorMessage = `Failed to write image data to pngquant: ${stdinError instanceof Error ? stdinError.message : String(stdinError)}`;
+                console.error(errorMessage);
+                reject(new Error(errorMessage));
             }
 
         });
@@ -1825,6 +2105,52 @@ export class ImageProcessor {
         }
         const reducedImageData = new ImageData(reducedData, imageData.width, imageData.height);
         return reducedImageData;
+    }
+
+    private nodeBufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
+        const arrayBuffer = new ArrayBuffer(buffer.byteLength);
+        new Uint8Array(arrayBuffer).set(buffer);
+        return arrayBuffer;
+    }
+
+    private async blobToArrayBufferOrEmpty(blob: Blob | null, context: string): Promise<ArrayBuffer> {
+        if (!blob) {
+            return new ArrayBuffer(0);
+        }
+
+        try {
+            return await blob.arrayBuffer();
+        } catch (error) {
+            console.error(`${context} failed:`, error);
+            return new ArrayBuffer(0);
+        }
+    }
+
+    private mapAvifPresetToCpuUsed(preset: string): string {
+        const numeric = Number(preset);
+        if (Number.isInteger(numeric) && numeric >= 0 && numeric <= 8) {
+            return String(numeric);
+        }
+
+        const presetMap: Record<string, number> = {
+            placebo: 0,
+            veryslow: 0,
+            slower: 1,
+            slow: 2,
+            medium: 4,
+            fast: 5,
+            faster: 6,
+            veryfast: 7,
+            superfast: 8,
+            ultrafast: 8,
+        };
+
+        return String(presetMap[preset] ?? 4);
+    }
+
+    private notifyProcessingFailure(filename: string, format: string, error: unknown): void {
+        const reason = error instanceof Error ? error.message : String(error);
+        new Notice(`Failed to process ${filename} as ${format}: ${reason}`);
     }
 
     /**

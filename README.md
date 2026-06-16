@@ -61,7 +61,8 @@ Online sharing, saves local vault space.
 - **Link replacement**: Inserts the cloud URL instead of a local path.
 - **Batch upload**: One command to upload all images in the current note.
 - **Network image upload**: Upload images from URLs directly to your cloud host.
-- **Delete after upload**: Option to remove the local file after successful upload.
+- **Review before deleting**: Upload review dialogs can replace links and delete local source files after confirmation.
+- **Remote server mode**: Send vault-relative paths to a remote PicGo/PicList service; network URL uploads are disabled in this mode.
 
 ### Per-Note Override
 
@@ -92,6 +93,16 @@ One-click download of online images referenced in notes to your local vault.
 - **Replace Only** — Assume already downloaded, swap URLs to local paths
 
 Scope: current note, folder (recursive), or entire vault.
+
+### Source Plugin Compatibility
+
+Image Assistant aims for practical feature parity with its source plugins rather than a one-to-one copy of every legacy setting.
+
+- Image Auto Upload's `image-auto-upload` frontmatter is replaced by `image_paste_mode: local|cloud|disabled`.
+- Image Converter's old conversion/folder/filename multi-preset model is deprecated; Image Assistant now uses one local processing configuration plus operation defaults.
+- Local batch processing focuses on original/WebP/JPEG/PNG workflows; AVIF and pngquant remain available through single-image and local processing paths.
+- Cloud source deletion is confirmation-based in upload review dialogs instead of an automatic global toggle.
+- OCR includes the original provider styles plus the newer LLM/Ollama-compatible provider.
 
 ### Image Annotation
 Draw, arrow, stamp text, and markup images directly inside Obsidian.
@@ -190,7 +201,7 @@ Enable/disable individually in Settings. All caption styles (font, color, backgr
 ## 📥 Installation
 
 1. Download `main.js`, `styles.css`, and `manifest.json` from [Releases](https://github.com/RandyAllenEEE/obsidian-image-assistant/releases).
-2. Place them in `.obsidian/plugins/image-assistant/`.
+2. Place them in `.obsidian/plugins/obsidian-image-assistant/`.
 3. Restart Obsidian and enable the plugin.
 
 *Or install via BRAT: search for `RandyAllenEEE/obsidian-image-assistant` in BRAT.*

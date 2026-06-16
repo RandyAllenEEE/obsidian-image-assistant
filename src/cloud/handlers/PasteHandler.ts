@@ -20,6 +20,27 @@ export class PasteHandler extends BasePasteHandler {
         this.helpers = new CloudResourceHelpers(plugin);
     }
 
+    async handlePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
+        if (evt.defaultPrevented) return;
+        if (!evt.clipboardData) return;
+
+        const items = this.collectClipboardData(evt);
+        const supportedFiles = this.filterSupportedFiles(items);
+
+        if (supportedFiles.length > 0) {
+            const clipboardText = evt.clipboardData.getData('text/plain') || evt.clipboardData.getData('text') || '';
+            if (clipboardText.trim() && !this.plugin.settings.pasteHandling.cloud.applyImage) {
+                return;
+            }
+
+            evt.preventDefault();
+            await this.processFiles(supportedFiles, editor);
+            return;
+        }
+
+        await this.handleNonFilePaste(evt, editor);
+    }
+
     // override to handle text paste
     protected async handleNonFilePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
         if (!evt.clipboardData) return;
@@ -30,26 +51,20 @@ export class PasteHandler extends BasePasteHandler {
     }
 
     public async processFiles(files: File[], editor: Editor): Promise<void> {
-        // We generally need to check for mixed content (Text + Image) here if applyImage setting is on
-        // But BasePasteHandler filters files.
-        // Cloud logic had a specific check: "if has text and has image, only proceed if settings.applyImage"
-        // BasePasteHandler doesn't pass text.
-        // However, if processFiles is called, it means files exist.
-        // We can access clipboard data via 'navigator.clipboard' but that's async and tricky inside synchronous flow?
-        // Actually BasePasteHandler abstracts that.
-        // For Cloud, maybe we assume if we are here, we process files.
-        // The original check "hasText && hasImageFile && !applyImage" logic might is slightly lost if we split them pure.
-        // But let's assume if BasePasteHandler calls processFiles, we process them.
-
         const activeFile = this.app.workspace.getActiveFile();
         if (!activeFile) {
             new Notice(t("MSG_NO_ACTIVE_FILE") || 'No active file detected.');
             return;
         }
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeView) {
+            new Notice(t("MSG_NO_ACTIVE_VIEW") || 'No active Markdown view detected.');
+            return;
+        }
 
         for (const file of files) {
             // Insert uploading placeholder using EditorContentInserter
-            const inserter = new EditorContentInserter(this.app.workspace.getActiveViewOfType(MarkdownView)!);
+            const inserter = new EditorContentInserter(activeView);
             inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
 
             try {
@@ -93,6 +108,11 @@ export class PasteHandler extends BasePasteHandler {
         cursor: EditorPosition,
         evt: ClipboardEvent
     ) {
+        if (evt.defaultPrevented) return;
+        if (this.plugin.settings.pasteHandling.cloud.remoteServerMode) {
+            return;
+        }
+
         if (!this.plugin.settings.pasteHandling.cloud.workOnNetWork) {
             return;
         }

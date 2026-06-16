@@ -1,3 +1,5 @@
+import { vi } from 'vitest';
+
 /**
  * Mock implementation of the Obsidian module
  * Provides test doubles for all Obsidian API imports
@@ -21,6 +23,7 @@ export class Notice {
 export class Plugin {
   app: App;
   manifest: any;
+  private children: Array<{ load?: () => void; onunload?: () => void }> = [];
   
   constructor(app: App, manifest: any) {
     this.app = app;
@@ -33,6 +36,16 @@ export class Plugin {
   addRibbonIcon(icon: string, title: string, callback: () => void) {}
   addSettingTab(tab: any) {}
   registerEvent(event: any) {}
+  addChild<T extends { load?: () => void; onunload?: () => void }>(child: T): T {
+    this.children.push(child);
+    child.load?.();
+    return child;
+  }
+  removeChild<T extends { onunload?: () => void }>(child: T): T {
+    this.children = this.children.filter((existing) => existing !== child);
+    child.onunload?.();
+    return child;
+  }
   registerDomEvent(el: HTMLElement | Document, event: string, callback: any, useCapture?: boolean) {
     // Attach to DOM for integration-lite tests
     (el as any).addEventListener?.(event, callback, useCapture as any);
@@ -61,6 +74,39 @@ export class Modal {
   close() {}
   onOpen() {}
   onClose() {}
+}
+
+export class FuzzySuggestModal<T> extends Modal {
+  inputEl: HTMLInputElement;
+  emptyStateText = '';
+  placeholder = '';
+  instructions: Array<{ command: string; purpose: string }> = [];
+
+  constructor(app: App) {
+    super(app);
+    this.inputEl = document.createElement('input');
+    this.contentEl.appendChild(this.inputEl);
+  }
+
+  setPlaceholder(text: string): this {
+    this.placeholder = text;
+    this.inputEl.placeholder = text;
+    return this;
+  }
+
+  setInstructions(instructions: Array<{ command: string; purpose: string }>): this {
+    this.instructions = instructions;
+    return this;
+  }
+
+  setEmptyStateText(text: string): this {
+    this.emptyStateText = text;
+    return this;
+  }
+
+  getItems(): T[] { return []; }
+  getItemText(_item: T): string { return ''; }
+  onChooseItem(_item: T, _evt?: MouseEvent | KeyboardEvent): void {}
 }
 
 export class PluginSettingTab {
@@ -236,6 +282,7 @@ export class Setting {
   
   setClass(cls: string): this { this.settingEl.classList.add(cls); return this; }
   setName(_name: string): this { return this; }
+  setHeading(): this { this.settingEl.classList.add('setting-item-heading'); return this; }
   setDesc(_desc: string): this { return this; }
   setTooltip(_text: string): this { return this; }
   addText(cb: (text: TextComponent) => void): this { const textComponent = new TextComponent(this.controlEl); cb(textComponent); this.components.push(textComponent); return this; }
@@ -423,16 +470,32 @@ export const Platform = {
 // Menu and component primitives
 export class Component {
   private disposables: Array<() => void> = [];
+  private children: Array<{ load?: () => void; onunload?: () => void }> = [];
   load() { /* no-op for tests */ }
   register(cb?: () => void) {
     if (cb) this.disposables.push(cb);
   }
   registerEvent(_event: any) {}
+  addChild<T extends { load?: () => void; onunload?: () => void }>(child: T): T {
+    this.children.push(child);
+    child.load?.();
+    return child;
+  }
+  removeChild<T extends { onunload?: () => void }>(child: T): T {
+    this.children = this.children.filter((existing) => existing !== child);
+    child.onunload?.();
+    return child;
+  }
   registerDomEvent(el: HTMLElement | Document, event: string, handler: any, useCapture?: boolean) {
     (el as any).addEventListener?.(event, handler, useCapture as any);
     this.disposables.push(() => (el as any).removeEventListener?.(event, handler, useCapture as any));
   }
-  onunload() { this.disposables.forEach(dispose => dispose()); this.disposables = []; }
+  onunload() {
+    this.children.forEach(child => child.onunload?.());
+    this.children = [];
+    this.disposables.forEach(dispose => dispose());
+    this.disposables = [];
+  }
 }
 
 export class MenuItem {
@@ -462,6 +525,7 @@ export class Menu {
 export class View { getViewType(): string { return 'markdown'; } }
 export class MarkdownView extends View { editor: any = { getValue: () => '', setValue: (_: string) => {} }; }
 export class Editor {}
+export interface EditorPosition { line: number; ch: number; }
 
 // Utility functions
 export function normalizePath(path: string): string {
@@ -480,9 +544,31 @@ export function setIcon(_el: HTMLElement, _icon: string): void {
   // Mock implementation
 }
 
+export function setTooltip(el: HTMLElement, text: string): void {
+  el.title = text;
+}
+
+export const requestUrl = vi.fn();
+
 export function getIcon(_name: string): string | null {
   return null;
 }
+
+export const moment: any = Object.assign(
+  () => ({
+    format: () => '2025-01-02',
+    add: () => moment(),
+    subtract: () => moment(),
+    startOf: () => moment(),
+    endOf: () => moment(),
+    daysInMonth: () => 31,
+    week: () => 1,
+    quarter: () => 1,
+    calendar: () => '2025-01-02',
+    fromNow: () => 'in a few seconds'
+  }),
+  { locale: () => 'en' }
+);
 
 // Keyboard Scope used by ImageAnnotation
 export class Scope {

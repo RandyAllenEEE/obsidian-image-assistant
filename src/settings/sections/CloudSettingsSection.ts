@@ -1,4 +1,4 @@
-import { Setting, setIcon } from "obsidian";
+import { Notice, Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
 import { PasteHandlingMode, SettingsUIState } from "../types";
@@ -67,6 +67,21 @@ export function renderCloudSettingsSection(
     // --- Cloud Upload Settings (only show when cloud mode is selected) ---
     if (plugin.settings.pasteHandling.mode === "cloud") {
         const cloudSettingsContainer = contentWrapper.createDiv("cloud-settings-container");
+
+        new Setting(cloudSettingsContainer)
+            .setName(t("SETTING_REMOTE_SERVER_MODE"))
+            .setDesc(t("SETTING_REMOTE_SERVER_MODE_DESC"))
+            .addToggle(toggle => toggle
+                .setValue(plugin.settings.pasteHandling.cloud.remoteServerMode)
+                .onChange(async (value) => {
+                    plugin.settings.pasteHandling.cloud.remoteServerMode = value;
+                    if (value) {
+                        plugin.settings.pasteHandling.cloud.workOnNetWork = false;
+                    }
+                    await plugin.saveSettings();
+                    refreshDisplay();
+                })
+            );
 
         // Uploader Type
         new Setting(cloudSettingsContainer)
@@ -188,19 +203,30 @@ export function renderCloudSettingsSection(
         }
 
         // Network Image Settings
-        new Setting(cloudSettingsContainer)
-            .setName(t("SETTING_WORK_ON_NETWORK"))
-            .setDesc(t("SETTING_WORK_ON_NETWORK_DESC"))
-            .addToggle(toggle => toggle
-                .setValue(plugin.settings.pasteHandling.cloud.workOnNetWork)
-                .onChange(async (value) => {
-                    plugin.settings.pasteHandling.cloud.workOnNetWork = value;
-                    await plugin.saveSettings();
-                    refreshDisplay();
-                })
-            );
+        if (plugin.settings.pasteHandling.cloud.remoteServerMode) {
+            new Setting(cloudSettingsContainer)
+                .setName(t("SETTING_WORK_ON_NETWORK"))
+                .setDesc(t("SETTING_WORK_ON_NETWORK_REMOTE_DISABLED_DESC"));
+        } else {
+            new Setting(cloudSettingsContainer)
+                .setName(t("SETTING_WORK_ON_NETWORK"))
+                .setDesc(t("SETTING_WORK_ON_NETWORK_DESC"))
+                .addToggle(toggle => toggle
+                    .setValue(plugin.settings.pasteHandling.cloud.workOnNetWork)
+                    .onChange(async (value) => {
+                        if (value && plugin.settings.pasteHandling.cloud.remoteServerMode) {
+                            plugin.settings.pasteHandling.cloud.workOnNetWork = false;
+                            new Notice(t("NOTICE_NETWORK_DISABLED_IN_REMOTE_MODE"));
+                        } else {
+                            plugin.settings.pasteHandling.cloud.workOnNetWork = value;
+                        }
+                        await plugin.saveSettings();
+                        refreshDisplay();
+                    })
+                );
+        }
 
-        if (plugin.settings.pasteHandling.cloud.workOnNetWork) {
+        if (!plugin.settings.pasteHandling.cloud.remoteServerMode && plugin.settings.pasteHandling.cloud.workOnNetWork) {
             new Setting(cloudSettingsContainer)
                 .setName(t("SETTING_NETWORK_BLACKLIST"))
                 .setDesc(t("SETTING_NETWORK_BLACKLIST_DESC"))
@@ -222,18 +248,6 @@ export function renderCloudSettingsSection(
                 .setValue(plugin.settings.pasteHandling.cloud.applyImage)
                 .onChange(async (value) => {
                     plugin.settings.pasteHandling.cloud.applyImage = value;
-                    await plugin.saveSettings();
-                })
-            );
-
-        // Delete Source Settings
-        new Setting(cloudSettingsContainer)
-            .setName(t("SETTING_DELETE_SOURCE"))
-            .setDesc(t("SETTING_DELETE_SOURCE_DESC"))
-            .addToggle(toggle => toggle
-                .setValue(plugin.settings.pasteHandling.cloud.deleteSource)
-                .onChange(async (value) => {
-                    plugin.settings.pasteHandling.cloud.deleteSource = value;
                     await plugin.saveSettings();
                 })
             );

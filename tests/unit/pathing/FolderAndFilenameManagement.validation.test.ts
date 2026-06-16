@@ -3,6 +3,7 @@ import { FolderAndFilenameManagement } from '../../../src/local/FolderAndFilenam
 import { VariableProcessor } from '../../../src/local/VariableProcessor';
 import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
 import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
+import type { LocalDestinationSettings, LocalFilenameSettings } from '../../../src/settings/types';
 import { fakeApp, fakeVault, fakeTFile } from '../../factories/obsidian';
 
 describe('FolderAndFilenameManagement.validateTemplates delegates to VariableProcessor and throws on invalid', () => {
@@ -15,9 +16,9 @@ describe('FolderAndFilenameManagement.validateTemplates delegates to VariablePro
 
     const activeRoot = fakeTFile({ path: 'Root.md', name: 'Root.md', basename: 'Root', parent: { path: '/', name: '/', parent: null, children: [] } as any });
     const file = new File([new Uint8Array([1])], 'x.png', { type: 'image/png' });
-    const fname: FilenamePreset = { name: 'Custom', customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
-    const folder: FolderPreset = { type: 'CUSTOM', name: 'Custom', customTemplate: 'x/{grandparentfolder}' };
+    const fname: LocalFilenameSettings = { customTemplate: '{imagename}', skipRenamePatterns: '', conflictResolution: 'increment' };
+    const folder: LocalDestinationSettings = { type: 'CUSTOM', customTemplate: 'x/{grandparentfolder}' };
 
-    await expect(ffm.determineDestination(file, activeRoot as any, settings.conversionPresets[0] as any, fname, folder)).rejects.toThrow(/validation failed/i);
+    await expect(ffm.determineDestination(file, activeRoot as any, settings.localProcessing.conversion, fname, folder)).rejects.toThrow(/validation failed/i);
   });
 });

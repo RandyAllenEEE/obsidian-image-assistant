@@ -28,8 +28,13 @@ export class Crop extends Modal {
 	private cropContainer: HTMLDivElement;
 	private selectionArea: HTMLDivElement;
 	private isDrawing = false;
+	private isPanning = false;
 	private startX = 0;
 	private startY = 0;
+	private panStartX = 0;
+	private panStartY = 0;
+	private currentPanX = 0;
+	private currentPanY = 0;
 	private originalImage: HTMLImageElement;
 	private imageScale: { x: number, y: number } = { x: 1, y: 1 };
 
@@ -54,22 +59,44 @@ export class Crop extends Modal {
 	private setupEventListeners() {
 		// Mouse down - start drawing selection
 		this.componentContainer.registerDomEvent(this.cropContainer, 'mousedown', (e: MouseEvent) => {
-			if (e.target === this.originalImage) {
-				this.isDrawing = true;
-				const rect = this.cropContainer.getBoundingClientRect();
-				this.startX = e.clientX - rect.left;
-				this.startY = e.clientY - rect.top;
+			if (e.target !== this.originalImage) return;
 
-				this.selectionArea.style.display = 'block';
-				this.selectionArea.style.left = `${this.startX}px`;
-				this.selectionArea.style.top = `${this.startY}px`;
-				this.selectionArea.style.width = '0';
-				this.selectionArea.style.height = '0';
+			if (e.button === 1) {
+				e.preventDefault();
+				this.isPanning = true;
+				this.panStartX = e.clientX;
+				this.panStartY = e.clientY;
+				this.cropContainer.style.cursor = 'grabbing';
+				return;
 			}
+
+			if (e.button !== 0) return;
+
+			e.preventDefault();
+			this.isDrawing = true;
+			const rect = this.cropContainer.getBoundingClientRect();
+			this.startX = e.clientX - rect.left;
+			this.startY = e.clientY - rect.top;
+
+			this.selectionArea.style.display = 'block';
+			this.selectionArea.style.left = `${this.startX}px`;
+			this.selectionArea.style.top = `${this.startY}px`;
+			this.selectionArea.style.width = '0';
+			this.selectionArea.style.height = '0';
 		});
 
 		// Mouse move - update selection size
 		this.componentContainer.registerDomEvent(this.cropContainer, 'mousemove', (e: MouseEvent) => {
+			if (this.isPanning) {
+				e.preventDefault();
+				this.currentPanX += e.clientX - this.panStartX;
+				this.currentPanY += e.clientY - this.panStartY;
+				this.panStartX = e.clientX;
+				this.panStartY = e.clientY;
+				this.applyTransforms();
+				return;
+			}
+
 			if (!this.isDrawing) return;
 			const rect = this.cropContainer.getBoundingClientRect();
 			const currentX = e.clientX - rect.left;
@@ -79,13 +106,26 @@ export class Crop extends Modal {
 
 		// Mouse up - finish drawing selection
 		this.componentContainer.registerDomEvent(this.cropContainer, 'mouseup', (e: MouseEvent) => {
+			if (this.isPanning) {
+				this.isPanning = false;
+				this.cropContainer.style.cursor = '';
+				return;
+			}
+
+			if (!this.isDrawing || e.button !== 0) return;
 			this.isDrawing = false;
-			this.makeSelectionMovable();
+			const width = parseFloat(this.selectionArea.style.width || '0');
+			const height = parseFloat(this.selectionArea.style.height || '0');
+			if (width > 0 && height > 0) {
+				this.makeSelectionMovable();
+			}
 		});
 
 		// Prevent selection from getting stuck if mouse leaves the container
 		this.componentContainer.registerDomEvent(this.cropContainer, 'mouseleave', (e: MouseEvent) => {
 			this.isDrawing = false;
+			this.isPanning = false;
+			this.cropContainer.style.cursor = '';
 		});
 	}
 
@@ -248,6 +288,9 @@ export class Crop extends Modal {
 
 		return new Promise<void>((resolve, reject) => {
 			this.originalImage.onload = () => {
+				this.currentPanX = 0;
+				this.currentPanY = 0;
+				this.applyTransforms();
 				this.adjustModalSize();
 
 				// Calculate scaling factors
@@ -451,6 +494,10 @@ export class Crop extends Modal {
 	private applyTransforms() {
 		const transforms: string[] = [];
 
+		if (this.currentPanX !== 0 || this.currentPanY !== 0) {
+			transforms.push(`translate(${this.currentPanX}px, ${this.currentPanY}px)`);
+		}
+
 		// Add zoom
 		if (this.zoom !== 1) {
 			transforms.push(`scale(${this.zoom})`);
@@ -589,6 +636,8 @@ export class Crop extends Modal {
 
 
 	private addResizeHandles() {
+		this.selectionArea.querySelectorAll('.resize-handle').forEach(handle => handle.remove());
+
 		// Create resize handles for all corners and edges
 		const handles = [
 			'nw', 'n', 'ne',
@@ -729,6 +778,9 @@ export class Crop extends Modal {
 		this.selectionArea.style.display = 'none';
 		this.selectionArea.style.width = '0';
 		this.selectionArea.style.height = '0';
+		this.currentPanX = 0;
+		this.currentPanY = 0;
+		this.applyTransforms();
 	}
 
 	async saveImage() {

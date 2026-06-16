@@ -4,6 +4,7 @@ import { t } from '../../../lang/helpers';
 import { FolderAndFilenameManagement } from '../../../local/FolderAndFilenameManagement';
 import ImageConverterPlugin from '../../../main';
 import { ImageState } from '../../ImageStateManager';
+import { getVaultConfigBoolean } from '../../../utils/vaultConfig';
 
 export interface RenameInputs {
     nameInput: HTMLInputElement;
@@ -48,7 +49,7 @@ export class RenameInputBuilder extends Component {
      */
     buildInputs(menu: Menu, img: HTMLImageElement, activeFile: TFile, isNetwork: boolean = false): RenameInputs | null {
         // ... (lines 46-73: check native menus, resolve basic info) ...
-        const isNativeMenus = (this.app.vault as any).getConfig('nativeMenus');
+        const isNativeMenus = getVaultConfigBoolean(this.app, 'nativeMenus', false);
 
         if (!isNativeMenus && !Platform.isMobile) {
             const imagePath = (this.folderManagement && typeof (this.folderManagement as any).getImagePath === 'function')
@@ -96,7 +97,15 @@ export class RenameInputBuilder extends Component {
                     this.registerDomEvent(input, 'keydown', this.stopPropagationHandler);
                 });
 
-                this.registerDomEvent(document, 'click', this.documentClickHandler!);
+                if (!this.documentClickHandler) {
+                    this.documentClickHandler = (event: MouseEvent) => {
+                        const target = event.target as Element | null;
+                        if (!target?.closest?.('.image-converter-contextmenu-info-container')) {
+                            return;
+                        }
+                    };
+                }
+                this.registerDomEvent(container.ownerDocument, 'click', this.documentClickHandler);
 
                 // Clear and set the menu item content
                 const maybeDom: any = (menuItem as any).dom;
@@ -135,24 +144,26 @@ export class RenameInputBuilder extends Component {
     ) {
         // ... (lines 131-253: name, path, caption, dimensions setup) ...
         // Create main container
-        const inputContainer = document.createElement('div');
+        const ownerDocument = img.ownerDocument ?? document;
+
+        const inputContainer = ownerDocument.createElement('div');
         inputContainer.className = 'image-converter-contextmenu-info-container';
 
         // Create name input group
-        const nameGroup = document.createElement('div');
+        const nameGroup = ownerDocument.createElement('div');
         nameGroup.className = 'image-converter-contextmenu-input-group';
 
-        const nameIcon = document.createElement('div');
+        const nameIcon = ownerDocument.createElement('div');
         nameIcon.className = 'image-converter-contextmenu-icon-container';
         setIcon(nameIcon, 'file-text');
         nameGroup.appendChild(nameIcon);
 
-        const nameLabel = document.createElement('label');
+        const nameLabel = ownerDocument.createElement('label');
         nameLabel.textContent = t("LABEL_NAME");
         nameLabel.setAttribute('for', 'image-converter-name-input');
         nameGroup.appendChild(nameLabel);
 
-        const nameInput = document.createElement('input');
+        const nameInput = ownerDocument.createElement('input');
         nameInput.type = 'text';
         nameInput.value = fileNameWithoutExt;
         nameInput.placeholder = t("PLACEHOLDER_NAME");
@@ -165,20 +176,20 @@ export class RenameInputBuilder extends Component {
         nameGroup.appendChild(nameInput);
 
         // Create path input group
-        const pathGroup = document.createElement('div');
+        const pathGroup = ownerDocument.createElement('div');
         pathGroup.className = 'image-converter-contextmenu-input-group';
 
-        const pathIcon = document.createElement('div');
+        const pathIcon = ownerDocument.createElement('div');
         pathIcon.className = 'image-converter-contextmenu-icon-container';
         setIcon(pathIcon, 'folder');
         pathGroup.appendChild(pathIcon);
 
-        const pathLabel = document.createElement('label');
+        const pathLabel = ownerDocument.createElement('label');
         pathLabel.textContent = t("LABEL_FOLDER_CONTEXT");
         pathLabel.setAttribute('for', 'image-converter-path-input');
         pathGroup.appendChild(pathLabel);
 
-        const pathInput = document.createElement('input');
+        const pathInput = ownerDocument.createElement('input');
         pathInput.type = 'text';
         pathInput.value = directoryPath;
         pathInput.placeholder = t("PLACEHOLDER_PATH");
@@ -191,20 +202,20 @@ export class RenameInputBuilder extends Component {
         pathGroup.appendChild(pathInput);
 
         // Create caption input group
-        const captionGroup = document.createElement('div');
+        const captionGroup = ownerDocument.createElement('div');
         captionGroup.className = 'image-converter-contextmenu-input-group';
 
-        const captionIcon = document.createElement('div');
+        const captionIcon = ownerDocument.createElement('div');
         captionIcon.className = 'image-converter-contextmenu-icon-container';
         setIcon(captionIcon, 'subtitles');
         captionGroup.appendChild(captionIcon);
 
-        const captionLabel = document.createElement('label');
+        const captionLabel = ownerDocument.createElement('label');
         captionLabel.textContent = t("LABEL_CAPTION");
         captionLabel.setAttribute('for', 'image-converter-caption-input');
         captionGroup.appendChild(captionLabel);
 
-        const captionInput = document.createElement('input');
+        const captionInput = ownerDocument.createElement('input');
         captionInput.type = 'text';
         captionInput.placeholder = t("PLACEHOLDER_CAPTION_LOADING");
         captionInput.className = 'image-converter-contextmenu-caption-input';
@@ -212,21 +223,21 @@ export class RenameInputBuilder extends Component {
         captionGroup.appendChild(captionInput);
 
         // Create dimensions input group
-        const dimensionsGroup = document.createElement('div');
+        const dimensionsGroup = ownerDocument.createElement('div');
         dimensionsGroup.className = 'image-converter-contextmenu-input-group';
 
-        const dimensionsIcon = document.createElement('div');
+        const dimensionsIcon = ownerDocument.createElement('div');
         dimensionsIcon.className = 'image-converter-contextmenu-icon-container';
         setIcon(dimensionsIcon, 'aspect-ratio');
         dimensionsGroup.appendChild(dimensionsIcon);
 
-        const dimensionsLabel = document.createElement('label');
+        const dimensionsLabel = ownerDocument.createElement('label');
         dimensionsLabel.textContent = t("LABEL_SIZE");
         dimensionsLabel.setAttribute('for', 'image-converter-width-input');
         dimensionsGroup.appendChild(dimensionsLabel);
 
         // Create width input
-        const widthInput = document.createElement('input');
+        const widthInput = ownerDocument.createElement('input');
         widthInput.type = 'number';
         widthInput.min = '1';
         widthInput.placeholder = t("PLACEHOLDER_WIDTH");
@@ -234,7 +245,7 @@ export class RenameInputBuilder extends Component {
         widthInput.id = 'image-converter-width-input';
 
         // Create height input
-        const heightInput = document.createElement('input');
+        const heightInput = ownerDocument.createElement('input');
         heightInput.type = 'number';
         heightInput.min = '1';
         heightInput.placeholder = t("PLACEHOLDER_HEIGHT");
@@ -242,10 +253,10 @@ export class RenameInputBuilder extends Component {
         heightInput.id = 'image-converter-height-input';
 
         // Create dimension inputs container
-        const dimensionInputsContainer = document.createElement('div');
+        const dimensionInputsContainer = ownerDocument.createElement('div');
         dimensionInputsContainer.className = 'image-converter-contextmenu-dimension-inputs';
         dimensionInputsContainer.appendChild(widthInput);
-        dimensionInputsContainer.appendChild(document.createTextNode('×'));
+        dimensionInputsContainer.appendChild(ownerDocument.createTextNode('×'));
         dimensionInputsContainer.appendChild(heightInput);
 
         dimensionsGroup.appendChild(dimensionInputsContainer);
@@ -258,7 +269,7 @@ export class RenameInputBuilder extends Component {
         }
 
         // --- NEW: Create Alignment Control ---
-        const { group: alignmentGroup, getAlignment } = this.createAlignmentControl(img);
+        const { group: alignmentGroup, getAlignment } = this.createAlignmentControl(img, ownerDocument);
 
         // Add all groups to container
         if (!isNetwork) {
@@ -270,7 +281,7 @@ export class RenameInputBuilder extends Component {
         inputContainer.appendChild(alignmentGroup); // Add alignment group
 
         // Add single confirm button
-        const confirmButton = document.createElement('div');
+        const confirmButton = ownerDocument.createElement('div');
         confirmButton.className = 'image-converter-contextmenu-button image-converter-contextmenu-confirm';
         setIcon(confirmButton, 'check');
         inputContainer.appendChild(confirmButton);
@@ -297,22 +308,22 @@ export class RenameInputBuilder extends Component {
         };
     }
 
-    private createAlignmentControl(img: HTMLImageElement): { group: HTMLElement, getAlignment: () => string } {
-        const group = document.createElement('div');
+    private createAlignmentControl(img: HTMLImageElement, ownerDocument: Document): { group: HTMLElement, getAlignment: () => string } {
+        const group = ownerDocument.createElement('div');
         group.className = 'image-converter-contextmenu-input-group image-converter-alignment-group';
 
         // Icon for label
-        const icon = document.createElement('div');
+        const icon = ownerDocument.createElement('div');
         icon.className = 'image-converter-contextmenu-icon-container';
         setIcon(icon, 'align-center');
         group.appendChild(icon);
 
         // Label
-        const label = document.createElement('label');
+        const label = ownerDocument.createElement('label');
         label.textContent = t("LABEL_ALIGNMENT");
         group.appendChild(label);
 
-        const buttonsContainer = document.createElement('div');
+        const buttonsContainer = ownerDocument.createElement('div');
         buttonsContainer.className = 'image-converter-alignment-buttons';
 
         const alignOptions = [
@@ -329,7 +340,7 @@ export class RenameInputBuilder extends Component {
         const buttons: HTMLElement[] = [];
 
         alignOptions.forEach(opt => {
-            const btn = document.createElement('div');
+            const btn = ownerDocument.createElement('div');
             btn.className = `image-converter-alignment-button ${currentAlign === opt.id ? 'active' : ''}`;
             btn.title = opt.title;
             setIcon(btn, opt.icon);

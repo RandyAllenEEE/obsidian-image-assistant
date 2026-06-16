@@ -1,195 +1,181 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import ImageConverterPlugin from '../../../src/main';
-import { fakeApp, fakeTFile, fakeVault, fakePluginManifest } from '../../factories/obsidian';
 import { Menu } from 'obsidian';
+import { ContextMenu } from '../../../src/ui/ContextMenu';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
+import { fakeApp, fakeTFile, fakeVault, fakeWorkspace } from '../../factories/obsidian';
 
-// Mock modules that are constructed by ContextMenu actions
-vi.mock('/modals/ProcessSingleImageModal, () => ({
-  ProcessSingleImageModal: vi.fn().mockImplementation(function () { return { open: vi.fn() } as any; })
-}));
-vi.mock('/ImageAnnotation, () => ({
-  ImageAnnotationModal: vi.fn().mockImplementation(function () { return { open: vi.fn() } as any; })
-}));
-
-let ContextMenuCls: any;
-
-function setupImg(wrapClass = 'markdown-preview-view') {
+function setupImage(containerClass = 'markdown-preview-view') {
   document.body.innerHTML = '';
-  const wrap = document.createElement('div');
-  wrap.className = wrapClass;
+  const container = document.createElement('div');
+  container.className = containerClass;
   const img = document.createElement('img');
-  img.src = 'imgs/pic.jpg';
-  wrap.appendChild(img);
-  document.body.appendChild(wrap);
+  img.src = 'app://vault/imgs/pic.jpg';
+  container.appendChild(img);
+  document.body.appendChild(container);
   return img;
 }
 
-describe('ContextMenu integration (14.1–14.6)', () => {
+function makePlugin(overrides: Record<string, unknown> = {}) {
+  return {
+    settings: structuredClone(DEFAULT_SETTINGS),
+    supportedImageFormats: {
+      isExcalidrawImage: vi.fn(() => false)
+    },
+    imageStateManager: {
+      getImageState: vi.fn(() => null)
+    },
+    ...overrides
+  } as any;
+}
+
+function makeContext(app: any, plugin: any) {
+  const folderAndFilenameManagement = {
+    getImagePath: vi.fn((img: HTMLImageElement) =>
+      (img.getAttribute('src') || '').replace(/^app:\/\/vault\//, '')
+    )
+  };
+  return new ContextMenu(app, plugin, folderAndFilenameManagement as any, {} as any);
+}
+
+describe('ContextMenu integration', () => {
   let app: any;
+  let note: any;
   let plugin: any;
 
-beforeEach(async () => {
-    const note = fakeTFile({ path: 'n1.md', name: 'n1.md', extension: 'md' });
-    // Load ContextMenu after mocks are registered
-    ContextMenuCls = (await import('/ContextMenu')).ContextMenu;
-    const vault = fakeVault({ files: [note] });
-    app = fakeApp({ vault });
-
-    // Use plugin manifest factory when available
-    const manifest = fakePluginManifest
-      ? fakePluginManifest({ id: 'image-converter', name: 'Image Converter' })
-      : ({ id: 'image-converter', dir: '/plugins/image-converter' } as any);
-
-    plugin = new ImageConverterPlugin(app as any, manifest as any);
-    plugin.manifest = manifest as any;
-    plugin.settings = { enableContextMenu: true, isImageAlignmentEnabled: true } as any;
-    plugin.supportedImageFormats = { isExcalidrawImage: () => false } as any; // default: not Excalidraw
+  beforeEach(() => {
+    note = fakeTFile({ path: 'notes/n1.md', name: 'n1.md', extension: 'md' });
+    const image = fakeTFile({ path: 'imgs/pic.jpg', name: 'pic.jpg', extension: 'jpg' });
+    app = fakeApp({
+      vault: fakeVault({ files: [note, image] }),
+      workspace: fakeWorkspace({ activeFile: note })
+    }) as any;
+    plugin = makePlugin();
   });
 
-  describe('14.1 Document listener registration', () => {
-    it('registers a document contextmenu listener on construction', () => {
-      const spy = vi.spyOn(document, 'addEventListener');
-      const ctx = new ContextMenuCls(app as any, plugin, {} as any, {} as any);
-      expect(spy).toHaveBeenCalledWith('contextmenu', expect.any(Function), true);
-      (ctx as any).onunload?.();
-    });
+  it('registers a capturing document contextmenu listener on construction', () => {
+    const addSpy = vi.spyOn(document, 'addEventListener');
+
+    const ctx = makeContext(app, plugin);
+
+    expect(addSpy).toHaveBeenCalledWith('contextmenu', expect.any(Function), true);
+    ctx.onunload();
   });
 
-  describe('14.2 Visibility and scope', () => {
-    it('shows menu on images in markdown views only', () => {
-      const showSpy = vi.spyOn((Menu as any).prototype, 'showAtMouseEvent');
-      const img = setupImg('markdown-preview-view');
-      (app.workspace.getActiveViewOfType as any) = vi.fn(() => ({ getViewType: () => 'markdown' }));
-      const ctx = new ContextMenuCls(app as any, plugin, { getImagePath: () => null } as any, {} as any);
+  it('shows the menu for images inside markdown views', () => {
+    const img = setupImage();
+    const ctx = makeContext(app, plugin);
+    const createSpy = vi.spyOn(ctx, 'createContextMenuItems').mockReturnValue(true);
+    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
 
-      img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-      expect(showSpy).toHaveBeenCalled();
+    img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
 
-      showSpy.mockClear();
-
-      const outsideImg = setupImg('not-a-markdown-view');
-      (app.workspace.getActiveViewOfType as any) = vi.fn(() => ({ getViewType: () => 'other' }));
-      outsideImg.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-      expect(showSpy).not.toHaveBeenCalled();
-      (ctx as any).onunload?.();
-    });
-
-    it('negative cases: does not show for Excalidraw images', () => {
-      const showSpy = vi.spyOn((Menu as any).prototype, 'showAtMouseEvent');
-      (app.workspace.getActiveViewOfType as any) = vi.fn(() => ({ getViewType: () => 'markdown' }));
-      plugin.supportedImageFormats = { isExcalidrawImage: () => true } as any; // force excalidraw detection
-      const img = setupImg('markdown-preview-view');
-
-      const ctx = new ContextMenuCls(app as any, plugin, {} as any, {} as any);
-      img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-      expect(showSpy).not.toHaveBeenCalled();
-      (ctx as any).onunload?.();
-    });
-
-    it('negative cases: does not show in Canvas view', () => {
-      const showSpy = vi.spyOn((Menu as any).prototype, 'showAtMouseEvent');
-      (app.workspace.getActiveViewOfType as any) = vi.fn(() => ({ getViewType: () => 'canvas' }));
-      plugin.supportedImageFormats = { isExcalidrawImage: () => false } as any;
-      const img = setupImg('markdown-preview-view');
-
-      new ContextMenuCls(app as any, plugin, {} as any, {} as any);
-      img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-      expect(showSpy).not.toHaveBeenCalled();
-    });
-
-    it('negative cases: does not show for non-image targets', () => {
-      const showSpy = vi.spyOn((Menu as any).prototype, 'showAtMouseEvent');
-      (app.workspace.getActiveViewOfType as any) = vi.fn(() => ({ getViewType: () => 'markdown' }));
-      const ctx = new ContextMenuCls(app as any, plugin, {} as any, {} as any);
-      const div = document.createElement('div');
-      document.body.appendChild(div);
-      div.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-      expect(showSpy).not.toHaveBeenCalled();
-      (ctx as any).onunload?.();
-    });
+    expect(createSpy).toHaveBeenCalledWith(expect.any(Menu), img, note, expect.any(MouseEvent));
+    expect(showSpy).toHaveBeenCalled();
+    ctx.onunload();
   });
 
-  describe('14.3/14.4 Actions', () => {
-    it('Convert/compress opens ProcessSingleImageModal for resolved TFile with same-folder preference', async () => {
-      const img = setupImg();
-      (app.workspace.getActiveViewOfType as any) = vi.fn(() => ({
-        getViewType: () => 'markdown',
-        file: fakeTFile({ path: 'n1.md', name: 'n1.md', extension: 'md' }),
-        containerEl: document.body,
-      }));
-      const file = fakeTFile({ path: 'imgs/pic.jpg', name: 'pic.jpg', extension: 'jpg' });
-      ((app.vault as any).getFiles as any).mockReturnValue([file]);
+  it('does not open the menu when another handler already prevented the contextmenu event', () => {
+    const img = setupImage();
+    const ctx = makeContext(app, plugin);
+    const createSpy = vi.spyOn(ctx, 'createContextMenuItems').mockReturnValue(true);
+    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    event.preventDefault();
 
-      const mod = await import('/modals/ProcessSingleImageModal');
-      const openSpy = vi.spyOn(mod as any, 'ProcessSingleImageModal');
-      const ctx = new ContextMenuCls(app as any, plugin, {} as any, {} as any);
-      const evt = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
-      img.dispatchEvent(evt);
+    img.dispatchEvent(event);
 
-      expect(openSpy).toHaveBeenCalled();
-      const args = openSpy.mock.calls[0];
-      expect(args[2].path).toBe('imgs/pic.jpg');
-      (ctx as any).onunload?.();
-    });
-
-    it('Annotate opens ImageAnnotationModal for resolved TFile', async () => {
-      const img = setupImg();
-      (app.workspace.getActiveViewOfType as any) = vi.fn(() => ({
-        getViewType: () => 'markdown',
-        file: fakeTFile({ path: 'n1.md', name: 'n1.md', extension: 'md' }),
-        containerEl: document.body,
-      }));
-      const file = fakeTFile({ path: 'imgs/pic.jpg', name: 'pic.jpg', extension: 'jpg' });
-      ((app.vault as any).getFiles as any).mockReturnValue([file]);
-
-      const mod = await import('/ImageAnnotation');
-      const modalSpy = vi.spyOn(mod as any, 'ImageAnnotationModal');
-      const ctx = new ContextMenuCls(app as any, plugin, {} as any, {} as any);
-      img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-
-      expect(modalSpy).toHaveBeenCalled();
-      const args = modalSpy.mock.calls[0];
-      expect(args[2].path).toBe('imgs/pic.jpg');
-      (ctx as any).onunload?.();
-    });
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(showSpy).not.toHaveBeenCalled();
+    ctx.onunload();
   });
 
-  describe('14.5 Alignment options gating', () => {
-    it('calls alignment options when enabled; not when disabled', () => {
-      const alignmentSpy = vi.fn();
-      plugin.ImageAlignmentManager = { addAlignmentOptionsToContextMenu: alignmentSpy } as any;
-
-      const img = setupImg('markdown-preview-view');
-      (app.workspace.getActiveViewOfType as any) = vi.fn(() => ({ getViewType: () => 'markdown' }));
-      (app.workspace.getActiveFile as any) = vi.fn(() => fakeTFile({ path: 'n1.md', name: 'n1.md', extension: 'md' }));
-      const ctx = new ContextMenuCls(app as any, plugin, {} as any, {} as any);
-
-      // enabled => called
-      img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-      expect(alignmentSpy).toHaveBeenCalled();
-
-      // disable and try again
-      alignmentSpy.mockClear();
-      plugin.settings.isImageAlignmentEnabled = false;
-      img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-      expect(alignmentSpy).not.toHaveBeenCalled();
-      (ctx as any).onunload?.();
+  it('registers context menu listeners for popout window documents', () => {
+    const listeners: Record<string, Function> = {};
+    app.workspace.on = vi.fn((event: string, callback: Function) => {
+      listeners[event] = callback;
+      return { detach: vi.fn() };
     });
+
+    const popoutDocument = document.implementation.createHTMLDocument('popout');
+    const container = popoutDocument.createElement('div');
+    container.className = 'markdown-preview-view';
+    const img = popoutDocument.createElement('img');
+    img.src = 'app://vault/imgs/pic.jpg';
+    container.appendChild(img);
+    popoutDocument.body.appendChild(container);
+
+    const ctx = makeContext(app, plugin);
+    const createSpy = vi.spyOn(ctx, 'createContextMenuItems').mockReturnValue(true);
+    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
+
+    listeners['window-open']?.(null, { document: popoutDocument });
+    img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+
+    expect(createSpy).toHaveBeenCalledWith(expect.any(Menu), img, note, expect.any(MouseEvent));
+    expect(showSpy).toHaveBeenCalled();
+    ctx.onunload();
   });
 
-  describe('14.6 Unregistration/cleanup', () => {
-    it('removes document listener on unload', () => {
-      const addSpy = vi.spyOn(document, 'addEventListener');
-      const removeSpy = vi.spyOn(document, 'removeEventListener');
+  it('does not show the menu for unsupported targets or views', () => {
+    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
 
-      const ctx = new ContextMenuCls(app as any, plugin, {} as any, {} as any);
-      expect(addSpy).toHaveBeenCalledWith('contextmenu', expect.any(Function), true);
+    const plainDiv = document.createElement('div');
+    document.body.appendChild(plainDiv);
+    const nonImageCtx = makeContext(app, plugin);
+    plainDiv.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    expect(showSpy).not.toHaveBeenCalled();
+    nonImageCtx.onunload();
 
-      // Simulate cleanup via component onunload
-      (ctx as any).onunload?.();
+    const outsideImg = setupImage('not-a-markdown-view');
+    const outsideCtx = makeContext(app, plugin);
+    outsideImg.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    expect(showSpy).not.toHaveBeenCalled();
+    outsideCtx.onunload();
 
-      // We cannot easily assert the specific handler function, but removeEventListener should be called
-      expect(removeSpy).toHaveBeenCalled();
-    });
+    const canvasImg = setupImage();
+    app.workspace.getActiveViewOfType = vi.fn(() => ({ getViewType: () => 'canvas' }));
+    const canvasCtx = makeContext(app, plugin);
+    canvasImg.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    expect(showSpy).not.toHaveBeenCalled();
+    canvasCtx.onunload();
+  });
+
+  it('skips Excalidraw images', () => {
+    const img = setupImage();
+    plugin.supportedImageFormats.isExcalidrawImage = vi.fn(() => true);
+    const ctx = makeContext(app, plugin);
+    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
+
+    img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+
+    expect(showSpy).not.toHaveBeenCalled();
+    ctx.onunload();
+  });
+
+  it('removes the registered document listener on unload', () => {
+    const removeSpy = vi.spyOn(document, 'removeEventListener');
+    const ctx = makeContext(app, plugin);
+
+    ctx.onunload();
+
+    expect(removeSpy).toHaveBeenCalledWith('contextmenu', expect.any(Function), true);
+  });
+
+  it('delegates process and annotation menu items to the processing handler', () => {
+    const img = setupImage();
+    const ctx = makeContext(app, plugin);
+    const processImage = vi.fn();
+    const annotateImage = vi.fn();
+    (ctx as any).processingHandler = { processImage, annotateImage, cropRotateFlip: vi.fn() };
+
+    const menu = new Menu();
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    ctx.addProcessImageMenuItem(menu, img, event);
+    ctx.addAnnotateImageMenuItem(menu, img);
+    menu.showAtMouseEvent(event);
+
+    expect(processImage).toHaveBeenCalledWith(img);
+    expect(annotateImage).toHaveBeenCalledWith(img);
+    ctx.onunload();
   });
 });

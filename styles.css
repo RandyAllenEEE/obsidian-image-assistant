@@ -17,7 +17,8 @@
 
 /* --- Image Converter Settings --- */
 /* Remove X icon and get use all available space*/
-.image-converter-settings-tab {
+.image-converter-settings-tab,
+.image-assistant-settings-tab {
     padding: 20px;
     position: relative;
     /* Relative positioning for child elements */
@@ -25,6 +26,22 @@
     /* Occupy full height */
     overflow: auto;
     /* Enable scrolling if content overflows */
+    scrollbar-gutter: stable;
+    box-sizing: border-box;
+}
+
+.image-converter-setting-info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    color: var(--text-muted);
+    vertical-align: text-bottom;
+}
+
+.image-converter-setting-info-icon:hover {
+    color: var(--text-normal);
 }
 
 /* ------------------- Tabs ------------------------------ */
@@ -105,201 +122,12 @@
     /* No specific styles needed here - inherits from parent */
 }
 
-/* ------------------- Preset Group --------------------- */
-.image-converter-preset-group {
-    margin-bottom: 20px;
-    position: relative;
-    /* For absolute positioning of child elements */
-    z-index: 1;
-    /* Ensure preset group is above other elements */
-    transition: transform 0.3s ease, filter 0.3s ease, opacity 0.3s ease;
-    transform-origin: top center;
-    transform: scale(1);
-    /* Initially no scaling */
-    filter: brightness(1) blur(0);
-    /* No initial filter */
-    opacity: 1;
-    /* Fully opaque */
-}
-
-.image-converter-preset-group-title {
-    margin-bottom: 15px;
-    font-size: 1.2em;
-    font-weight: 600;
-    border-bottom: 2px solid var(--background-modifier-border);
-    padding-bottom: 5px;
-    display: none;
-    /* HIDDEN - Remove this to show titles */
-}
-
-.image-converter-preset-group-description {
-    font-size: var(--font-ui-smaller);
-    color: var(--text-muted);
-    margin-bottom: 1em;
-}
-
-/* ---------------------- Preset Card ------------------------------- */
-.image-converter-preset-card {
-    border: 1px solid var(--background-modifier-border);
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
-    /* Subtle shadow */
-    padding: 14px 20px;
-    display: flex;
-    flex-direction: column;
-    background-color: var(--background-primary);
-    height: auto;
-    transition: opacity 0.3s ease;
-    overflow: hidden;
-    /* Prevent content from spilling out */
-}
-
-/* "Grabbing" cursor when dragging */
-.image-converter-preset-card:active {
-    cursor: grabbing;
-}
-
-/* Pointer cursor for non-add-new cards */
-.image-converter-preset-card:not(.image-converter-add-new-preset) {
-    cursor: pointer;
-}
-
-.image-converter-preset-card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 15px;
-    margin-top: -20px;
-    cursor: move;
-    /* Indicate draggable */
-}
-
-.image-converter-preset-card-title {
-    font-size: calc(var(--font-ui-small) + 1px);
-    font-weight: 600;
-    color: var(--text-normal);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    /* Add ellipsis (...) for long titles */
-    white-space: nowrap;
-}
-
-/* --- Button Styling --- */
-.image-converter-preset-card-actions {
-    display: flex;
-    gap: 2px;
-    margin-right: -16px;
-}
-
-.image-converter-preset-card-actions .clickable-icon {
-    color: var(--text-muted);
-    transition: color 0.2s ease;
-}
-
-.image-converter-preset-card-actions .clickable-icon:hover {
-    color: var(--text-accent);
-}
-
-/* --- Danger Button (e.g., DELETE) --- */
-.image-converter-preset-card-actions .danger {
-    color: var(--text-error);
-}
-
-/* --- SortableJS Ghost Styling --- */
-.image-converter-sortable-ghost {
-    opacity: 0.5;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
-}
-
-.image-converter-preset-card-body {
-    color: var(--text-mute);
-    font-size: 0.75em;
-    line-height: 1.4;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: wrap;
-    margin-top: -22px;
-}
-
-.image-converter-preset-card-body p {
-    margin-block-start: 0;
-    margin-block-end: 0;
-    line-height: 1.4;
-}
-
-/* --- Preset Cards Grid --- */
-.image-converter-preset-cards {
-    display: grid;
-    gap: 15px;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    /* Responsive grid */
-    cursor: grab;
-    /* Indicate draggable */
-}
-
-/* Media Query for 3-column layout on larger screens */
-@media (min-width: 1000px) {
-    .image-converter-preset-cards {
-        grid-template-columns: repeat(3, 1fr);
-    }
-}
-
-/* --- Active and Default Preset Styling --- */
-.image-converter-active-preset {
-    border-color: var(--interactive-accent);
-    box-shadow: 0 0 5px var(--interactive-accent);
-}
-
-.image-converter-default-preset {
-    background-color: var(--background-modifier-hover);
-}
-
-/* --- Custom Variables for Default Preset Background --- */
-:root {
-    --image-converter-default-bg: #f5f5f5;
-    /* Light mode default */
-}
-
-html[data-theme='dark'] {
-    --image-converter-default-bg: #2b2b2b;
-    /* Dark mode default */
-}
-
-/* ----------------------------- Preset Form ------------ */
-.image-converter-preset-form {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
 .image-converter-form-buttons {
     display: flex;
     justify-content: flex-end;
     /* Align buttons to the right */
     gap: 10px;
     margin-top: 10px;
-}
-
-/* ------------------- Add New Preset Card --------------- */
-.image-converter-add-new-preset {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    border: 1px dashed var(--background-modifier-border);
-    min-height: 100px;
-    height: 100%;
-    cursor: pointer;
-    transition: background-color 0.2s ease;
-    text-align: center;
-}
-
-.image-converter-add-new-preset:hover {
-    background-color: var(--background-modifier-hover);
-}
-
-.image-converter-add-new-preset-text {
-    font-weight: 500;
-    color: var(--text-accent);
 }
 
 /* ----------- Modal Styling --------------------------*/
@@ -310,58 +138,9 @@ html[data-theme='dark'] {
     margin-top: 1em;
 }
 
-/* --------- GLOBAL PRESET ------------------------------ */
-.image-converter-global-preset-container {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    /* margin-bottom: 20px; */
-    cursor: pointer;
-}
-
-.image-converter-global-preset-container .image-converter-global-preset-title {
-    width: 135px;
-}
-
-/* --- Dropdown --- */
-.image-converter-global-preset-container .setting-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-grow: 1;
-    width: 100%;
-    border-top: none;
-    min-width: 112px;
-}
-
-.image-converter-global-preset-container .settings-section-title {
-    margin-left: 0.5em;
-    margin-bottom: 1px;
-    font-weight: 600;
-    width: 130px;
-}
-
-.image-converter-global-preset-container .setting-item-name {
-    flex: 0 0 auto;
-    /* Prevent label from shrinking */
-}
-
-/* --- Clickable Toggle Area --- */
-.image-converter-global-preset-toggle {
-    display: flex;
-    align-items: center;
-    margin-right: 10px;
-    font-weight: 600;
-}
-
 .image-converter-chevron-icon {
     margin-right: 5px;
     transition: transform 0.2s ease;
-}
-
-/* Rotate chevron when collapsed */
-.image-converter-settings-tab:not(.global-presets-visible) .image-converter-chevron-icon {
-    transform: rotate(-90deg);
 }
 
 
@@ -513,69 +292,8 @@ html[data-theme='dark'] {
 
 
 
-/* --- Hide Tabs and Content --- */
-/* Hide tabs and preset groups when global presets are not visible */
-.image-converter-settings-tab:not(.global-presets-visible) .image-converter-setting-tabs,
-.image-converter-settings-tab:not(.global-presets-visible) .image-converter-tab-content-wrapper {
-    display: none;
-}
-
-/* ------- Preset Summary in Modal ----------------------*/
-.image-converter-preset-summary {
-    margin-top: 10px;
-}
-
-.image-converter-preset-summary .summary-section {
-    margin-bottom: 15px;
-}
-
-.image-converter-preset-summary .summary-section-title {
-    font-weight: bold;
-    font-size: 1.1em;
-    margin-bottom: 5px;
-}
-
-.image-converter-preset-summary .summary-item {
-    margin-left: 20px;
-    margin-bottom: 3px;
-}
-
-.image-converter-preset-summary .summary-label {
-    font-weight: 600;
-}
-
-.image-converter-preset-summary .summary-value {
-    font-style: italic;
-}
-
-.image-converter-preset-summary .summary-value-bold {
-    font-weight: bold;
-}
-
 .image-converter-summary-example {
     font-style: italic;
-}
-
-/* --------------------------- Form Container ----------- */
-.image-converter-form-container {
-    margin-top: 20px;
-    padding: 20px;
-    border: 1px solid var(--background-modifier-border);
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
-    background-color: var(--background-primary);
-    display: none;
-    z-index: 2;
-    /* Ensure form is above preset group */
-    position: relative;
-}
-
-/* Class to make the form container visible */
-.image-converter-form-container.visible {
-    display: block;
-    border: var(--interactive-accent);
-    box-shadow: 0 0 5px var(--interactive-accent);
-    animation: slideDown 0.3s ease forwards;
 }
 
 
@@ -870,10 +588,6 @@ html[data-theme='dark'] {
     width: 350px;
 }
 
-.image-converter-preset-form textarea {
-    width: 239px;
-}
-
 /* --- Style for Units Dropdown --- */
 .image-converter-resize-units-dropdown {
     max-width: 55px;
@@ -1162,171 +876,6 @@ html[data-theme='dark'] {
 
 
 
-
-
-/* MODAL WINDOW - each drop */
-/* FILENAME--------------------------------------------------------------------------- */
-.image-converter-preset-selection-modal {
-    padding: 0;
-}
-
-.image-converter-main-container {
-    display: flex;
-    height: 100%;
-    gap: 20px;
-}
-
-.image-converter-settings-column {
-    flex: 3;
-    padding: 0px;
-    /* overflow-y: auto; */
-    max-height: 80vh;
-}
-
-.image-converter-preview-column {
-    flex: 2;
-    background: var(--background-secondary);
-    padding: 20px;
-    border-left: 1px solid var(--background-modifier-border);
-    position: sticky;
-    top: 0;
-    max-height: 80vh;
-    overflow-y: auto;
-}
-
-.image-converter-section-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 7px;
-}
-
-.image-converter-section-header h3 {
-    margin: 0;
-}
-
-.image-converter-help-button {
-    color: var(--text-muted);
-    padding: 4px;
-    height: 24px;
-    width: 24px;
-}
-
-.image-converter-preset-section {
-    margin-bottom: 6px;
-    padding: 15px;
-    background: var(--background-primary);
-    border-radius: 8px;
-    border: 1px solid var(--background-modifier-border);
-}
-
-.image-converter-preset-section h3 {
-    margin-top: 0;
-    margin-bottom: 15px;
-    font-size: 1.1em;
-    color: var(--text-normal);
-}
-
-.image-converter-input-group {
-    margin-bottom: 5px;
-    /* padding: 15px; */
-    background: var(--background-primary);
-    border-radius: 6px;
-}
-
-.image-converter-preview-header {
-    margin-bottom: 5px;
-    margin-top: 15px;
-}
-
-.image-converter-modal-preview-container {
-    font-family: var(--font-monospace);
-    font-size: 0.9em;
-    padding: 15px;
-    background: var(--background-primary);
-    border-radius: 6px;
-    border: 1px solid var(--background-modifier-border);
-}
-
-.image-converter-conversion-container {
-    padding: 15px;
-    background: var(--background-secondary);
-    border-radius: 6px;
-}
-
-/* Action buttons */
-.image-converter-action-section {
-    margin-top: 32px;
-    padding-top: 20px;
-    border-top: 1px solid var(--background-modifier-border);
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-}
-
-.image-converter-action-section .setting-item {
-    padding: 0;
-    margin: 0;
-    border-top: none;
-}
-
-/* Enhance dropdown and input styling */
-.image-converter-preset-selection-modal .dropdown {
-    border-radius: 4px;
-    min-width: 200px;
-}
-
-.image-converter-preset-selection-modal input {
-    border-radius: 4px;
-    width: 100%;
-}
-
-/* Preview components */
-.image-converter-preview-path {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.image-converter-preview-component {
-    padding: 8px;
-    background: var(--background-secondary);
-    border-radius: 4px;
-}
-
-.image-converter-preview-label {
-    color: var(--text-muted);
-    font-size: 0.9em;
-    margin-bottom: 4px;
-}
-
-.image-converter-preview-value {
-    word-break: break-all;
-    color: var(--text-normal);
-}
-
-.image-converter-title-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.image-converter-title-group h3 {
-    margin: 0;
-}
-
-/* Dropdown and input styling */
-.image-converter-preset-selection-modal .setting-item {
-    border: none;
-    padding: 0 0 12px 0;
-}
-
-.image-converter-section-description {
-    margin: 0 0 20px 0;
-    color: var(--text-muted);
-    font-size: 12px;
-    line-height: 1.4;
-}
 
 
 /* ------------------------------- */
@@ -2092,6 +1641,26 @@ html[data-theme='dark'] {
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
 
+.process-single-image-modal {
+    min-width: 0;
+}
+
+.process-single-image-modal .setting-item {
+    padding: var(--size-4-2) 0;
+}
+
+.process-single-image-modal .setting-item-control {
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: var(--size-2-2);
+}
+
+.process-single-image-modal .conversion-settings-container,
+.process-single-image-modal .resize-settings-container,
+.process-single-image-modal .process-single-image-modal-buttons {
+    min-width: 0;
+}
+
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------ CROP ------------------------------ */
@@ -2141,6 +1710,8 @@ html[data-theme='dark'] {
     object-fit: contain;
     display: block;
     margin: auto;
+    transform-origin: center center;
+    will-change: transform;
 }
 
 /* Remove the separate overlay div since we're using box-shadow */
@@ -2150,6 +1721,7 @@ html[data-theme='dark'] {
 
 .crop-tool-modal .selection-area {
     position: absolute;
+    box-sizing: border-box;
     border: 2px solid var(--interactive-accent);
     box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
     pointer-events: auto;
@@ -3115,14 +2687,6 @@ html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not(
     white-space: nowrap !important;
 }
 
-/* Global preset dropdown in header */
-.image-converter-global-mini {
-    flex: 0 0 auto;
-    min-width: 110px;
-    /* max-width: 140px; */
-    order: 3;
-}
-
 .image-converter-compact-inputs {
     display: flex;
     /* flex-direction: column; */
@@ -3162,55 +2726,6 @@ html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not(
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.image-converter-preset-dropdown-container {
-    flex: 0 0 auto;
-    min-width: 140px;
-    max-width: 100%;
-    overflow: hidden;
-}
-
-.image-converter-preset-dropdown-setting {
-    padding: 0 !important;
-    border: none !important;
-    margin: 0 !important;
-}
-
-.image-converter-preset-dropdown-setting .setting-item {
-    padding: 0;
-    border: none;
-    margin: 0;
-    min-height: auto;
-}
-
-.image-converter-preset-dropdown-setting .setting-item-control {
-    margin-left: 0 !important;
-}
-
-.image-converter-preset-dropdown-setting-item {
-    padding: 0 !important;
-    border: none !important;
-    margin: 0 !important;
-    min-height: auto !important;
-}
-
-/* Style the dropdown - let Obsidian handle the native appearance and arrows */
-.image-converter-preset-dropdown {
-    width: 100% !important;
-    height: 16px !important;
-    font-size: var(--font-ui-smaller) !important;
-    min-width: 0 !important;
-    box-sizing: border-box !important;
-}
-
-/* Add preset type indicators to dropdown */
-.image-converter-preset-dropdown[data-preset-type="folder"]::before {
-    content: "Folder-presets ";
-}
-
-.image-converter-preset-dropdown[data-preset-type="filename"]::before {
-    content: "Filename-presets ";
 }
 
 /* Compact dropdown styling for folder and filename dropdowns */
@@ -3353,45 +2868,6 @@ html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not(
     background: var(--background-primary);
 }
 
-.image-converter-preset-mini {
-    flex: 0 0 120px;
-    min-width: 120px;
-    display: flex;
-    align-items: stretch;
-}
-
-.image-converter-preset-mini .setting-item {
-    padding: 0;
-    border: none;
-    margin: 0;
-    flex: 1;
-}
-
-.image-converter-preset-mini .setting-item-control {
-    flex: 1;
-}
-
-.image-converter-preset-mini select,
-.image-converter-preset-mini .dropdown {
-    width: 100%;
-    height: 32px;
-    padding: 4px 8px;
-    border-radius: 4px;
-    border: 1px solid var(--background-modifier-border);
-    background: var(--background-primary);
-}
-
-.image-converter-preset-mini-setting {
-    padding: 0 !important;
-    border: none !important;
-    margin: 0 !important;
-}
-
-.image-converter-preset-mini-setting .setting-item-control {
-    margin-left: 0 !important;
-}
-
-/* Additional styling for the new text and preset setting items */
 .image-converter-text-setting-item {
     padding: 0 !important;
     border: none !important;
@@ -3403,17 +2879,6 @@ html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not(
     margin-left: 0 !important;
 }
 
-.image-converter-preset-setting-item {
-    padding: 0 !important;
-    border: none !important;
-    margin: 0 !important;
-    min-height: auto !important;
-}
-
-.image-converter-preset-setting-item .setting-item-control {
-    margin-left: 0 !important;
-}
-
 .image-converter-text-input {
     width: 100% !important;
     height: 32px !important;
@@ -3422,72 +2887,6 @@ html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not(
     border: 1px solid var(--background-modifier-border) !important;
     background: var(--background-primary) !important;
     font-size: var(--font-ui-small) !important;
-}
-
-.image-converter-preset-dropdown {
-    width: 100% !important;
-    height: 28px !important;
-    font-size: var(--font-ui-small) !important;
-}
-
-/* Fix global preset mini styling */
-.image-converter-global-mini-setting {
-    padding: 0 !important;
-    border: none !important;
-    margin: 0 !important;
-    min-height: auto !important;
-}
-
-.image-converter-global-mini-setting .setting-item-control {
-    margin-left: 0 !important;
-    max-width: 120px;
-    overflow: visible;
-}
-
-.image-converter-global-mini-setting .dropdown {
-    max-width: 120px !important;
-    width: 120px !important;
-    box-sizing: border-box !important;
-    position: relative !important;
-    z-index: 1000 !important;
-
-    /* When closed, truncate text with ellipsis */
-    text-overflow: ellipsis !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-}
-
-/* When dropdown is opened, the dropdown list should expand */
-.image-converter-global-mini-setting .dropdown[size]:not([size="1"]),
-.image-converter-global-mini-setting .dropdown:not([size]) {
-    width: auto !important;
-    min-width: 120px !important;
-    max-width: 250px !important;
-    z-index: 1001 !important;
-}
-
-/* Style the dropdown options to handle long text better */
-.image-converter-global-mini-setting .dropdown option {
-    white-space: nowrap !important;
-    padding: 4px 8px !important;
-    min-width: 120px !important;
-    width: auto !important;
-}
-
-/* For browsers that support it, expand the dropdown list container */
-.image-converter-global-mini-setting select:focus,
-.image-converter-global-mini-setting select:active {
-    width: auto !important;
-    min-width: 120px !important;
-    max-width: 250px !important;
-    position: relative !important;
-    z-index: 1001 !important;
-}
-
-.image-converter-global-mini-setting .setting-item-name {
-    font-size: 1.1em !important;
-    font-weight: 600 !important;
-    min-width: 30px !important;
 }
 
 /* Quality grid styling */
@@ -3763,52 +3162,6 @@ html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not(
     padding: 4px 8px !important;
 }
 
-/* Ensure dropdowns and inputs have proper sizing - made thinner for compact design */
-.image-converter-preset-selection-modal .dropdown,
-.image-converter-preset-selection-modal input[type="text"] {
-    min-height: 24px;
-    height: 24px;
-    font-size: 12px;
-    padding: 2px 8px;
-    border-radius: var(--radius-s);
-    border: 1px solid var(--background-modifier-border);
-    line-height: 1.2;
-    box-sizing: border-box;
-}
-
-.image-converter-preset-selection-modal .dropdown:hover,
-.image-converter-preset-selection-modal input[type="text"]:hover {
-    border-color: var(--background-modifier-border-hover);
-}
-
-.image-converter-preset-selection-modal .dropdown:focus,
-.image-converter-preset-selection-modal input[type="text"]:focus {
-    border-color: var(--interactive-accent);
-    box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
-}
-
-/* ============================================ */
-/* PRESET SELECTION MODAL - ELEMENT HIDING */
-/* ============================================ */
-
-/* Hide setting name and description elements in preset selection modal */
-.image-converter-preset-selection-modal .image-converter-hide-name-desc .setting-item-name,
-.image-converter-preset-selection-modal .image-converter-hide-name-desc .setting-item-description {
-    display: none !important;
-}
-
-/* Alternative approach using specific classes for different setting types */
-.image-converter-preset-dropdown-setting .setting-item-name,
-.image-converter-preset-dropdown-setting .setting-item-description,
-.image-converter-text-setting .setting-item-name,
-.image-converter-text-setting .setting-item-description,
-.image-converter-grid-dropdown-setting .setting-item-name,
-.image-converter-grid-dropdown-setting .setting-item-description,
-.image-converter-grid-slider-setting .setting-item-name,
-.image-converter-grid-slider-setting .setting-item-description {
-    display: none !important;
-}
-
 /* Processing card header cursor pointer */
 .image-converter-processing-card-header-clickable {
     cursor: pointer !important;
@@ -3847,12 +3200,6 @@ html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not(
         gap: 8px;
     }
 
-    .image-converter-preset-dropdown-container {
-        width: 100%;
-        min-width: 0;
-        max-width: 100%;
-    }
-
     .image-converter-group-label {
         margin-bottom: 4px;
     }
@@ -3870,11 +3217,6 @@ html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not(
 
 /* Medium small screens - keep horizontal but adjust sizing */
 @media (max-width: 500px) and (min-width: 401px) {
-    .image-converter-preset-dropdown-container {
-        min-width: 100px;
-        flex: 1 1 auto;
-    }
-
     .image-converter-group-label {
         font-size: 0.9em;
     }

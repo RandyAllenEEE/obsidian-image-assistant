@@ -39,7 +39,6 @@ describe('PicGoCoreUploader', () => {
             workOnNetWork: false,
             newWorkBlackDomains: '',
             applyImage: true,
-            deleteSource: false,
             downloadPath: 'attachments',
             uploadConcurrency: 3,
             cloudLinkFormat: 'markdown' as const,

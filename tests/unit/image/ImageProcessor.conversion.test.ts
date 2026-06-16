@@ -30,7 +30,7 @@ import {
   fakeCanvas
 } from '../../factories/canvas';
 import { exifFrom } from '../../factories/exif';
-import { fakeNotice } from '../../factories/obsidian';
+import { fakeApp, fakeNotice } from '../../factories/obsidian';
 
 // Mock dependencies
 // The obsidian mock is already configured in vitest.config.ts via alias
@@ -42,8 +42,9 @@ describe('ImageProcessor - Conversion Tests', () => {
 
   beforeEach(() => {
     // Arrange: Set up processor and mocks
-    supportedFormats = new SupportedImageFormats(undefined as any);
-    processor = new ImageProcessor(supportedFormats);
+    const app = fakeApp() as any;
+    supportedFormats = new SupportedImageFormats(app);
+    processor = new ImageProcessor(app, supportedFormats);
     
     // Mock document.createElement for canvas without replacing the whole document (avoid recursion)
     mockCanvas = fakeCanvas();

@@ -35,8 +35,9 @@ describe('ImageProcessor - Error Handling Tests', () => {
 
   beforeEach(() => {
     // Arrange: Set up processor and mocks
-    supportedFormats = new SupportedImageFormats(fakeApp() as any);
-    processor = new ImageProcessor(supportedFormats);
+    const app = fakeApp() as any;
+    supportedFormats = new SupportedImageFormats(app);
+    processor = new ImageProcessor(app, supportedFormats);
     
     // Mock Notice
     noticeSpy = fakeNotice();
@@ -115,6 +116,35 @@ describe('ImageProcessor - Error Handling Tests', () => {
       
       // Assert - Should return original bytes
       expect(result.byteLength).toBe(inputBytes.byteLength);
+    });
+
+    it('Given canvas blob arrayBuffer rejects, When PNG has a data URL candidate, Then uses fallback candidate', async () => {
+      // Arrange
+      const inputBytes = makePngBytes({ width: 100, height: 100 });
+      const inputBlob = makeImageBlob(inputBytes, 'image/png');
+      const fallbackBytes = new Uint8Array([9, 8, 7, 6, 5]);
+      const failingBlob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+
+      vi.spyOn(failingBlob, 'arrayBuffer').mockRejectedValue(new Error('blob read failed'));
+      mockCanvas.toBlob = vi.fn((callback) => callback(failingBlob));
+      mockCanvas.toDataURL = vi.fn(() => `data:image/png;base64,${btoa(String.fromCharCode(...fallbackBytes))}`);
+
+      // Act
+      const result = await processor.processImage(
+        inputBlob,
+        'PNG',
+        1.0,
+        0.5,
+        'None',
+        0,
+        0,
+        0,
+        'Auto',
+        true
+      );
+
+      // Assert
+      expect(new Uint8Array(result)).toEqual(fallbackBytes);
     });
 
     it('Given TIFF input processing error, When TIFF handler fails, Then returns original bytes', async () => {

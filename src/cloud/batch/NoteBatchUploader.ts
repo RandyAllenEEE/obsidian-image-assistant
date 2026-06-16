@@ -4,6 +4,7 @@ import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
 import { CloudResourceHelpers } from "../utils/CloudResourceHelpers";
 import { SingleImageUploader } from "./SingleImageUploader";
+import { UploaderManager } from "../uploader";
 import { ImageLinkPathReplacer } from "../../utils/ImageLinkPathReplacer";
 import { getAllImageLinks } from "../../utils/RegexPatterns";
 
@@ -81,6 +82,7 @@ export class NoteBatchUploader {
                 }
 
                 if (isNetworkImage) {
+                    if (this.plugin.settings.pasteHandling.cloud.remoteServerMode) return false;
                     if (!this.plugin.settings.pasteHandling.cloud.workOnNetWork) return false;
                     if (this.helpers.isBlacklistedDomain(img.path)) return false;
                     return true;
@@ -169,7 +171,6 @@ export class NoteBatchUploader {
                         return this.uploader.uploadSingleImage(item.file);
                     } else if (item.isNetwork) {
                         // Network upload fallback
-                        const { UploaderManager } = require("../uploader");
                         const mgr = new UploaderManager(this.plugin.settings.pasteHandling.cloud.uploader, this.plugin);
                         const result = await mgr.upload([item.path]);
                         if (result.success && result.result.length > 0) {

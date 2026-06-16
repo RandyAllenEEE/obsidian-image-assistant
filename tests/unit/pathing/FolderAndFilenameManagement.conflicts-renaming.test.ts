@@ -3,6 +3,7 @@ import { FolderAndFilenameManagement } from '../../../src/local/FolderAndFilenam
 import { VariableProcessor } from '../../../src/local/VariableProcessor';
 import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
 import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
+import type { LocalConversionSettings, LocalFilenameSettings } from '../../../src/settings/types';
 import { fakeApp, fakeVault } from '../../factories/obsidian';
 
 describe('FolderAndFilenameManagement conflicts and rename/convert skip rules', () => {
@@ -34,7 +35,7 @@ describe('FolderAndFilenameManagement conflicts and rename/convert skip rules', 
 
   it('3.15 skip rename patterns respected', () => {
     const { ffm } = makeFFM();
-    const preset: FilenamePreset = { name: 'x', customTemplate: '{imagename}', skipRenamePatterns: '*.png,/^keep/', conflictResolution: 'increment' } as any;
+    const preset: LocalFilenameSettings = { customTemplate: '{imagename}', skipRenamePatterns: '*.png,/^keep/', conflictResolution: 'increment' };
     expect(ffm.shouldSkipRename('photo.png', preset)).toBe(true);
     expect(ffm.shouldSkipRename('keep-this.jpg', preset)).toBe(true);
     expect(ffm.shouldSkipRename('other.gif', preset)).toBe(false);
@@ -42,7 +43,7 @@ describe('FolderAndFilenameManagement conflicts and rename/convert skip rules', 
 
   it('3.16 skip conversion patterns respected', () => {
     const { ffm } = makeFFM();
-    const conv: ConversionPreset = { ...DEFAULT_SETTINGS.conversionPresets[0], skipConversionPatterns: 'r/\\.png$/' } as any;
+    const conv: LocalConversionSettings = { ...DEFAULT_SETTINGS.localProcessing.conversion, skipConversionPatterns: 'r/\\.png$/' };
     expect(ffm.shouldSkipConversion('image.png', conv)).toBe(true);
     expect(ffm.shouldSkipConversion('image.jpg', conv)).toBe(false);
   });

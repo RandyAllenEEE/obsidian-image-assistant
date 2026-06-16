@@ -1,4 +1,4 @@
-import { requestUrl, RequestUrlParam, App } from "obsidian";
+import { requestUrl, App } from "obsidian";
 import { OCRSettings } from "../OCRSettings";
 import TexWrapper from "./tex-wrapper";
 // 建议使用 'js-md5' 库，或者根据你现有的 crypto 实现
@@ -13,6 +13,14 @@ export default class SimpleTex extends TexWrapper {
         super(isMultiline);
         this.app = app;
         this.settings = settings;
+    }
+
+    private async getSecret(secretId?: string): Promise<string | null> {
+        const secretStorage = (this.app as any).secretStorage;
+        if (!secretStorage || !secretId) return null;
+
+        const value = await secretStorage.getSecret(secretId);
+        return typeof value === "string" && value.length > 0 ? value : null;
     }
 
     private randomStr(randomlength = 16) {
@@ -72,10 +80,9 @@ export default class SimpleTex extends TexWrapper {
         };
 
         // Retrieve secrets from SecretStorage using linked IDs in settings
-        const secretStorage = (this.app as any).secretStorage;
-        const appId = secretStorage && this.settings.simpleTex.appIdSecretId ? secretStorage.getSecret(this.settings.simpleTex.appIdSecretId) : null;
-        const appSecret = secretStorage && this.settings.simpleTex.appSecretSecretId ? secretStorage.getSecret(this.settings.simpleTex.appSecretSecretId) : null;
-        const token = secretStorage && this.settings.simpleTex.tokenSecretId ? secretStorage.getSecret(this.settings.simpleTex.tokenSecretId) : null;
+        const appId = await this.getSecret(this.settings.simpleTex.appIdSecretId);
+        const appSecret = await this.getSecret(this.settings.simpleTex.appSecretSecretId);
+        const token = await this.getSecret(this.settings.simpleTex.tokenSecretId);
 
         // 鉴权逻辑
         if (appId && appSecret) {

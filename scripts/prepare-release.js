@@ -113,7 +113,7 @@ try {
     console.log('2. 👀 Review the draft release on GitHub');
     console.log('3. 📢 When you publish it, manifest.json will be automatically updated');
     console.log('\n🔗 View the workflow at:');
-    console.log(`   https://github.com/xRyul/obsidian-image-converter/actions`);
+    console.log(`   https://github.com/RandyAllenEEE/obsidian-image-assistant/actions`);
     
 } catch (error) {
     console.error('\n❌ Error during release preparation:', error.message);

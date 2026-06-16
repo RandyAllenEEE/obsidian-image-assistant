@@ -7,6 +7,7 @@ import { BatchResult } from '../../types/BatchTypes';
 import { ConcurrentQueue } from '../../utils/AsyncLock';
 import { ImageLinkPathReplacer } from '../../utils/ImageLinkPathReplacer';
 import { t } from '../../lang/helpers';
+import { BatchOutputFormat, getOutputExtension, toBatchOutputFormat } from './BatchFormat';
 
 /**
  * SingleImageProcessor - Shared logic for processing a single image.
@@ -22,7 +23,7 @@ export class SingleImageProcessor {
 
     async processSingleImage(
         file: TFile,
-        outputFormat: 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL',
+        outputFormat: BatchOutputFormat,
         quality: number,
         colorDepth: number,
         resizeMode: string,
@@ -60,7 +61,8 @@ export class SingleImageProcessor {
                 console.log(`Using original image for "${file.name}" because size reduction was less than ${minSavingsKB} KB.`);
                 // Use original buffer
                 const originalBuffer = await this.app.vault.readBinary(file);
-                if (file.name === `${file.basename}.${outputFormat.toLowerCase()}`) {
+                const originalOutputName = `${file.basename}.${getOutputExtension(file.extension, outputFormat)}`;
+                if (file.name === originalOutputName) {
                     // Same file, effectively no-op if we revert to original, but maybe we want to just stop?
                     // If we are modifying in place, and we revert to original, we just don't write.
                     return { success: true };
@@ -76,7 +78,7 @@ export class SingleImageProcessor {
             }
 
             // 2. Determine New Path and Filename
-            const newFileName = `${file.basename}.${outputFormat.toLowerCase()}`;
+            const newFileName = `${file.basename}.${getOutputExtension(file.extension, outputFormat)}`;
             const parentPath = file.parent ? file.parent.path : "";
 
             // Check if we are doing in-place update
@@ -137,8 +139,7 @@ export class SingleImageProcessor {
         } = this.plugin.settings.operationDefaults.batchLocal;
         const allowLargerFiles = this.plugin.settings.localProcessing.conversion.allowLargerFiles;
 
-        const isKeepOriginalFormat = convertTo === 'disabled' || convertTo === 'Original';
-        const outputFormat = isKeepOriginalFormat ? 'ORIGINAL' : convertTo.toUpperCase() as 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL';
+        const outputFormat = toBatchOutputFormat(convertTo);
         const colorDepth = 1;
 
         const concurrency = this.plugin.settings.pasteHandling.cloud.uploadConcurrency || 3;

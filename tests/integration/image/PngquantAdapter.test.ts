@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { EventEmitter } from 'events';
 
 // Mocks must be declared before imports
 vi.mock('child_process');
@@ -21,7 +22,7 @@ describe('Integration-lite: PngquantAdapter', () => {
   beforeEach(() => {
     const app = fakeApp() as any;
     supportedFormats = new SupportedImageFormats(app);
-    processor = new ImageProcessor(supportedFormats);
+    processor = new ImageProcessor(app, supportedFormats);
   });
 
   it('1.32 [I] Happy path: pipes stdin, uses --quality, stdout used as output', async () => {
@@ -67,7 +68,7 @@ describe('Integration-lite: PngquantAdapter', () => {
     // Assert
     const { calls } = (spawn as any).mock;
     expect(calls.length).toBeGreaterThan(0);
-    const [cmd, args] = calls[0] as [string, string[]];
+    const [cmd, args] = calls.find(([, args]: [string, string[]]) => args.includes('--quality')) as [string, string[]];
     expect(cmd).toContain('pngquant');
     expect(args).toEqual(['--quality', '65-80', '-']);
 
@@ -157,6 +158,58 @@ describe('Integration-lite: PngquantAdapter', () => {
     );
 
     // Assert (outer catch returns original bytes)
+    expect(new Uint8Array(result).byteLength).toBe(inputBytes.byteLength);
+  });
+
+  it('1.34b [I] Spawn error after availability check returns original bytes', async () => {
+    // Arrange
+    // eslint-disable-next-line id-length
+    const inputBytes = makePngBytes({ w: 48, h: 48 });
+    const inputBlob = makeImageBlob(inputBytes, 'image/png');
+
+    const { spawn } = await import('child_process');
+    (spawn as any)
+      .mockImplementationOnce(() => {
+        const proc = new EventEmitter() as any;
+        proc.stdout = new EventEmitter();
+        proc.stderr = new EventEmitter();
+        setTimeout(() => proc.emit('close', 0), 0);
+        return proc;
+      })
+      .mockImplementationOnce(() => {
+        throw new Error('spawn pngquant ENOENT');
+      });
+
+    // Act
+    const result = await processor.processImage(
+      inputBlob,
+      'PNGQUANT',
+      1.0,
+      1.0,
+      'None',
+      0,
+      0,
+      0,
+      'Auto',
+      true,
+      {
+        name: 'test',
+        outputFormat: 'PNGQUANT',
+        pngquantExecutablePath: '/usr/bin/pngquant',
+        pngquantQuality: '65-80',
+        quality: 1,
+        colorDepth: 1,
+        resizeMode: 'None',
+        desiredWidth: 0,
+        desiredHeight: 0,
+        desiredLongestEdge: 0,
+        enlargeOrReduce: 'Auto',
+        allowLargerFiles: true,
+        skipConversionPatterns: ''
+      }
+    );
+
+    // Assert
     expect(new Uint8Array(result).byteLength).toBe(inputBytes.byteLength);
   });
 });

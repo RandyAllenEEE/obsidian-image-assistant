@@ -204,6 +204,18 @@ export function fakeVault(options: {
         if (index > -1) folders.splice(index, 1);
       }
     }),
+
+    trash: vi.fn(async (file: TFile | TFolder, system?: boolean) => {
+      if (file instanceof TFile) {
+        const index = files.indexOf(file);
+        if (index > -1) files.splice(index, 1);
+        fileContents.delete(file.path);
+        binaryContents.delete(file.path);
+      } else {
+        const index = folders.indexOf(file);
+        if (index > -1) folders.splice(index, 1);
+      }
+    }),
     
     // Adapter operations
     adapter: {

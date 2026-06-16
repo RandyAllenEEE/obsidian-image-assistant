@@ -346,4 +346,47 @@ describe('Crop integration behaviors (21.1–21.10)', () => {
     // modal still present
     expect(root.querySelector('.crop-container')).toBeTruthy();
   });
+
+  it('21.11 Middle mouse pans the image without creating a selection', async () => {
+    const { crop } = openCropWithImage();
+    crop.onOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const root = (crop as any).contentEl as HTMLElement;
+    const container = root.querySelector('.crop-container') as HTMLDivElement;
+    const originalImg = root.querySelector('.crop-original-image') as HTMLImageElement;
+    const selection = root.querySelector('.selection-area') as HTMLDivElement;
+
+    setRect(container, { left: 0, top: 0, width: 600, height: 400 });
+    setRect(originalImg, { left: 0, top: 0, width: 600, height: 400 });
+
+    originalImg.dispatchEvent(new MouseEvent('mousedown', { button: 1, clientX: 100, clientY: 100, bubbles: true, cancelable: true }));
+    container.dispatchEvent(new MouseEvent('mousemove', { button: 1, clientX: 130, clientY: 125, bubbles: true, cancelable: true }));
+    container.dispatchEvent(new MouseEvent('mouseup', { button: 1, bubbles: true }));
+
+    expect(selection.style.display).toBe('none');
+    expect(originalImg.style.transform).toContain('translate(30px, 25px)');
+  });
+
+  it('21.12 Right mouse down does not start a crop selection', async () => {
+    const { crop } = openCropWithImage();
+    crop.onOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const root = (crop as any).contentEl as HTMLElement;
+    const container = root.querySelector('.crop-container') as HTMLDivElement;
+    const originalImg = root.querySelector('.crop-original-image') as HTMLImageElement;
+    const selection = root.querySelector('.selection-area') as HTMLDivElement;
+
+    setRect(container, { left: 0, top: 0, width: 600, height: 400 });
+    setRect(originalImg, { left: 0, top: 0, width: 600, height: 400 });
+
+    originalImg.dispatchEvent(new MouseEvent('mousedown', { button: 2, clientX: 100, clientY: 100, bubbles: true }));
+    container.dispatchEvent(new MouseEvent('mousemove', { button: 2, clientX: 220, clientY: 180, bubbles: true }));
+    container.dispatchEvent(new MouseEvent('mouseup', { button: 2, bubbles: true }));
+
+    expect(selection.style.display).toBe('none');
+    expect(parseInt(selection.style.width || '0', 10)).toBe(0);
+    expect(parseInt(selection.style.height || '0', 10)).toBe(0);
+  });
 });

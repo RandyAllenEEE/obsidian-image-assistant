@@ -105,7 +105,7 @@ export default class ImageConverterPlugin extends Plugin {
     // Link formatter
     linkFormatter: LinkFormatter;
     // Context menu
-    contextMenu: ContextMenu;
+    contextMenu: ContextMenu | null = null;
     // Alignment
     imageAlignment: ImageAlignment | null = null;
     imageStateManager: ImageStateManager | null = null;
@@ -153,7 +153,10 @@ export default class ImageConverterPlugin extends Plugin {
 
     private processedImage: ArrayBuffer | null = null;
     private temporaryBuffers: (ArrayBuffer | Blob | null)[] = [];
-    private tempFolderPath = ".obsidian/plugins/image-assistant/temp";
+    private get tempFolderPath(): string {
+        const configDir = this.app.vault.configDir || ".obsidian";
+        return normalizePath(`${configDir}/plugins/${this.manifest.id}/temp`);
+    }
 
     // Memory cleanup method
     private clearMemory() {
@@ -171,6 +174,66 @@ export default class ImageConverterPlugin extends Plugin {
         if (typeof global !== 'undefined' && global.gc) {
             global.gc();
         }
+    }
+
+    private attachImageResizerToMarkdownView(markdownView: MarkdownView, refreshLayout = false) {
+        if (!this.settings.interactiveResize.enabled || !this.imageResizer) return;
+
+        if (refreshLayout) {
+            this.imageResizer.onLayoutChange(markdownView);
+            return;
+        }
+
+        this.imageResizer.onActiveViewChange(markdownView);
+    }
+
+    private attachImageResizerToActiveView(refreshLayout = false) {
+        if (!this.settings.interactiveResize.enabled || !this.imageResizer) return;
+
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (activeView) {
+            this.attachImageResizerToMarkdownView(activeView, refreshLayout);
+            return;
+        }
+
+        this.imageResizer.detachView();
+    }
+
+    private registerImageResizerWorkspaceEvents() {
+        if (!this.settings.interactiveResize.enabled || !this.imageResizer) return;
+
+        this.registerEvent(
+            this.app.workspace.on('file-open', (file) => {
+                if (!file) {
+                    this.imageResizer?.detachView();
+                    return;
+                }
+
+                this.attachImageResizerToActiveView();
+            })
+        );
+
+        this.registerEvent(
+            this.app.workspace.on('active-leaf-change', (leaf) => {
+                const leafView = leaf?.view;
+                const markdownView = leafView instanceof MarkdownView
+                    ? leafView
+                    : this.app.workspace.getActiveViewOfType(MarkdownView);
+
+                if (markdownView) {
+                    this.attachImageResizerToMarkdownView(markdownView);
+                    return;
+                }
+
+                this.imageResizer?.detachView();
+            })
+        );
+
+        this.registerEvent(
+            this.app.workspace.on('layout-change', () => {
+                this.attachImageResizerToActiveView(true);
+            })
+        );
     }
 
 
@@ -219,6 +282,7 @@ export default class ImageConverterPlugin extends Plugin {
         this.imageCaption = new ImageCaption(this);
         if (this.settings.interactiveResize.enabled) {
             this.imageResizer = new ImageResizer(this);
+            this.addChild(this.imageResizer);
         }
 
         // Register StateManager refresh events
@@ -238,23 +302,14 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Wait for layout to be ready before initializing view-dependent components
         this.app.workspace.onLayoutReady(() => {
-            this.initializeComponents();
-
-            // Apply Image Alignment and Resizing when switching Live to Reading mode etc.
-            // ImageStateManager observes active-leaf-change internally now.
-            // For ImageResizer, we should also hook into active-leaf-change via main or let it handle itself.
-            // To prevent layout thrashing during init, we minimize listeners here.
-
-            if (this.settings.interactiveResize.enabled) {
-                this.registerEvent(
-                    this.app.workspace.on('active-leaf-change', (leaf) => {
-                        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-                        if (activeView) {
-                            this.imageResizer?.onLayoutChange(activeView);
-                        }
-                    })
-                );
-            }
+            void this.initializeComponents()
+                .then(() => {
+                    this.registerImageResizerWorkspaceEvents();
+                    this.attachImageResizerToActiveView();
+                })
+                .catch((error) => {
+                    console.error('[Image Assistant] Failed to initialize layout components:', error);
+                });
         });
         // const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
         // if (!activeView) return;
@@ -292,16 +347,7 @@ export default class ImageConverterPlugin extends Plugin {
         await this.historyManager.init();
 
         if (this.settings.interactiveResize.enabled) {
-            // Resizer initialized above/together with StateManager now
-            // kept here for layout ready logic
-            // this.imageResizer = new ImageResizer(this);
-            // Delay initialization to avoid startup issues
-            this.app.workspace.onLayoutReady(() => {
-                const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-                if (activeView) {
-                    this.imageResizer?.onload(activeView);
-                }
-            });
+            this.attachImageResizerToActiveView();
         }
 
         // Initialize components that depend on others
@@ -345,6 +391,7 @@ export default class ImageConverterPlugin extends Plugin {
                 this.folderAndFilenameManagement,
                 this.variableProcessor
             );
+            this.addChild(this.contextMenu);
         }
 
         // Register PASTE/DROP events
@@ -537,13 +584,16 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Clean up resizer next since other components might depend on it
         if (this.imageResizer) {
-            this.imageResizer.onunload();
+            const { imageResizer } = this;
             this.imageResizer = null;
+            this.removeChild(imageResizer);
         }
 
         // Clean up UI components
         if (this.contextMenu) {
-            this.contextMenu.onunload();
+            const { contextMenu } = this;
+            this.contextMenu = null;
+            this.removeChild(contextMenu);
         }
 
         // Clean up modals
@@ -596,6 +646,7 @@ export default class ImageConverterPlugin extends Plugin {
         };
 
         this.settings = deepMerge(DEFAULT_SETTINGS, loadedData);
+        this.stripLegacyPresetSettings(this.settings);
 
         // Ensure critical sections exist even if deepMerge missed something (e.g. new sections)
         if (!this.settings.global) this.settings.global = { ...DEFAULT_SETTINGS.global };
@@ -621,12 +672,66 @@ export default class ImageConverterPlugin extends Plugin {
             ffmpegExecutablePath: externalTools.ffmpegExecutablePath,
             ffmpegCrf: externalTools.ffmpegCrf,
             ffmpegPreset: externalTools.ffmpegPreset,
+            ffmpegDetectedEncoder: externalTools.ffmpegDetectedEncoder,
+            ffmpegDetectedEncoderPath: externalTools.ffmpegDetectedEncoderPath,
         };
     }
 
     // Save settings method
     async saveSettings() {
+        this.stripLegacyPresetSettings(this.settings);
         await this.saveData(this.settings);
+    }
+
+    private stripLegacyPresetSettings(settings: unknown): void {
+        const legacyPresetKeys = new Set([
+            "conversionPresets",
+            "folderPresets",
+            "filenamePresets",
+            "linkFormatPresets",
+            "resizePresets",
+            "globalPresets",
+            "globalPresetConfig",
+            "activeConversionPreset",
+            "activeFolderPreset",
+            "activeFilenamePreset",
+            "activeLinkFormatPreset",
+            "activeResizePreset",
+            "activeGlobalPreset",
+            "selectedConversionPreset",
+            "selectedFolderPreset",
+            "selectedFilenamePreset",
+            "selectedLinkFormatPreset",
+            "selectedResizePreset",
+            "selectedGlobalPreset",
+            "defaultConversionPreset",
+            "defaultFolderPreset",
+            "defaultFilenamePreset",
+            "defaultLinkFormatPreset",
+            "defaultResizePreset",
+            "defaultGlobalPreset",
+            "showGlobalPresets",
+            "globalPresetsVisible",
+        ]);
+
+        const strip = (value: unknown): void => {
+            if (!value || typeof value !== "object") return;
+            if (Array.isArray(value)) {
+                value.forEach(strip);
+                return;
+            }
+
+            const record = value as Record<string, unknown>;
+            for (const key of Object.keys(record)) {
+                if (legacyPresetKeys.has(key)) {
+                    delete record[key];
+                } else {
+                    strip(record[key]);
+                }
+            }
+        };
+
+        strip(settings);
     }
 
     /**
@@ -845,6 +950,8 @@ export default class ImageConverterPlugin extends Plugin {
         // Drop event (Obsidian editor - primary handlers)
         this.registerEvent(
             this.app.workspace.on("editor-drop", async (evt: DragEvent, editor: Editor) => {
+                if (evt.defaultPrevented) return;
+
                 if (!evt.dataTransfer) {
                     console.warn("DataTransfer object is null initially. Cannot process drop event.");
                     return;
@@ -894,6 +1001,8 @@ export default class ImageConverterPlugin extends Plugin {
         // --- Paste event handler ---
         this.registerEvent(
             this.app.workspace.on("editor-paste", async (evt: ClipboardEvent, editor: Editor) => {
+                if (evt.defaultPrevented) return;
+
                 if (!evt.clipboardData) {
                     console.warn("ClipboardData object is null. Cannot process paste event.");
                     return;

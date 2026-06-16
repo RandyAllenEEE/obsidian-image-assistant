@@ -1,8 +1,11 @@
-import { Setting, setIcon } from "obsidian";
+import { Notice, Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../../main";
-import { EnlargeReduce, OutputFormat, ResizeMode } from "../types";
+import { AvifEncoder, EnlargeReduce, LocalExternalToolSettings, OutputFormat, ResizeMode } from "../types";
 import { ResizeDimension, ResizeScaleMode, ResizeUnits } from "../NonDestructiveResizeSettings";
 import { t } from "../../lang/helpers";
+import { AVIF_ENCODER_CONFIGS, ImageProcessor } from "../../local/ImageProcessor";
+import { findFfmpegExecutablePath, normalizeExecutablePath } from "../../utils/ffmpegPath";
+import { addInfoIcon } from "../../utils/settingInfo";
 
 interface RenderContext {
     plugin: ImageConverterPlugin;
@@ -217,32 +220,99 @@ function renderConversion(container: HTMLElement, context: RenderContext): void 
     }
 
     if (conversion.outputFormat === "AVIF") {
+        const activeEncoder = getActiveAvifEncoder(tools);
+        const encoderConfig = activeEncoder
+            ? AVIF_ENCODER_CONFIGS[activeEncoder]
+            : AVIF_ENCODER_CONFIGS["libaom-av1"];
+
         new Setting(container)
             .setName(t("MODAL_FFMPEG_PATH"))
+            .setTooltip(t("TOOLTIP_FFMPEG_PATH"))
             .addText(text => text.setValue(tools.ffmpegExecutablePath).onChange(async value => {
+                const previousPath = normalizeExecutablePath(tools.ffmpegExecutablePath);
+                const nextPath = normalizeExecutablePath(value);
+                if (previousPath !== nextPath) {
+                    ImageProcessor.clearAvifEncoderCache(previousPath);
+                    tools.ffmpegDetectedEncoder = undefined;
+                    tools.ffmpegDetectedEncoderPath = undefined;
+                }
                 tools.ffmpegExecutablePath = value;
                 await context.plugin.saveSettings();
-            }));
+            }))
+            .addExtraButton(button => {
+                button
+                    .setIcon("search")
+                    .setTooltip(t("BUTTON_FIND_FFMPEG"))
+                    .onClick(async () => {
+                        const foundPath = await findFfmpegExecutablePath(context.plugin.app);
+                        if (!foundPath) {
+                            new Notice(t("NOTICE_FFMPEG_NOT_FOUND"));
+                            return;
+                        }
+                        const previousPath = normalizeExecutablePath(tools.ffmpegExecutablePath);
+                        tools.ffmpegExecutablePath = foundPath;
+                        tools.ffmpegDetectedEncoder = undefined;
+                        tools.ffmpegDetectedEncoderPath = undefined;
+                        ImageProcessor.clearAvifEncoderCache(previousPath);
+                        await context.plugin.saveSettings();
+                        new Notice(t("NOTICE_FFMPEG_DETECTED", [foundPath]));
+                        context.refreshDisplay();
+                    });
+            })
+            .then(setting => addInfoIcon(setting, t("TOOLTIP_FFMPEG_PATH")));
+
+        new Setting(container)
+            .setName(t("MODAL_AVIF_ENCODER"))
+            .setDesc(activeEncoder
+                ? t("DESC_AVIF_ENCODER_CURRENT", [activeEncoder])
+                : t("DESC_AVIF_ENCODER_DETECTION"))
+            .addExtraButton(button => {
+                button
+                    .setIcon("cpu")
+                    .setTooltip(t("BUTTON_DETECT_ENCODER"))
+                    .onClick(async () => {
+                        const executablePath = normalizeExecutablePath(tools.ffmpegExecutablePath);
+                        if (!executablePath) {
+                            new Notice(t("ERROR_FFMPEG_NOT_SET"));
+                            return;
+                        }
+
+                        ImageProcessor.clearAvifEncoderCache(executablePath);
+                        const encoder = await context.plugin.imageProcessor.detectAvifEncoder(
+                            executablePath,
+                            tools.ffmpegDetectedEncoder,
+                            { forceProbe: true }
+                        );
+                        if (!encoder) {
+                            tools.ffmpegDetectedEncoder = undefined;
+                            tools.ffmpegDetectedEncoderPath = undefined;
+                            await context.plugin.saveSettings();
+                            new Notice(t("NOTICE_ENCODER_NOT_FOUND"));
+                            context.refreshDisplay();
+                            return;
+                        }
+
+                        tools.ffmpegExecutablePath = executablePath;
+                        tools.ffmpegDetectedEncoder = encoder;
+                        tools.ffmpegDetectedEncoderPath = executablePath;
+                        await context.plugin.saveSettings();
+                        new Notice(t("NOTICE_ENCODER_DETECTED", [encoder]));
+                        context.refreshDisplay();
+                    });
+            });
+
         new Setting(container)
             .setName(t("MODAL_FFMPEG_CRF"))
-            .addSlider(slider => slider.setLimits(0, 63, 1).setValue(tools.ffmpegCrf).setDynamicTooltip().onChange(async value => {
+            .setDesc(t("DESC_FFMPEG_CRF_RANGE", [encoderConfig.crfMin, encoderConfig.crfMax]))
+            .addSlider(slider => slider.setLimits(encoderConfig.crfMin, encoderConfig.crfMax, 1).setValue(Math.max(encoderConfig.crfMin, Math.min(encoderConfig.crfMax, tools.ffmpegCrf))).setDynamicTooltip().onChange(async value => {
                 tools.ffmpegCrf = value;
                 await context.plugin.saveSettings();
             }));
         new Setting(container)
             .setName(t("MODAL_FFMPEG_PRESET"))
             .addDropdown(dropdown => {
+                getAvifPresetOptions(activeEncoder, tools.ffmpegPreset).forEach(option => dropdown.addOption(option, option));
                 dropdown
-                    .addOption("ultrafast", "ultrafast")
-                    .addOption("superfast", "superfast")
-                    .addOption("veryfast", "veryfast")
-                    .addOption("faster", "faster")
-                    .addOption("fast", "fast")
-                    .addOption("medium", "medium")
-                    .addOption("slow", "slow")
-                    .addOption("slower", "slower")
-                    .addOption("veryslow", "veryslow")
-                    .addOption("placebo", "placebo")
                     .setValue(tools.ffmpegPreset)
                     .onChange(async value => {
                         tools.ffmpegPreset = value;
@@ -461,6 +531,43 @@ function renderEmbedResize(container: HTMLElement, context: RenderContext): void
             resize.maintainAspectRatio = value;
             await context.plugin.saveSettings();
         }));
+}
+
+function getActiveAvifEncoder(tools: LocalExternalToolSettings): AvifEncoder | undefined {
+    const encoder = tools.ffmpegDetectedEncoder;
+    if (!encoder || !(encoder in AVIF_ENCODER_CONFIGS)) return undefined;
+
+    const encoderPath = tools.ffmpegDetectedEncoderPath;
+    if (!encoderPath) return encoder;
+
+    return normalizeExecutablePath(encoderPath) === normalizeExecutablePath(tools.ffmpegExecutablePath)
+        ? encoder
+        : undefined;
+}
+
+function getAvifPresetOptions(encoder?: AvifEncoder, currentPreset: string = ""): string[] {
+    if (!encoder) {
+        return [
+            "ultrafast",
+            "superfast",
+            "veryfast",
+            "faster",
+            "fast",
+            "medium",
+            "slow",
+            "slower",
+            "veryslow",
+            "placebo",
+        ];
+    }
+
+    const config = encoder ? AVIF_ENCODER_CONFIGS[encoder] : AVIF_ENCODER_CONFIGS["libaom-av1"];
+    const options = config.supportsPreset && config.presetNames?.length
+        ? config.presetNames
+        : ["medium"];
+    return currentPreset && !options.includes(currentPreset)
+        ? [currentPreset, ...options]
+        : options;
 }
 
 function addNumberSetting(container: HTMLElement, name: string, value: number, onChange: (value: number) => Promise<void>): void {

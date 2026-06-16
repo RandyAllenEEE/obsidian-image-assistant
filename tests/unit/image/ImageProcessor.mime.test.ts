@@ -36,7 +36,7 @@ describe('ImageProcessor - MIME Type Detection Tests', () => {
     // Arrange: Set up processor and mocks
     const appMock: any = { metadataCache: { getFileCache: vi.fn() } };
     supportedFormats = new SupportedImageFormats(appMock);
-    processor = new ImageProcessor(supportedFormats);
+    processor = new ImageProcessor(appMock, supportedFormats);
     
     // Mock document.createElement for canvas without replacing whole document
     mockCanvas = fakeCanvas();

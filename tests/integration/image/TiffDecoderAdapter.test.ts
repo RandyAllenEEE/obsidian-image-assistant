@@ -20,7 +20,7 @@ describe('Integration-lite: TiffDecoderAdapter', () => {
   beforeEach(() => {
     const app = fakeApp() as any;
     supportedFormats = new SupportedImageFormats(app);
-    processor = new ImageProcessor(supportedFormats);
+    processor = new ImageProcessor(app, supportedFormats);
   });
 
   it('1.39 [I] TIFF decoding: calls handler and passes through pipeline', async () => {

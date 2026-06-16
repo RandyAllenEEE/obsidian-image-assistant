@@ -20,6 +20,7 @@ import { App, TFile, requestUrl, normalizePath } from 'obsidian';
 import { UploadHelper } from '../../../src/utils/UploadHelper';
 import { FolderAndFilenameManagement } from '../../../src/local/FolderAndFilenameManagement';
 import ImageConverterPlugin from '../../../src/main';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
 
 // Mock Obsidian API
 vi.mock('obsidian', () => ({
@@ -67,6 +68,7 @@ describe('NetworkImageDownloader', () => {
                 getActiveFile: vi.fn(),
             },
             vault: {
+                read: vi.fn().mockResolvedValue(''),
                 adapter: {
                     exists: vi.fn(),
                     writeBinary: vi.fn(),
@@ -85,16 +87,7 @@ describe('NetworkImageDownloader', () => {
         } as any;
 
         mockPlugin = {
-            settings: {
-                cloudUploadSettings: {
-                    newWorkBlackDomains: '',
-                },
-                filenamePresets: [
-                    {
-                        conflictResolution: 'increment',
-                    },
-                ],
-            },
+            settings: structuredClone(DEFAULT_SETTINGS),
             vaultReferenceManager: {
                 updateReferencesInFile: vi.fn().mockResolvedValue(1),
             },
@@ -346,7 +339,7 @@ describe('NetworkImageDownloader', () => {
                 arrayBuffer: pngBuffer.buffer,
             });
 
-            const result = await (downloader as any).downloadSingleImage(
+            const result = await (downloader as any).downloadSingleImageInternal(
                 'https://example.com/photo.jpg',
                 'attachments',
                 'photo.jpg',
@@ -366,7 +359,7 @@ describe('NetworkImageDownloader', () => {
                 status: 500,
             });
 
-            const result = await (downloader as any).downloadSingleImage(
+            const result = await (downloader as any).downloadSingleImageInternal(
                 'https://example.com/photo.jpg',
                 'attachments',
                 'photo.jpg',
@@ -384,7 +377,7 @@ describe('NetworkImageDownloader', () => {
                 arrayBuffer: invalidBuffer.buffer,
             });
 
-            const result = await (downloader as any).downloadSingleImage(
+            const result = await (downloader as any).downloadSingleImageInternal(
                 'https://example.com/photo.jpg',
                 'attachments',
                 'photo.jpg',
@@ -396,7 +389,7 @@ describe('NetworkImageDownloader', () => {
         });
 
         it('Given 非法 URL 协议, When 下载, Then 返回验证错误', async () => {
-            const result = await (downloader as any).downloadSingleImage(
+            const result = await (downloader as any).downloadSingleImageInternal(
                 'ftp://example.com/photo.jpg',
                 'attachments',
                 'photo.jpg',
@@ -410,7 +403,7 @@ describe('NetworkImageDownloader', () => {
         it('Given 网络错误, When 下载, Then 返回错误消息', async () => {
             (requestUrl as any).mockRejectedValue(new Error('Network timeout'));
 
-            const result = await (downloader as any).downloadSingleImage(
+            const result = await (downloader as any).downloadSingleImageInternal(
                 'https://example.com/photo.jpg',
                 'attachments',
                 'photo.jpg',
@@ -428,7 +421,7 @@ describe('NetworkImageDownloader', () => {
                 arrayBuffer: jpgBuffer.buffer,
             });
 
-            await (downloader as any).downloadSingleImage(
+            await (downloader as any).downloadSingleImageInternal(
                 'https://example.com/photo<test>.jpg',
                 'attachments',
                 'photo<test>.jpg',
@@ -447,7 +440,7 @@ describe('NetworkImageDownloader', () => {
 
             (mockFolderManager.handleNameConflicts as any).mockResolvedValue('photo_1.png');
 
-            const result = await (downloader as any).downloadSingleImage(
+            const result = await (downloader as any).downloadSingleImageInternal(
                 'https://example.com/photo.png',
                 'attachments',
                 'photo.png',
@@ -469,7 +462,7 @@ describe('NetworkImageDownloader', () => {
                 arrayBuffer: pngBuffer.buffer,
             });
 
-            const result = await (downloader as any).downloadSingleImage(
+            const result = await (downloader as any).downloadSingleImageInternal(
                 'https://example.com/photo.png',
                 'attachments',
                 'photo.png',
@@ -621,7 +614,7 @@ describe('NetworkImageDownloader', () => {
                 { path: 'https://bad-site.com/image.png', source: '![](https://bad-site.com/image.png)' },
             ]);
 
-            mockPlugin.settings.cloudUploadSettings.newWorkBlackDomains = 'bad-site.com';
+            mockPlugin.settings.pasteHandling.cloud.newWorkBlackDomains = 'bad-site.com';
 
             await downloader.downloadAllNetworkImages();
 

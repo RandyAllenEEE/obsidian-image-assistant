@@ -8,6 +8,23 @@ import { vi, beforeEach, afterEach } from 'vitest';
 let imageSize = { width: 100, height: 100 };
 let imageFailNext = false;
 
+function createMomentStub() {
+  const momentStub: any = () => ({
+    format: () => '2025-01-02',
+    add: () => momentStub(),
+    subtract: () => momentStub(),
+    startOf: () => momentStub(),
+    endOf: () => momentStub(),
+    daysInMonth: () => 31,
+    week: () => 1,
+    quarter: () => 1,
+    calendar: () => '2025-01-02',
+    fromNow: () => 'in a few seconds'
+  });
+  momentStub.locale = vi.fn(() => 'en');
+  return momentStub;
+}
+
 class MockImage {
   onload: ((e?: any) => void) | null = null;
   onerror: ((e?: any) => void) | null = null;
@@ -97,7 +114,8 @@ beforeEach(() => {
     
     // Mock Obsidian-specific globals
     (window as any).app = undefined;
-    (window as any).moment = undefined;
+    (window as any).moment = createMomentStub();
+    (globalThis as any).moment = (window as any).moment;
   }
 
   // Ensure requestAnimationFrame/cancelAnimationFrame behave predictably in tests
@@ -341,20 +359,6 @@ beforeEach(() => {
   global.URL.createObjectURL = vi.fn(() => 'blob:mock-url');
   global.URL.revokeObjectURL = vi.fn();
 
-  // Provide a deterministic murmurHash3128 stub if missing (used by ImageAlignmentManager)
-  if (!(global as any).murmurHash3128) {
-    (global as any).murmurHash3128 = (str: string, seed = 0) => {
-      // Simple DJB2 variant to return a 32-hex string for stability in tests
-      let hash = 5381 + seed;
-      for (let i = 0; i < str.length; i++) {
-        hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
-        hash |= 0;
-      }
-      // Convert to 32 hex chars
-      const hex = (hash >>> 0).toString(16).padStart(8, '0');
-      return (hex + hex + hex + hex).slice(0, 32);
-    };
-  }
 });
 
 afterEach(() => {

@@ -37,6 +37,8 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
             ffmpegExecutablePath: "",
             ffmpegCrf: 23,
             ffmpegPreset: "medium",
+            ffmpegDetectedEncoder: undefined,
+            ffmpegDetectedEncoderPath: undefined,
             useSystemPathForBinary: true,
         },
         link: {
@@ -103,8 +105,6 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
         enabled: true,
         default: 'center',
         enableEditModeWrap: false,
-        cacheCleanupInterval: 3600000,
-        cacheLocation: 'plugin',
     },
 
     interactiveResize: {
@@ -133,7 +133,6 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
             workOnNetWork: false,
             newWorkBlackDomains: '',
             applyImage: true,
-            deleteSource: false,
             downloadPath: 'attachments',
             uploadConcurrency: 3,
             cloudLinkFormat: 'markdown'

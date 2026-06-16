@@ -97,14 +97,16 @@ export class ClipboardHandler extends Component {
      * @param event - The MouseEvent object.
      */
     async copyImage(event: MouseEvent) {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
         const targetImg = event.target as HTMLImageElement;
+        const ownerDocument = targetImg.ownerDocument ?? document;
+        const ImageCtor = ownerDocument.defaultView?.Image ?? Image;
+        const img = new ImageCtor();
+        img.crossOrigin = 'anonymous';
 
         // Use this.registerDomEvent() for proper cleanup
         this.registerDomEvent(img, 'load', async () => {
             try {
-                const canvas = document.createElement('canvas');
+                const canvas = ownerDocument.createElement('canvas');
                 canvas.width = img.naturalWidth;
                 canvas.height = img.naturalHeight;
                 const ctx = canvas.getContext('2d');
@@ -134,12 +136,14 @@ export class ClipboardHandler extends Component {
      */
     async copyImageAsBase64(event: MouseEvent) {
         const targetImg = event.target as HTMLImageElement;
-        const img = new Image();
+        const ownerDocument = targetImg.ownerDocument ?? document;
+        const ImageCtor = ownerDocument.defaultView?.Image ?? Image;
+        const img = new ImageCtor();
         img.crossOrigin = 'anonymous';
 
         this.registerDomEvent(img, 'load', async () => {
             try {
-                const canvas = document.createElement('canvas');
+                const canvas = ownerDocument.createElement('canvas');
                 canvas.width = img.naturalWidth;
                 canvas.height = img.naturalHeight;
                 const ctx = canvas.getContext('2d');

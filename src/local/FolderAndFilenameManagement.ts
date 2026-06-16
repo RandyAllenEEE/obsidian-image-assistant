@@ -9,6 +9,7 @@ import {
 } from "../settings/types";
 import { VariableProcessor, VariableContext } from "./VariableProcessor";
 import { SupportedImageFormats } from "./SupportedImageFormats";
+import { getVaultConfigString } from "../utils/vaultConfig";
 
 export class FolderAndFilenameManagement {
     constructor(
@@ -252,10 +253,11 @@ export class FolderAndFilenameManagement {
     }
 
     public getDefaultAttachmentFolderPath(activeFile: TFile): string {
-        // @ts-ignore
-        const configuredPath = this.app.vault.getConfig(
-            "attachmentFolderPath"
-        );
+        const configuredPath = getVaultConfigString(this.app, "attachmentFolderPath");
+        if (!configuredPath) {
+            return activeFile.parent?.path || "";
+        }
+
         if (configuredPath.startsWith("./")) {
             return activeFile.parent?.path
                 ? normalizePath(`${activeFile.parent.path}/${configuredPath.substring(2)}`)

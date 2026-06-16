@@ -35,7 +35,7 @@ export class UploadHistoryManager {
         const adapter = await this.getAdapter();
         // Store in the plugin's configuration directory usually
         // But for simplicity/robustness, we can store it in the plugin dir or vault root
-        // Best practice: Store in .obsidian/plugins/image-assistant/upload_history.json or similar?
+        // Best practice: store next to data.json under the plugin's manifest id.
         // Or simply adjacent to data.json.
         // To be safe and standard: use the config dir.
         const configDir = this.app.vault.configDir;

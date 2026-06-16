@@ -30,9 +30,9 @@ export class ImageAlignment extends Component {
     // Context menu registration moved to ContextMenu.ts
 
     /**
-     * Applies alignment styles to an image based on cached data. THIS is called from ImageAlignmentManager!
+     * Applies alignment styles to an image based on parsed pipe syntax state.
      * @param img - The target image element.
-     * @param positionData - The cached alignment data.
+     * @param positionData - The alignment state to apply.
      */
     public applyAlignmentToImage(img: HTMLImageElement, positionData: ImagePositionData) {
         if (!positionData) {

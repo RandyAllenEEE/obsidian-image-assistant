@@ -34,6 +34,7 @@ export class ContextMenu extends Component {
 	private contextMenuRegistered = false;
 	private currentMenu: Menu | null = null;
 	private cloudDeleter: CloudImageDeleter;
+	private registeredContextMenuDocuments = new WeakSet<Document>();
 
 	// Handlers
 	private deleteHandler: DeleteHandler;
@@ -51,9 +52,16 @@ export class ContextMenu extends Component {
 	private renameInputBuilder: RenameInputBuilder;
 
 	private readonly documentClickHandler = (event: MouseEvent) => {
-		if (!(event.target as HTMLElement).closest('.image-converter-contextmenu-info-container') &&
-			!(event.target as HTMLElement).closest('.menu-item')) {
-			this.currentMenu?.hide();
+		const target = event.target;
+		if (!(target instanceof Element) && !(target as any)?.instanceOf?.(Element)) {
+			this.closeCurrentMenu();
+			return;
+		}
+
+		const element = target as Element;
+		if (!element.closest('.image-converter-contextmenu-info-container') &&
+			!element.closest('.menu-item')) {
+			this.closeCurrentMenu();
 		}
 	};
 
@@ -126,22 +134,99 @@ export class ContextMenu extends Component {
 	/*                       CONTEXT MENU SETUP                        */
 	/*-----------------------------------------------------------------*/
 
+	private closeCurrentMenu(): void {
+		const menu = this.currentMenu;
+		if (!menu) return;
+
+		this.currentMenu = null;
+		menu.hide?.();
+	}
+
+	private registerContextMenuListenerForDocument(ownerDocument: Document): void {
+		if (this.registeredContextMenuDocuments.has(ownerDocument)) {
+			return;
+		}
+
+		this.registerDomEvent(
+			ownerDocument,
+			'contextmenu',
+			this.handleContextMenuEvent,
+			true
+		);
+		this.registerDomEvent(
+			ownerDocument,
+			'click',
+			this.documentClickHandler
+		);
+		this.registeredContextMenuDocuments.add(ownerDocument);
+	}
+
+	private registerContextMenuListenersForWorkspaceDocuments(): void {
+		this.registerContextMenuListenerForDocument(document);
+
+		const workspaceDocument = this.app.workspace.containerEl?.ownerDocument;
+		if (workspaceDocument) {
+			this.registerContextMenuListenerForDocument(workspaceDocument);
+		}
+
+		this.app.workspace.iterateAllLeaves?.((leaf) => {
+			const leafDocument = leaf.view?.containerEl?.ownerDocument;
+			if (leafDocument) {
+				this.registerContextMenuListenerForDocument(leafDocument);
+			}
+		});
+	}
+
 	/**
-	 * Registers the context menu listener on the document.
-	 * This listener will trigger the context menu when an image is right-clicked.
+	 * Registers context menu listeners on every known Obsidian document.
 	 */
 	registerContextMenuListener() {
 		if (this.contextMenuRegistered) {
 			return;
 		}
 
-		this.registerDomEvent(
-			document,
-			'contextmenu',
-			this.handleContextMenuEvent,
-			true
+		this.registerContextMenuListenersForWorkspaceDocuments();
+		this.registerEvent(
+			this.app.workspace.on('window-open' as any, (_workspaceWindow: unknown, win: Window) => {
+				if (win?.document) {
+					this.registerContextMenuListenerForDocument(win.document);
+				}
+			})
 		);
 		this.contextMenuRegistered = true;
+	}
+
+	private isElement(target: EventTarget | null): target is HTMLElement {
+		return !!target && (
+			target instanceof HTMLElement ||
+			typeof (target as any).instanceOf === 'function' && (target as any).instanceOf(HTMLElement)
+		);
+	}
+
+	private isImageElement(target: Element | null): target is HTMLImageElement {
+		return !!target && (
+			target instanceof HTMLImageElement ||
+			typeof (target as any).instanceOf === 'function' && (target as any).instanceOf(HTMLImageElement)
+		);
+	}
+
+	private resolveImageFromTarget(target: HTMLElement): HTMLImageElement | null {
+		if (this.isImageElement(target)) {
+			return target;
+		}
+
+		const directImage = target.closest('img');
+		if (this.isImageElement(directImage)) {
+			return directImage;
+		}
+
+		const wrapper = target.closest('.image-wrapper, .image-embed, .image-resize-container');
+		if (!wrapper) {
+			return null;
+		}
+
+		const image = wrapper.querySelector('.image-resize-container img, img');
+		return this.isImageElement(image) ? image : null;
 	}
 
 	/**
@@ -150,7 +235,15 @@ export class ContextMenu extends Component {
 	 * @param event - The MouseEvent object.
 	 */
 	handleContextMenuEvent = (event: MouseEvent) => {
-		const target = event.target as HTMLElement;
+		if (event.defaultPrevented) {
+			return;
+		}
+
+		if (!this.isElement(event.target)) {
+			return;
+		}
+
+		const target = event.target;
 		const activeView = this.app.workspace.getActiveViewOfType(View);
 		const isCanvasView = activeView?.getViewType() === 'canvas';
 
@@ -158,7 +251,7 @@ export class ContextMenu extends Component {
 			return;
 		}
 
-		const img = target instanceof HTMLImageElement ? target : target.closest('img');
+		const img = this.resolveImageFromTarget(target);
 		if (!img) {
 			return;
 		}
@@ -182,7 +275,14 @@ export class ContextMenu extends Component {
 		event.preventDefault();
 		event.stopPropagation();
 
+		this.closeCurrentMenu();
 		const menu = new Menu();
+		this.currentMenu = menu;
+		(menu as any).onHide?.(() => {
+			if (this.currentMenu === menu) {
+				this.currentMenu = null;
+			}
+		});
 		let activeFile = this.app.workspace.getActiveFile();
 		if (!activeFile) {
 			const mv = this.app.workspace.getActiveViewOfType(MarkdownView) as any;
@@ -502,7 +602,10 @@ export class ContextMenu extends Component {
 
 	onunload() {
 		// Clean up handlers that extend Component
+		this.closeCurrentMenu();
 		this.clipboardHandler?.onunload();
 		this.renameInputBuilder?.onunload();
+		this.contextMenuRegistered = false;
+		super.onunload();
 	}
 }

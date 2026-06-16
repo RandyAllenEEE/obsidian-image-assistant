@@ -37,11 +37,13 @@ export default {
     "SETTING_WORK_ON_NETWORK_DESC": "Also upload images from URLs",
     "SETTING_NETWORK_BLACKLIST": "Network Image Domain Blacklist",
     "SETTING_NETWORK_BLACKLIST_DESC": "Comma-separated list of domains to exclude (e.g., example.com, test.org)",
+    "SETTING_REMOTE_SERVER_MODE": "Remote server mode",
+    "SETTING_REMOTE_SERVER_MODE_DESC": "Send vault-relative paths to a remote PicGo/PicList server. Network image upload is disabled in this mode.",
+    "SETTING_WORK_ON_NETWORK_REMOTE_DISABLED_DESC": "Network image upload is disabled while remote server mode is enabled.",
+    "NOTICE_NETWORK_DISABLED_IN_REMOTE_MODE": "Network image upload is disabled in remote server mode.",
 
     "SETTING_APPLY_IMAGE": "Upload even if clipboard has text",
     "SETTING_APPLY_IMAGE_DESC": "Upload image even if clipboard also contains text",
-    "SETTING_DELETE_SOURCE": "Delete local source file after upload",
-    "SETTING_DELETE_SOURCE_DESC": "Automatically delete local file after successful upload",
 
     // Cloud Settings - Uploader Types
     "SETTING_UPLOADER_PICGO": "PicGo",
@@ -177,6 +179,10 @@ export default {
     // Image Processor
     "ERROR_PNGQUANT_NOT_SET": "PNGQUANT executable path is not set. Please configure it in the plugin settings.",
     "ERROR_FFMPEG_NOT_SET": "FFmpeg executable path is not set. Please configure it in the plugin settings.",
+    "NOTICE_FFMPEG_NOT_FOUND": "FFmpeg executable was not found.",
+    "NOTICE_FFMPEG_DETECTED": "FFmpeg executable found: {0}",
+    "NOTICE_ENCODER_DETECTED": "AVIF encoder detected: {0}",
+    "NOTICE_ENCODER_NOT_FOUND": "No usable AV1 encoder was found in this FFmpeg build.",
 
     // Uploader
     "ERROR_MOBILE_MUST_REMOTE": "Mobile App must use remote server mode.",
@@ -256,10 +262,6 @@ export default {
 
     // Image Alignment
     "SETTING_IMG_ALIGNMENT_SECTION": "Image Alignment",
-    "SETTING_IMG_ALIGNMENT_CACHE_LOC": "Image Alignment Cache Location",
-    "SETTING_IMG_ALIGNMENT_CACHE_LOC_DESC": "Choose where to store alignment cache. Note: Restart required.",
-    "SETTING_IMG_ALIGNMENT_CACHE_INTERVAL": "Cache Cleanup Interval",
-    "SETTING_IMG_ALIGNMENT_CACHE_INTERVAL_DESC": "Interval to clean up redundant cache entries (minutes). Default: 60 (0 to disable)",
     "SETTING_DEFAULT_ALIGN": "Default Alignment",
     "SETTING_DEFAULT_ALIGN_DESC": "Alignment to use when image has no align attribute",
     "SETTING_ENABLE_WRAP_IN_EDIT": "Enable Text Wrap in Edit Mode",
@@ -417,6 +419,7 @@ export default {
     "MODAL_FFMPEG_PATH": "FFmpeg executable path",
     "MODAL_FFMPEG_CRF": "FFmpeg CRF",
     "MODAL_FFMPEG_PRESET": "FFmpeg Preset",
+    "MODAL_AVIF_ENCODER": "AVIF encoder",
     "MODAL_RESIZE_MODE": "Resize Mode",
     "MODAL_DESIRED_WIDTH": "Desired Width",
     "MODAL_DESIRED_HEIGHT": "Desired Height",
@@ -909,8 +912,14 @@ export default {
     "OPTION_PNGQUANT": "pngquant (PNG Only)",
     "OPTION_AVIF": "AVIF (via ffmpeg)",
     "TOOLTIP_PNGQUANT_PATH": "Provide full-path to the binary file. It can be inside vault or anywhere in your file system.",
+    "TOOLTIP_FFMPEG_PATH": "Provide the FFmpeg executable path. It can be inside your vault or anywhere in your file system.",
     "TOOLTIP_PNGQUANT_QUALITY": "Instructs pngquant to use the least amount of colors required to meet or exceed the max quality. min and max are numbers in range 0 (worst) to 100 (perfect).",
     "DESC_FFMPEG_CRF": "Lower values mean better quality (larger file size). 0 is lossless.",
+    "DESC_FFMPEG_CRF_RANGE": "Lower values mean better quality. Current encoder supports CRF {0}-{1}.",
+    "DESC_AVIF_ENCODER_DETECTION": "Detect the best available AV1 encoder for this FFmpeg path. Hardware encoders are preferred when they pass a quick validation.",
+    "DESC_AVIF_ENCODER_CURRENT": "Detected encoder: {0}",
+    "BUTTON_FIND_FFMPEG": "Find FFmpeg",
+    "BUTTON_DETECT_ENCODER": "Detect encoder",
     "OPTION_AUTO": "Auto",
 
     // Upload Modals Tooltips & Messages
@@ -973,8 +982,11 @@ export default {
     "MSG_FAIL_FIND_IMAGE": "Failed to find image link in the current note.",
     "MSG_FAIL_FIND_CLOUD": "Failed to find cloud image link in the current note.",
     "MSG_CLOUD_DELETE_SUCCESS": "Cloud image deleted successfully!",
-    "MSG_CLOUD_DELETE_FAIL_HISTORY": "Cloud image link removed, but failed to delete from cloud storage. History record removed.",
-    "MSG_CLOUD_DELETE_UNSUPPORTED": "Cloud image link removed. ({0} does not support automatic deletion). History record removed.",
+    "MSG_CLOUD_DELETE_FAIL_HISTORY": "Cloud image link removed, but the cloud file was not deleted: no upload history record was found. PicList deletion requires upload history.",
+    "MSG_CLOUD_DELETE_UNSUPPORTED": "Cloud image link removed, but the cloud file was not deleted: {0} does not support automatic deletion.",
+    "MSG_CLOUD_DELETE_MISSING_SERVER": "Cloud image link removed, but the cloud file was not deleted: PicList delete server is not configured.",
+    "MSG_CLOUD_DELETE_API_FAILED": "Cloud image link removed, but cloud deletion failed: {0}",
+    "MSG_CLOUD_DELETE_REQUEST_FAILED": "Cloud image link removed, but the delete request failed: {0}",
     "SETTING_OCR_SUBSECTION_GENERAL": "General",
     "SETTING_OCR_SUBSECTION_CONFIG": "Configuration",
     "SETTING_OCR_SIMPLETEX_SETTINGS": "SimpleTex Settings",

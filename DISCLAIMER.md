@@ -1,5 +1,5 @@
 
-# Image Converter Plugin - Important Notice
+# Image Assistant Plugin - Important Notice
 
 By installing and using this plugin, you acknowledge and agree to the following terms:
 

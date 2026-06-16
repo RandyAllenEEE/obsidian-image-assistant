@@ -2,7 +2,7 @@ import { App, Editor, MarkdownView, Notice, TFile, Modal } from 'obsidian';
 import { t } from '../../../lang/helpers';
 import ImageConverterPlugin from '../../../main';
 import { FolderAndFilenameManagement } from '../../../local/FolderAndFilenameManagement';
-import { CloudImageDeleter } from '../../../cloud/CloudImageDeleter';
+import { CloudDeleteResult, CloudImageDeleter } from '../../../cloud/CloudImageDeleter';
 import { ImageMatchFinder } from '../utils/ImageMatchFinder';
 import { EditorLinkRemover } from '../utils/EditorLinkRemover';
 import { ConfirmDialog } from '../../../settings/SettingsModals';
@@ -130,7 +130,7 @@ export class DeleteHandler {
                     const lineContent = match.line.trim();
                     const detailDiv = document.createElement('div');
                     detailDiv.style.marginBottom = '5px'; // Add some spacing between lines
-                    detailDiv.innerHTML = `  ${index + 1}. Line ${lineNumber}: ${lineContent}`;
+                    detailDiv.textContent = `  ${index + 1}. Line ${lineNumber}: ${lineContent}`;
                     messageContainer.appendChild(detailDiv); // Append to messageContainer
                 });
 
@@ -196,20 +196,12 @@ export class DeleteHandler {
                 new Notice(t("MSG_CLOUD_LINK_REMOVED"));
 
                 // Try to delete from cloud storage (PicList only)
-                const cloudDeleteSuccess = await this.cloudDeleter.deleteImage({ url: cloudUrl });
+                const cloudDeleteResult = await this.cloudDeleter.deleteImageDetailed({ url: cloudUrl });
 
-                // Force remove from history to avoid bloat (even if cloud delete failed or not supported)
-                await this.plugin.historyManager.removeRecord(cloudUrl);
-
-                if (cloudDeleteSuccess) {
+                if (cloudDeleteResult.success) {
                     new Notice(t("MSG_CLOUD_DELETE_SUCCESS"));
                 } else {
-                    const uploader = this.plugin.settings.pasteHandling.cloud.uploader;
-                    if (uploader === 'PicList') {
-                        new Notice(t("MSG_CLOUD_DELETE_FAIL_HISTORY"));
-                    } else {
-                        new Notice(t("MSG_CLOUD_DELETE_UNSUPPORTED", [uploader]));
-                    }
+                    new Notice(this.getCloudDeleteFailureNotice(cloudDeleteResult));
                 }
             };
 
@@ -226,20 +218,12 @@ export class DeleteHandler {
                 new Notice(t("MSG_REMOVED_CLOUD_LINKS", [uniqueMatches.length.toString()]));
 
                 // Try to delete from cloud storage (PicList only)
-                const cloudDeleteSuccess = await this.cloudDeleter.deleteImage({ url: cloudUrl });
+                const cloudDeleteResult = await this.cloudDeleter.deleteImageDetailed({ url: cloudUrl });
 
-                // Force remove from history to avoid bloat
-                await this.plugin.historyManager.removeRecord(cloudUrl);
-
-                if (cloudDeleteSuccess) {
+                if (cloudDeleteResult.success) {
                     new Notice(t("MSG_CLOUD_DELETED"));
                 } else {
-                    const uploader = this.plugin.settings.pasteHandling.cloud.uploader;
-                    if (uploader === 'PicList') {
-                        new Notice(t("MSG_CLOUD_DELETE_FAIL"));
-                    } else {
-                        new Notice(t("MSG_CLOUD_MANUAL_DELETE", [uploader]));
-                    }
+                    new Notice(this.getCloudDeleteFailureNotice(cloudDeleteResult));
                 }
             };
 
@@ -269,7 +253,7 @@ export class DeleteHandler {
                     const detailDiv = document.createElement('div');
                     detailDiv.style.marginBottom = '5px';
                     detailDiv.style.fontSize = '0.9em';
-                    detailDiv.innerHTML = `  ${index + 1}. Line ${lineNumber}: ${lineContent.substring(0, 60)}${lineContent.length > 60 ? '...' : ''}`;
+                    detailDiv.textContent = `  ${index + 1}. Line ${lineNumber}: ${lineContent.substring(0, 60)}${lineContent.length > 60 ? '...' : ''}`;
                     messageContainer.appendChild(detailDiv);
                 });
 
@@ -312,6 +296,24 @@ export class DeleteHandler {
         } catch (error) {
             console.error('[Cloud Delete] Error deleting cloud image:', error);
             new Notice(t("MSG_FAIL_DELETE_CLOUD"));
+        }
+    }
+
+    private getCloudDeleteFailureNotice(result: CloudDeleteResult): string {
+        const uploader = result.uploader || this.plugin.settings.pasteHandling.cloud.uploader;
+        switch (result.reason) {
+            case 'unsupported-uploader':
+                return t("MSG_CLOUD_DELETE_UNSUPPORTED", [uploader]);
+            case 'missing-delete-server':
+                return t("MSG_CLOUD_DELETE_MISSING_SERVER");
+            case 'missing-history':
+                return t("MSG_CLOUD_DELETE_FAIL_HISTORY");
+            case 'api-failed':
+                return t("MSG_CLOUD_DELETE_API_FAILED", [result.message || t("MSG_UNKNOWN_ERROR")]);
+            case 'request-failed':
+                return t("MSG_CLOUD_DELETE_REQUEST_FAILED", [result.message || t("MSG_UNKNOWN_ERROR")]);
+            default:
+                return t("MSG_CLOUD_DELETE_FAIL");
         }
     }
 }

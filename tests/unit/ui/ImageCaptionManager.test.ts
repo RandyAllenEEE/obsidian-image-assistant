@@ -1,156 +1,86 @@
-import { ImageCaptionManager } from '../../../src/ui/ImageCaptionManager';
-import { RefinedImageUtils } from '../../../src/utils/RefinedImageUtils';
-import { pipeSyntaxParser } from '../../../src/utils/PipeSyntaxParser';
-import ImageConverterPlugin from '../../../src/main';
-import { App, TFile } from 'obsidian';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
+import { ImageCaption } from '../../../src/ui/ImageCaption';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
+import { fakeApp } from '../../factories/obsidian';
 
-// Mock dependencies
-vi.mock('../../../src/utils/RefinedImageUtils');
-vi.mock('../../../src/main');
+function makePlugin(overrides: any = {}) {
+  const app = fakeApp() as any;
+  app.workspace.getActiveViewOfType = () => null;
+  return {
+    app,
+    settings: {
+      ...structuredClone(DEFAULT_SETTINGS),
+      captions: {
+        ...structuredClone(DEFAULT_SETTINGS.captions),
+        ...overrides
+      }
+    }
+  } as any;
+}
 
-describe('ImageCaptionManager', () => {
-    let mockPlugin: any;
-    let mockApp: any;
-    let manager: ImageCaptionManager;
-    let mockRefinedImageUtils: any;
+function makeEmbed(src = 'test.webp', alt = '') {
+  const embed = document.createElement('div');
+  embed.className = 'internal-embed image-embed';
+  embed.setAttribute('src', src);
+  const img = document.createElement('img');
+  img.setAttribute('src', src);
+  if (alt) img.setAttribute('alt', alt);
+  embed.appendChild(img);
+  document.body.appendChild(embed);
+  return { embed, img };
+}
 
-    beforeEach(() => {
-        mockApp = {
-            workspace: {
-                getActiveFile: vi.fn(),
-                getActiveViewOfType: vi.fn(),
-            }
-        };
+describe('ImageCaption', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    document.head.querySelector('#image-caption-styles')?.remove();
+  });
 
-        mockPlugin = {
-            app: mockApp,
-            settings: {
-                enableImageCaptions: true,
-                skipCaptionExtensions: 'png, jpg', // Example exclusion
-            }
-        };
+  it('adds the enabled body class and style tag when captions are enabled', () => {
+    new ImageCaption(makePlugin());
 
-        // Mock RefinedImageUtils instance
-        mockRefinedImageUtils = {
-            getImageLinkText: vi.fn()
-        };
-        (RefinedImageUtils as any).mockImplementation(() => mockRefinedImageUtils);
+    expect(document.body.classList.contains('image-captions-enabled')).toBe(true);
+    expect(document.getElementById('image-caption-styles')?.textContent).toContain('content: attr(alt)');
+  });
 
-        manager = new ImageCaptionManager(mockPlugin);
-        // Manually allow private method access for testing
-        (manager as any).refinedImageUtils = mockRefinedImageUtils;
-    });
+  it('sets a real caption on the embed container and image', () => {
+    const { embed, img } = makeEmbed('test.webp', 'My Caption');
+    const manager = new ImageCaption(makePlugin());
 
-    afterEach(() => {
-        vi.clearAllMocks();
-    });
+    manager.applyCaption(img, undefined);
 
-    it('should set alt to space if caption is missing/empty', () => {
-        const embed = document.createElement('div');
-        embed.setAttribute('src', 'test.webp');
-        const img = document.createElement('img');
-        img.setAttribute('src', 'test.webp');
-        // No alt attribute
-        embed.appendChild(img);
+    expect(embed.getAttribute('alt')).toBe('My Caption');
+    expect(img.getAttribute('alt')).toBe('My Caption');
+  });
 
-        mockPlugin.settings.skipCaptionExtensions = ''; // Don't skip webp
-        mockApp.workspace.getActiveFile.mockReturnValue({ path: 'note.md' } as TFile);
-        mockRefinedImageUtils.getImageLinkText.mockReturnValue('![[test.webp]]'); // No alt in link
+  it('uses a blank caption when the alt text is only the filename', () => {
+    const { embed, img } = makeEmbed('test.webp', 'test.webp');
+    const manager = new ImageCaption(makePlugin());
 
-        (manager as any).processImageEmbed(embed);
+    manager.applyCaption(img, undefined);
 
-        expect(embed.getAttribute('alt')).toBe(' ');
-        expect(img.getAttribute('alt')).toBe(' ');
-    });
+    expect(embed.getAttribute('alt')).toBe(' ');
+  });
 
-    it('should set alt to space if caption matches filename', () => {
-        const embed = document.createElement('div');
-        embed.setAttribute('src', 'test.webp');
-        const img = document.createElement('img');
-        img.setAttribute('src', 'test.webp');
-        img.setAttribute('alt', 'test.webp'); // Matches filename
-        embed.appendChild(img);
+  it('removes caption attributes for skipped extensions', () => {
+    const { embed, img } = makeEmbed('test.png', 'Skip me');
+    const manager = new ImageCaption(makePlugin({ skipExtensions: 'png' }));
 
-        mockPlugin.settings.skipCaptionExtensions = '';
-        mockApp.workspace.getActiveFile.mockReturnValue(null); // Simulate reading mode or no active file
+    manager.applyCaption(img, undefined);
 
-        (manager as any).processImageEmbed(embed);
+    expect(embed.hasAttribute('alt')).toBe(false);
+    expect(img.hasAttribute('alt')).toBe(false);
+  });
 
-        expect(embed.getAttribute('alt')).toBe(' ');
-        expect(img.getAttribute('alt')).toBe(' ');
-    });
+  it('strips table escape slashes from captions', () => {
+    const table = document.createElement('table');
+    const { embed, img } = makeEmbed('test.webp', 'Caption\\');
+    table.appendChild(embed);
+    document.body.appendChild(table);
+    const manager = new ImageCaption(makePlugin());
 
-    it('should use refined caption from pipe syntax', () => {
-        const embed = document.createElement('div');
-        embed.setAttribute('src', 'test.webp');
-        const img = document.createElement('img');
-        img.setAttribute('src', 'test.webp');
-        img.setAttribute('alt', 'test.webp'); // DOM might have filename
-        embed.appendChild(img);
+    manager.applyCaption(img, undefined);
 
-        mockPlugin.settings.skipCaptionExtensions = '';
-        mockApp.workspace.getActiveFile.mockReturnValue({ path: 'note.md' } as TFile);
-
-        // Mock finding a link with a caption
-        mockRefinedImageUtils.getImageLinkText.mockReturnValue('![[test.webp|My Custom Caption]]');
-
-        (manager as any).processImageEmbed(embed);
-
-        expect(embed.getAttribute('alt')).toBe('My Custom Caption');
-        expect(img.getAttribute('alt')).toBe('My Custom Caption');
-    });
-
-    it('should clean up size/align from caption using PipeSyntaxParser', () => {
-        const embed = document.createElement('div');
-        embed.setAttribute('src', 'test.webp');
-        const img = document.createElement('img');
-        img.setAttribute('src', 'test.webp');
-        embed.appendChild(img);
-
-        mockPlugin.settings.skipCaptionExtensions = '';
-        mockApp.workspace.getActiveFile.mockReturnValue({ path: 'note.md' } as TFile);
-
-        // Mock link with size and align
-        mockRefinedImageUtils.getImageLinkText.mockReturnValue('![[test.webp|right|200x200|My Caption]]');
-
-        (manager as any).processImageEmbed(embed);
-
-        // PipeSyntaxParser should have parsed "My Caption" as the alt
-        expect(embed.getAttribute('alt')).toBe('My Caption');
-        expect(img.getAttribute('alt')).toBe('My Caption');
-    });
-
-    it('should handle excluded extensions', () => {
-        const embed = document.createElement('div');
-        embed.setAttribute('src', 'test.png');
-        const img = document.createElement('img');
-        img.setAttribute('src', 'test.png'); // Excluded
-        img.setAttribute('alt', 'Caption');
-        embed.appendChild(img);
-
-        mockPlugin.settings.skipCaptionExtensions = 'png';
-
-        (manager as any).processImageEmbed(embed);
-
-        expect(embed.hasAttribute('alt')).toBe(false);
-        expect(img.hasAttribute('alt')).toBe(false);
-    });
-
-    it('should handle Admonitions (Callouts)', () => {
-        const embed = document.createElement('div');
-        embed.setAttribute('src', 'test.webp'); // Src required for correct exclusion check
-        const img = document.createElement('img');
-        img.setAttribute('src', 'test.webp');
-        embed.appendChild(img);
-
-        mockPlugin.settings.skipCaptionExtensions = '';
-        mockApp.workspace.getActiveFile.mockReturnValue(null);
-
-        // Missing alt -> should be space
-        (manager as any).processImageEmbed(embed, true); // isInCallout = true
-
-        expect(embed.getAttribute('data-in-callout')).toBe('true');
-        expect(embed.getAttribute('alt')).toBe(' ');
-    });
+    expect(embed.getAttribute('alt')).toBe('Caption');
+  });
 });

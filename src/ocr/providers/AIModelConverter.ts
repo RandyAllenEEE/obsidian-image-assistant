@@ -17,6 +17,14 @@ export class AIModelConverter implements OCRProvider {
         this.promptType = promptType;
     }
 
+    private async getSecret(secretId?: string): Promise<string | null> {
+        const secretStorage = (this.app as any).secretStorage;
+        if (!secretStorage || !secretId) return null;
+
+        const value = await secretStorage.getSecret(secretId);
+        return typeof value === "string" && value.length > 0 ? value : null;
+    }
+
     async sendRequest(image: Uint8Array): Promise<string> {
         // Convert Uint8Array to base64 string
         const base64Image = Buffer.from(image).toString('base64');
@@ -30,8 +38,7 @@ export class AIModelConverter implements OCRProvider {
         }
 
         // Retrieve API Key using linked ID in settings
-        const secretStorage = (this.app as any).secretStorage;
-        const apiKey = secretStorage && this.settings.aiModel.apiKeySecretId ? secretStorage.getSecret(this.settings.aiModel.apiKeySecretId) : null;
+        const apiKey = await this.getSecret(this.settings.aiModel.apiKeySecretId);
 
         if (this.settings.aiModel.providerType === "ollama") {
             // Ollama Native API Payload
