@@ -1,5 +1,6 @@
 import { extname } from "path-browserify";
 import { Readable } from "stream";
+import { isHttpUrl } from "./utils/NetworkPolicy";
 
 export interface IStringKeyMap<T> {
   [key: string]: T;
@@ -25,13 +26,12 @@ export function isAssetTypeAnImage(path: string): Boolean {
 }
 
 export async function streamToString(stream: Readable) {
-  const chunks = [];
+  const chunks: Uint8Array[] = [];
 
   for await (const chunk of stream) {
     chunks.push(Buffer.from(chunk));
   }
 
-  // @ts-ignore
   return Buffer.concat(chunks).toString("utf-8");
 }
 
@@ -42,15 +42,11 @@ export function getUrlAsset(url: string) {
 }
 
 export function getLastImage(list: string[]) {
-  const reversedList = list.reverse();
-  let lastImage;
-  reversedList.forEach(item => {
-    if (item && item.startsWith("http")) {
-      lastImage = item;
-      return item;
-    }
-  });
-  return lastImage;
+  for (let index = list.length - 1; index >= 0; index--) {
+    const item = list[index]?.trim();
+    if (item && isHttpUrl(item)) return item;
+  }
+  return undefined;
 }
 
 interface AnyObj {

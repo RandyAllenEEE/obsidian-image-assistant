@@ -1,5 +1,7 @@
 import { App } from "obsidian";
 import { OCRProvider, OCRSettings } from "../OCRSettings";
+import { fetchWithTimeout } from "../../utils/NetworkRequestUtils";
+import { createOcrImagePayload } from "./ImagePayload";
 
 /**
  * AI Model Converter - LLM Provider
@@ -26,8 +28,9 @@ export class AIModelConverter implements OCRProvider {
     }
 
     async sendRequest(image: Uint8Array): Promise<string> {
+        const imagePayload = await createOcrImagePayload(image);
         // Convert Uint8Array to base64 string
-        const base64Image = Buffer.from(image).toString('base64');
+        const base64Image = Buffer.from(imagePayload.data).toString('base64');
 
         // Select appropriate prompt based on prompt type
         let prompt;
@@ -54,7 +57,7 @@ export class AIModelConverter implements OCRProvider {
                 stream: false
             };
 
-            const response = await fetch(this.settings.aiModel.endpoint, {
+            const response = await fetchWithTimeout(this.settings.aiModel.endpoint, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json"
@@ -63,12 +66,15 @@ export class AIModelConverter implements OCRProvider {
             });
 
             if (!response.ok) {
-                throw new Error(`Ollama request failed with status ${response.status}`);
+                throw new Error(`Ollama request failed with status ${response.status}${await this.readErrorDetail(response)}`);
             }
 
-            const data = await response.json();
+            const data = await this.readJsonObject(response, "Ollama");
             // Ollama /api/chat returns 'message': { 'content': ... }
-            let result = data.message?.content?.trim();
+            const message = data.message;
+            const result = this.isRecord(message) && typeof message.content === "string"
+                ? message.content.trim()
+                : "";
             if (!result) throw new Error("Ollama returned empty content");
 
             return this.processResult(result);
@@ -88,7 +94,7 @@ export class AIModelConverter implements OCRProvider {
                         {
                             type: "image_url",
                             image_url: {
-                                url: `data:image/png;base64,${base64Image}`
+                                url: `data:${imagePayload.mimeType};base64,${base64Image}`
                             }
                         }
                     ]
@@ -104,20 +110,52 @@ export class AIModelConverter implements OCRProvider {
             headers["Authorization"] = `Bearer ${apiKey}`;
         }
 
-        const response = await fetch(this.settings.aiModel.endpoint, {
+        const response = await fetchWithTimeout(this.settings.aiModel.endpoint, {
             method: "POST",
             headers: headers,
             body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
-            throw new Error(`AI model request failed with status ${response.status}`);
+            throw new Error(`AI model request failed with status ${response.status}${await this.readErrorDetail(response)}`);
         }
 
-        const data = await response.json();
-        let result = data.choices[0].message.content.trim();
+        const data = await this.readJsonObject(response, "AI model");
+        const choices = data.choices;
+        if (!Array.isArray(choices) || choices.length === 0 || !this.isRecord(choices[0])) {
+            throw new Error("AI model returned no choices");
+        }
+        const message = choices[0].message;
+        const result = this.isRecord(message) && typeof message.content === "string"
+            ? message.content.trim()
+            : "";
+        if (!result) throw new Error("AI model returned empty content");
 
         return this.processResult(result);
+    }
+
+    private async readJsonObject(response: Response, provider: string): Promise<Record<string, unknown>> {
+        let data: unknown;
+        try {
+            data = await response.json();
+        } catch {
+            throw new Error(`${provider} returned malformed JSON`);
+        }
+        if (!this.isRecord(data)) throw new Error(`${provider} returned an invalid response`);
+        return data;
+    }
+
+    private async readErrorDetail(response: Response): Promise<string> {
+        try {
+            const detail = (await response.text()).trim();
+            return detail ? `: ${detail.slice(0, 300)}` : "";
+        } catch {
+            return "";
+        }
+    }
+
+    private isRecord(value: unknown): value is Record<string, unknown> {
+        return typeof value === "object" && value !== null && !Array.isArray(value);
     }
 
     private processResult(result: string): string {

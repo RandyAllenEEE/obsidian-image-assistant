@@ -16,6 +16,32 @@ export type { ResizeScaleMode, ResizeUnits } from "./NonDestructiveResizeSetting
 
 // Paste handling mode types
 export type PasteHandlingMode = "local" | "cloud" | "disabled";
+export type CaptionWidthMode = "auto" | "container";
+export type CaptionInlinePolicy = "all" | "standalone-only";
+export type CaptionAlignment = "left" | "center" | "right";
+
+export interface CaptionSettings {
+    enabled: boolean;
+    showInReadingMode: boolean;
+    showInLivePreview: boolean;
+    inlinePolicy: CaptionInlinePolicy;
+    widthMode: CaptionWidthMode;
+    maxLines: number;
+    skipExtensions: string;
+    fontSize: string;
+    color: string;
+    fontStyle: string;
+    backgroundColor: string;
+    padding: string;
+    borderRadius: string;
+    opacity: string;
+    fontWeight: string;
+    textTransform: string;
+    letterSpacing: string;
+    border: string;
+    marginTop: string;
+    alignment: CaptionAlignment;
+}
 
 // Cloud upload settings interface
 export interface CloudUploadSettings {
@@ -30,8 +56,6 @@ export interface CloudUploadSettings {
     workOnNetWork: boolean;
     newWorkBlackDomains: string;
     applyImage: boolean;
-    downloadPath: string;
-    uploadConcurrency: number;
     cloudLinkFormat: 'markdown' | 'wikilink';
 }
 
@@ -124,7 +148,6 @@ export interface LocalLinkSettings {
     linkFormat: LinkFormat;
     pathFormat: PathFormat;
     prependCurrentDir: boolean;
-    hideFolders: boolean;
 }
 
 export interface LocalProcessingSettings {
@@ -163,6 +186,7 @@ export interface ImageAssistantSettings {
         enableContextMenu: boolean;
         codeBlockImageLinkIndexing: boolean;
         showSpaceSavedNotification: boolean;
+        batchConcurrency: number;
     };
 
     ocrSettings: OCRSettings;
@@ -173,23 +197,7 @@ export interface ImageAssistantSettings {
         fileTypes: string;
     };
 
-    captions: {
-        enabled: boolean;
-        skipExtensions: string;
-        fontSize: string;
-        color: string;
-        fontStyle: string;
-        backgroundColor: string;
-        padding: string;
-        borderRadius: string;
-        opacity: string;
-        fontWeight: string;
-        textTransform: string;
-        letterSpacing: string;
-        border: string;
-        marginTop: string;
-        alignment: string;
-    };
+    captions: CaptionSettings;
 
     alignment: {
         enabled: boolean;

@@ -1,5 +1,6 @@
 import { normalizePath } from 'obsidian';
 import { pipeSyntaxParser } from '../../../utils/PipeSyntaxParser';
+import { isHttpUrl } from '../../../utils/NetworkPolicy';
 
 /**
  * Utility functions for image path manipulation
@@ -11,7 +12,7 @@ export class ImagePathUtils {
     static isNetworkImage(img: HTMLImageElement): boolean {
         const src = img.getAttribute('src');
         if (!src) return false;
-        return src.startsWith('http://') || src.startsWith('https://');
+        return isHttpUrl(src);
     }
 
     /**
@@ -25,8 +26,14 @@ export class ImagePathUtils {
     static normalizeImagePath(path: string): string {
         if (!path) return '';
 
-        // Decode URL encoded characters first
-        let normalizedPath = decodeURIComponent(path);
+        // Decode URL encoded characters first. Keep the original value when
+        // pasted/legacy markdown contains malformed percent escapes.
+        let normalizedPath = path;
+        try {
+            normalizedPath = decodeURIComponent(path);
+        } catch {
+            normalizedPath = path;
+        }
 
         // Remove any URL parameters
         const [pathWithoutQuery] = normalizedPath.split('?');

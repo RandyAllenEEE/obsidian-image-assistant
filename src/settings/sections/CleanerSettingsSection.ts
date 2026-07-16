@@ -1,9 +1,14 @@
-import { Setting, setIcon, Notice } from "obsidian";
+import { Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
 import { SettingsUIState } from "../types";
 
-export function renderCleanerSettingsSection(containerEl: HTMLElement, plugin: ImageConverterPlugin, settingsUIState: SettingsUIState): void {
+export function renderCleanerSettingsSection(
+    containerEl: HTMLElement,
+    plugin: ImageConverterPlugin,
+    settingsUIState: SettingsUIState,
+    refreshDisplay: () => void
+): void {
     // --- Unused File Cleaner Settings Section ---
     const cleanerSection = containerEl.createDiv("image-converter-settings-section");
     cleanerSection.addClass("unused-file-cleaner-settings-section");
@@ -61,6 +66,17 @@ export function renderCleanerSettingsSection(containerEl: HTMLElement, plugin: I
                 await plugin.saveSettings();
             }));
 
+    new Setting(settingsContentWrapper)
+        .setName(t("SETTING_CLEANER_FILE_TYPES"))
+        .setDesc(t("SETTING_CLEANER_FILE_TYPES_DESC"))
+        .addText(text => text
+            .setPlaceholder("jpg,jpeg,png,webp,pdf")
+            .setValue(plugin.settings.cleanerSettings.fileTypes)
+            .onChange(async (value) => {
+                plugin.settings.cleanerSettings.fileTypes = value;
+                await plugin.saveSettings();
+            }));
+
     // Trash Mode
     new Setting(settingsContentWrapper)
         .setName(t("SETTING_CLEANER_TRASH_MODE"))
@@ -73,5 +89,19 @@ export function renderCleanerSettingsSection(containerEl: HTMLElement, plugin: I
             .onChange(async (value: 'system' | 'obsidian' | 'custom') => {
                 plugin.settings.cleanerSettings.trashMode = value;
                 await plugin.saveSettings();
+                refreshDisplay();
             }));
+
+    if (plugin.settings.cleanerSettings.trashMode === "custom") {
+        new Setting(settingsContentWrapper)
+            .setName(t("SETTING_CLEANER_CUSTOM_PATH"))
+            .setDesc(t("SETTING_CLEANER_CUSTOM_PATH_DESC"))
+            .addText(text => text
+                .setPlaceholder(".trash")
+                .setValue(plugin.settings.cleanerSettings.customTrashPath)
+                .onChange(async (value) => {
+                    plugin.settings.cleanerSettings.customTrashPath = value;
+                    await plugin.saveSettings();
+                }));
+    }
 }

@@ -1,5 +1,5 @@
 
-import { Editor, EditorPosition } from "obsidian";
+import { Editor } from "obsidian";
 
 export interface ImageHandler {
     handlePaste(event: ClipboardEvent, editor: Editor): Promise<void>;

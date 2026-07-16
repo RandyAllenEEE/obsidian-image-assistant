@@ -6,6 +6,10 @@ type InputType = string | Blob | ArrayBuffer | File;
 
 export type PayloadData = { [key: string]: InputType | InputType[] };
 
+function sanitizeHeaderParameter(value: string): string {
+  return value.replace(/[\r\n"]/g, "_");
+}
+
 export const randomString = (length: number) =>
   Array(length + 1)
     .join((Math.random().toString(36) + "00000000000000000").slice(2, 18))
@@ -19,18 +23,19 @@ export async function payloadGenerator(
   const chunks: Uint8Array[] = [];
 
   for (const [key, values] of Object.entries(payload_data)) {
+    const safeKey = sanitizeHeaderParameter(key);
     for (const value of Array.isArray(values) ? values : [values]) {
       chunks.push(new TextEncoder().encode(`${boundary}\r\n`));
       if (typeof value === "string") {
         chunks.push(
           new TextEncoder().encode(
-            `Content-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`
+            `Content-Disposition: form-data; name="${safeKey}"\r\n\r\n${value}\r\n`
           )
         );
       } else if (value instanceof File) {
         chunks.push(
           new TextEncoder().encode(
-            `Content-Disposition: form-data; name="${key}"; filename="${value.name
+            `Content-Disposition: form-data; name="${safeKey}"; filename="${sanitizeHeaderParameter(value.name)
             }"\r\nContent-Type: ${value.type || "application/octet-stream"
             }\r\n\r\n`
           )
@@ -40,7 +45,7 @@ export async function payloadGenerator(
       } else if (value instanceof Blob) {
         chunks.push(
           new TextEncoder().encode(
-            `Content-Disposition: form-data; name="${key}"; filename="blob"\r\nContent-Type: ${value.type || "application/octet-stream"
+            `Content-Disposition: form-data; name="${safeKey}"; filename="blob"\r\nContent-Type: ${value.type || "application/octet-stream"
             }\r\n\r\n`
           )
         );
@@ -52,8 +57,6 @@ export async function payloadGenerator(
       }
     }
   }
-
-  chunks.push(new TextEncoder().encode(`${boundary}--\r\n`));
 
   chunks.push(new TextEncoder().encode(`${boundary}--\r\n`));
 

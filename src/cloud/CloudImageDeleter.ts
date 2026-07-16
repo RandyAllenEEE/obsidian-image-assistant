@@ -1,5 +1,9 @@
 import { requestUrl } from "obsidian";
 import type ImageConverterPlugin from "../main";
+import { withTimeout } from "../utils/NetworkRequestUtils";
+import { isHttpUrl } from "../utils/NetworkPolicy";
+
+const CLOUD_REQUEST_TIMEOUT_MS = 60_000;
 
 export interface CloudImageInfo {
     url: string;
@@ -68,19 +72,29 @@ export class CloudImageDeleter {
                 };
             }
 
-            console.log('[Cloud Delete] Deleting image from cloud:', matchingImage);
-
-            const response = await requestUrl({
-                url: cloudSettings.deleteServer,
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    list: [matchingImage],
+            const response = await withTimeout(
+                requestUrl({
+                    url: cloudSettings.deleteServer,
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        list: [matchingImage],
+                    }),
                 }),
-            });
+                CLOUD_REQUEST_TIMEOUT_MS,
+                "Cloud deletion"
+            );
+
+            if (response.status < 200 || response.status >= 300) {
+                return {
+                    success: false,
+                    reason: 'api-failed',
+                    message: `Cloud deletion failed with HTTP ${response.status}`,
+                    uploader: cloudSettings.uploader
+                };
+            }
 
             const data = response.json;
-            console.log('[Cloud Delete] Delete response:', data);
 
             if (!data || typeof data !== 'object') {
                 console.error('[Cloud Delete] Invalid delete response:', data);
@@ -130,8 +144,7 @@ export class CloudImageDeleter {
      * 检查图片 URL 是否来自云存储
      */
     isCloudImage(url: string): boolean {
-        if (!url) return false;
-        return url.startsWith('http://') || url.startsWith('https://');
+        return isHttpUrl(url);
     }
 }
 

@@ -1,8 +1,10 @@
+import { getContextualImageLinks } from "./MarkdownSourceContext";
+
 /**
- * Safe path-only replacement for Obsidian image links.
+ * Safe path-only replacement for Obsidian image and file-reference links.
  *
  * Goals:
- * - keep original link type (`![[...]]` vs `![...](...)`)
+ * - keep original link type and embed marker
  * - keep original pipe attributes (`|alt|align|size`)
  * - only replace the path portion
  *
@@ -22,18 +24,10 @@ export class ImageLinkPathReplacer {
         if (!trimmed) return "";
 
         // Try to match a markdown image wrapper.
-        const mdImageMatch = trimmed.match(/^!\[[^\]]*\]\(([^)]+)\)$/);
-        if (!mdImageMatch) return trimmed;
+        const markdownMatch = trimmed.match(/^!?\[[^\]]*\]\((.*)\)$/);
+        if (!markdownMatch) return trimmed;
 
-        // Strip optional angle brackets around the path.
-        let inside = mdImageMatch[1].trim();
-        if (inside.startsWith("<") && inside.endsWith(">")) {
-            inside = inside.slice(1, -1);
-        }
-
-        // The URL is the first whitespace-delimited token; everything else is title.
-        const first = inside.split(/\s+/)[0];
-        return first || inside;
+        return this.splitMarkdownDestination(markdownMatch[1].trim()).path;
     }
 
     static replacePath(originalLink: string, newPath: string): string {
@@ -43,10 +37,12 @@ export class ImageLinkPathReplacer {
         const replacementPath = this.extractPureUrlFromPossibleMarkdown(newPath);
         if (!replacementPath) return originalLink;
 
-        if (original.startsWith("![[") && original.endsWith("]]")) {
+        if ((original.startsWith("![[") || original.startsWith("[[")) && original.endsWith("]]")) {
             return this.replaceWikiPath(original, replacementPath);
         }
-        if (original.startsWith("![") && original.includes("](") && original.endsWith(")")) {
+        if ((original.startsWith("![") || original.startsWith("["))
+            && original.includes("](")
+            && original.endsWith(")")) {
             return this.replaceMarkdownPath(original, replacementPath);
         }
 
@@ -62,50 +58,22 @@ export class ImageLinkPathReplacer {
     static replaceUrlInLinks(content: string, oldUrl: string, newUrl: string): string {
         if (!content || !oldUrl) return content;
 
-        // Escape special regex chars in URL
-        const escapedUrl = oldUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const matches = getContextualImageLinks(content)
+            .filter((link) => link.path === oldUrl)
+            .sort((a, b) => b.index - a.index);
 
-        // Pattern matches image links containing the URL
-        // Markdown: ![alt](<url> "title") or ![alt](url "title") or ![alt](url)
-        // Wiki: ![[url|alt|size]]
-        // We match any image link that contains the old URL anywhere inside
-        const imageLinkPattern = new RegExp(
-            `!\\[\\[([^\\]|]+(?:\\|[^\\]]+)*)\\]\\]|` +
-            `!\\[[^\\]]*\\]\\(([^)]+)\\)`,
-            'g'
-        );
+        let updated = content;
+        for (const match of matches) {
+            const replacement = this.replacePath(match.source, newUrl);
+            if (replacement === match.source) continue;
 
-        return content.replace(imageLinkPattern, (match) => {
-            // Only process links that actually contain the old URL
-            if (!match.includes(oldUrl)) return match;
+            updated =
+                updated.slice(0, match.index) +
+                replacement +
+                updated.slice(match.index + match.source.length);
+        }
 
-            // Extract the URL from the link
-            let linkUrl = '';
-            if (match.startsWith('![[')) {
-                // Wiki link: ![[url|alt]] or ![[url]]
-                const inner = match.slice(4, -2);
-                const pipeIdx = inner.indexOf('|');
-                linkUrl = pipeIdx >= 0 ? inner.slice(0, pipeIdx) : inner;
-            } else if (match.startsWith('![')) {
-                // Markdown link: ![alt](url "title")
-                const parenOpen = match.indexOf('](');
-                if (parenOpen >= 0) {
-                    const pathAndTitle = match.slice(parenOpen + 2, -1);
-                    // Extract URL (first token before space/title)
-                    const spaceIdx = pathAndTitle.search(/\s/);
-                    linkUrl = spaceIdx >= 0 ? pathAndTitle.slice(0, spaceIdx) : pathAndTitle;
-                    // Strip angle brackets
-                    if (linkUrl.startsWith('<') && linkUrl.endsWith('>')) {
-                        linkUrl = linkUrl.slice(1, -1);
-                    }
-                }
-            }
-
-            if (linkUrl !== oldUrl) return match;
-
-            // Use replacePath to rebuild the link with new URL
-            return this.replacePath(match, newUrl);
-        });
+        return updated;
     }
 
     /**
@@ -137,18 +105,18 @@ export class ImageLinkPathReplacer {
     }
 
     private static replaceWikiPath(wikiLink: string, newPath: string): string {
-        const inside = wikiLink.slice(3, -2); // strip ![[ and ]]
+        const embedded = wikiLink.startsWith("![[");
+        const prefix = embedded ? "![[" : "[[";
+        const inside = wikiLink.slice(prefix.length, -2);
         const firstPipe = this.findFirstUnescapedPipe(inside);
+        const escapedNewPath = this.escapeWikiPathPipes(newPath);
 
         if (firstPipe < 0) {
-            return `![[${newPath}]]`;
+            return `${prefix}${escapedNewPath}]]`;
         }
 
-        // newPath itself may contain unescaped pipes — escape them so they don't
-        // become attribute separators when we rebuild.
-        const escapedNewPath = this.escapeWikiPathPipes(newPath);
         const attrs = inside.slice(firstPipe + 1); // preserve all attrs exactly
-        return `![[${escapedNewPath}|${attrs}]]`;
+        return `${prefix}${escapedNewPath}|${attrs}]]`;
     }
 
     /**
@@ -183,46 +151,76 @@ export class ImageLinkPathReplacer {
         const open = markdownLink.indexOf("](");
         if (open < 0 || !markdownLink.endsWith(")")) return markdownLink;
 
-        // Isolate the "rest" (title etc.) from the ORIGINAL markdown link path area.
-        // Example: "url "title""  -> rest = ` "title""`
-        // Example: "url"          -> rest = ``
-        // We split on the original (unencoded) path token.
         const originalPathToken = markdownLink.slice(open + 2, -1); // e.g. "url (1) "title""
-        const { rest } = this.splitFirstMarkdownPathToken(originalPathToken);
+        const { rest, wasAngleWrapped } = this.splitMarkdownDestination(originalPathToken);
 
-        // Encode ( and ) in newPath to avoid breaking the markdown link delimiters.
-        const encodedNewPath = newPath.replace(/[()]/g, c => encodeURIComponent(c));
+        const formattedNewPath = this.formatMarkdownPath(newPath, wasAngleWrapped);
 
-        // Keep the original head + ](); append encoded newPath + original rest + closing ).
-        return `${markdownLink.slice(0, open + 2)}${encodedNewPath}${rest})`;
+        return `${markdownLink.slice(0, open + 2)}${formattedNewPath}${rest})`;
     }
 
     /**
-     * Split the content inside Markdown path parens at the first unescaped space.
-     * Title (if present) starts with whitespace or a quote.
-     * Handles: `"title"`, ` "title"`, bare paths.
+     * Split the content inside Markdown image destination parens into path and
+     * the original title suffix. Supports angle-wrapped paths with spaces.
      */
-    private static splitFirstMarkdownPathToken(pathAndTitle: string): { token: string; rest: string } {
-        let inSingle = false;
-        let inDouble = false;
-        let escaped = false;
+    private static splitMarkdownDestination(pathAndTitle: string): {
+        path: string;
+        rest: string;
+        wasAngleWrapped: boolean;
+    } {
+        const destination = pathAndTitle.trim();
+        if (!destination) {
+            return { path: "", rest: "", wasAngleWrapped: false };
+        }
 
-        for (let i = 0; i < pathAndTitle.length; i++) {
-            const ch = pathAndTitle[i];
-            if (escaped) { escaped = false; continue; }
-            if (ch === "\\") { escaped = true; continue; }
-            if (ch === "'" && !inDouble) inSingle = !inSingle;
-            else if (ch === "\"" && !inSingle) inDouble = !inDouble;
-
-            if (!inSingle && !inDouble && /\s/.test(ch)) {
+        if (destination.startsWith("<")) {
+            const close = this.findClosingAngle(destination);
+            if (close > 0) {
                 return {
-                    token: pathAndTitle.slice(0, i),
-                    rest: pathAndTitle.slice(i)
+                    path: destination.slice(1, close),
+                    rest: destination.slice(close + 1),
+                    wasAngleWrapped: true
                 };
             }
         }
 
-        return { token: pathAndTitle, rest: "" };
+        const titleMatch = destination.match(/^(.+?)(\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\([^)]*\)))$/);
+        if (titleMatch) {
+            return {
+                path: titleMatch[1],
+                rest: titleMatch[2],
+                wasAngleWrapped: false
+            };
+        }
+
+        return { path: destination, rest: "", wasAngleWrapped: false };
+    }
+
+    private static findClosingAngle(destination: string): number {
+        let escaped = false;
+        for (let i = 1; i < destination.length; i++) {
+            const ch = destination[i];
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch === "\\") {
+                escaped = true;
+                continue;
+            }
+            if (ch === ">") {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static formatMarkdownPath(path: string, preferAngle: boolean): string {
+        if (!preferAngle && !/[\s()]/.test(path)) {
+            return path;
+        }
+
+        return `<${path.replace(/>/g, "%3E")}>`;
     }
 }
 

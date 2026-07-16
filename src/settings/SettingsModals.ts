@@ -1,24 +1,28 @@
-import { App, Modal, ButtonComponent } from "obsidian";
+import { App, Modal, ButtonComponent, Notice } from "obsidian";
 import { VariableProcessor } from "../local/VariableProcessor";
 import { t } from "../lang/helpers";
 
 export class ConfirmDialog extends Modal {
     message: string | DocumentFragment;
     confirmText: string;
-    callback: () => void;
+    callback: () => void | Promise<void>;
+    private readonly cancelCallback?: () => void;
+    private settled = false;
 
     constructor(
         app: App,
         title: string,
         message: string | DocumentFragment,
         confirmText: string,
-        callback: () => void
+        callback: () => void | Promise<void>,
+        cancelCallback?: () => void
     ) {
         super(app);
         this.titleEl.setText(title); // Set the title text
         this.message = message;
         this.confirmText = confirmText;
         this.callback = callback;
+        this.cancelCallback = cancelCallback;
     }
 
     onOpen() {
@@ -40,19 +44,36 @@ export class ConfirmDialog extends Modal {
         // Add a Cancel button
         new ButtonComponent(buttonContainer)
             .setButtonText(t("MODAL_BUTTON_CANCEL"))
-            .onClick(() => this.close());
+            .onClick(() => {
+                if (this.settled) return;
+                this.settled = true;
+                this.cancelCallback?.();
+                this.close();
+            });
 
         // Add a Confirm button with danger styling
         new ButtonComponent(buttonContainer)
             .setButtonText(this.confirmText)
             .setCta()
             .onClick(() => {
+                if (this.settled) return;
+                this.settled = true;
                 this.close();
-                this.callback();
+                void Promise.resolve()
+                    .then(() => this.callback())
+                    .catch(error => {
+                        const message = error instanceof Error ? error.message : String(error);
+                        console.error("[Image Assistant] Confirmed action failed:", error);
+                        new Notice(message);
+                    });
             });
     }
 
     onClose() {
+        if (!this.settled) {
+            this.settled = true;
+            this.cancelCallback?.();
+        }
         const { contentEl } = this;
         contentEl.empty();
     }

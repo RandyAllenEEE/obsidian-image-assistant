@@ -1,4 +1,4 @@
-import { App, Editor, Notice, TFile, MarkdownView, EditorPosition } from "obsidian";
+import { App, Editor, Notice, MarkdownView } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
 import { EditorContentInserter } from "../../utils/EditorContentInserter";
@@ -8,6 +8,16 @@ import {
 import { BasePasteHandler } from "../../core/BasePasteHandler";
 import { NotificationManager } from "../../utils/NotificationManager";
 import { ConcurrentQueue } from "../../utils/AsyncLock";
+import type { ProcessedImageResult } from "../ImageProcessor";
+
+function replaceFilenameExtension(filename: string, sourceFilename: string): string {
+    const sourceDot = sourceFilename.lastIndexOf(".");
+    if (sourceDot < 0) return filename;
+
+    const extension = sourceFilename.slice(sourceDot);
+    const filenameDot = filename.lastIndexOf(".");
+    return filenameDot < 0 ? `${filename}${extension}` : `${filename.slice(0, filenameDot)}${extension}`;
+}
 
 export class PasteHandler extends BasePasteHandler {
     constructor(
@@ -42,23 +52,15 @@ export class PasteHandler extends BasePasteHandler {
 
                 try {
                     // Determine Destination
-                    let destinationPath: string;
-                    let newFilename: string;
-
-                    try {
-                        ({ destinationPath, newFilename } = await this.plugin.folderAndFilenameManagement.determineDestination(
-                            file,
-                            activeFile,
-                            conversion,
-                            filename,
-                            destination
-                        ));
-                    } catch (error) {
-                        console.error("Error determining destination:", error);
-                        new Notice(`Failed to determine destination: ${error.message}`);
-                        // NotificationManager.showError(`Failed to determine destination: ${error.message}`);
-                        return;
-                    }
+                    const destinationResult = await this.plugin.folderAndFilenameManagement.determineDestination(
+                        file,
+                        activeFile,
+                        conversion,
+                        filename,
+                        destination
+                    );
+                    const destinationPath = destinationResult.destinationPath;
+                    let newFilename = destinationResult.newFilename;
 
                     // Ensure destination folder exists
                     await this.plugin.folderAndFilenameManagement.ensureFolderExists(destinationPath);
@@ -74,45 +76,64 @@ export class PasteHandler extends BasePasteHandler {
                     }
 
                     // Prepare Image Data
-                    let finalBuffer: ArrayBuffer;
+                    let finalBuffer: ArrayBuffer | null = null;
 
                     // Check if should skip conversion
                     if (conversion && this.plugin.folderAndFilenameManagement.shouldSkipConversion(file.name, conversion)) {
                         finalBuffer = await file.arrayBuffer();
+                        newFilename = replaceFilenameExtension(newFilename, file.name);
                     } else {
-                        // Process Image
-                        const processedImage = await this.plugin.imageProcessor.processImage(
-                            file,
-                            conversion.outputFormat,
-                            conversion.quality / 100,
-                            conversion.colorDepth,
-                            conversion.resizeMode as ResizeMode,
-                            conversion.desiredWidth,
-                            conversion.desiredHeight,
-                            conversion.desiredLongestEdge,
-                            conversion.enlargeOrReduce,
-                            conversion.allowLargerFiles,
-                            externalTools,
-                            this.plugin.settings
-                        );
-
-                        // Check Revert to Original logic (including minimum savings)
-                        const originalSize = file.size;
-                        const minSavingsKB = (typeof conversion.minimumCompressionSavingsInKB === 'number'
-                            && conversion.minimumCompressionSavingsInKB >= 0)
-                            ? conversion.minimumCompressionSavingsInKB
-                            : 30;
-
-                        const shouldRevertIfLarger = !conversion.allowLargerFiles;
-
-                        // Calculate threshold: processed size must be at least minSavingsKB smaller than original
-                        if (shouldRevertIfLarger && processedImage.byteLength + (minSavingsKB * 1024) > originalSize) {
-                            new Notice(`Using original image for "${file.name}" because size reduction was less than ${minSavingsKB} KB.`);
-                            // If we already have the buffer (rare, only if skipped conversion), good, otherwise get it
+                        let processedImage: ProcessedImageResult | null;
+                        try {
+                            processedImage = await this.plugin.imageProcessor.processImageDetailed(
+                                file,
+                                conversion.outputFormat,
+                                conversion.quality / 100,
+                                conversion.colorDepth,
+                                conversion.resizeMode as ResizeMode,
+                                conversion.desiredWidth,
+                                conversion.desiredHeight,
+                                conversion.desiredLongestEdge,
+                                conversion.enlargeOrReduce,
+                                conversion.allowLargerFiles,
+                                externalTools,
+                                this.plugin.settings
+                            );
+                        } catch (error) {
+                            const message = error instanceof Error ? error.message : String(error);
+                            console.error(`Processing ${file.name} failed; preserving the original image:`, error);
+                            new Notice(`Using the original image for "${file.name}": ${message}`);
                             finalBuffer = await file.arrayBuffer();
-                        } else {
-                            finalBuffer = processedImage;
+                            newFilename = replaceFilenameExtension(newFilename, file.name);
+                            processedImage = null;
                         }
+
+                        if (processedImage) {
+                            // Check Revert to Original logic (including minimum savings)
+                            const originalSize = file.size;
+                            const minSavingsKB = (typeof conversion.minimumCompressionSavingsInKB === 'number'
+                                && conversion.minimumCompressionSavingsInKB >= 0)
+                                ? conversion.minimumCompressionSavingsInKB
+                                : 30;
+
+                            const shouldRevertIfLarger = !conversion.allowLargerFiles;
+
+                            if (processedImage.outcome !== "converted") {
+                                finalBuffer = processedImage.data;
+                                newFilename = replaceFilenameExtension(newFilename, file.name);
+                            } else if (shouldRevertIfLarger && processedImage.data.byteLength + (minSavingsKB * 1024) > originalSize) {
+                                new Notice(`Using original image for "${file.name}" because size reduction was less than ${minSavingsKB} KB.`);
+                                finalBuffer = await file.arrayBuffer();
+                                newFilename = replaceFilenameExtension(newFilename, file.name);
+                            } else {
+                                finalBuffer = processedImage.data;
+                                newFilename = replaceFilenameExtension(newFilename, `image.${processedImage.extension}`);
+                            }
+                        }
+                    }
+
+                    if (!finalBuffer) {
+                        throw new Error(`No image data was produced for ${file.name}`);
                     }
 
                     // Atomic Creation / Conflict Resolution
@@ -134,8 +155,9 @@ export class PasteHandler extends BasePasteHandler {
 
                 } catch (error) {
                     console.error("Processing failed:", error);
-                    new Notice(`Processing failed: ${error.message}`);
-                    // NotificationManager.showError(`Processing failed: ${error.message}`);
+                    const message = error instanceof Error ? error.message : String(error);
+                    new Notice(`Processing failed: ${message}`);
+                } finally {
                     inserter.removeLoadingText();
                 }
             };
@@ -143,7 +165,7 @@ export class PasteHandler extends BasePasteHandler {
 
         // Execute with concurrency
         if (!this.plugin.concurrentQueue) {
-            this.plugin.concurrentQueue = new ConcurrentQueue(3);
+            this.plugin.concurrentQueue = new ConcurrentQueue(this.plugin.settings.global.batchConcurrency || 3);
         }
         await this.plugin.concurrentQueue.run(filePromises);
 

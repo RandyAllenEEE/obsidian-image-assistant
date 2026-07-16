@@ -5,6 +5,7 @@ import PicGoCoreUploader from "./picgoCore";
 
 import type ImageConverterPlugin from "../../main";
 import type { Image } from "./types";
+import { validatePublicHttpUrl } from "../../utils/NetworkPolicy";
 
 export function getUploader(uploader: string) {
   switch (uploader) {
@@ -34,8 +35,14 @@ export class UploaderManager {
       throw new Error("Mobile App must use remote server mode.");
     }
 
+    for (const item of fileList) {
+      if (typeof item !== "string" || !/^https?:\/\//i.test(item)) continue;
+      const validationError = await validatePublicHttpUrl(item);
+      if (validationError) throw new Error(validationError);
+    }
+
     const res = await this.uploader.upload(fileList);
-    if (!res.success) {
+    if (!res.success || res.result.length === 0) {
       new Notice(res.msg || "Upload Failed");
       throw new Error(res.msg || "Upload Failed");
     }
@@ -49,7 +56,7 @@ export class UploaderManager {
     }
 
     const res = await this.uploader.uploadByClipboard(fileList);
-    if (!res.success) {
+    if (!res.success || res.result.length === 0) {
       new Notice(res.msg || "Upload Failed");
       throw new Error(res.msg || "Upload Failed");
     }

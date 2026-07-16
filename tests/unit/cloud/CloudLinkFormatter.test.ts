@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { CloudLinkFormatter } from '../../../src/cloud/CloudLinkFormatter';
-import type { CloudUploadSettings } from '../../../src/settings/ImageAssistantSettings';
+import type { CloudUploadSettings } from '../../../src/settings/types';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
 
 describe('CloudLinkFormatter', () => {
   describe('formatCloudLink', () => {
-    const defaultSettings: Partial<CloudUploadSettings> = {
-      uploader: 'picgo',
+    const defaultSettings: CloudUploadSettings = {
+      ...structuredClone(DEFAULT_SETTINGS.pasteHandling.cloud),
+      uploader: 'PicGo',
       imageSizeWidth: undefined,
       imageSizeHeight: undefined
     };
@@ -35,7 +37,25 @@ describe('CloudLinkFormatter', () => {
           defaultSettings
         );
         
-        expect(result).toBe('![ ](https://example.com/image with space.png)');
+        expect(result).toBe('![ ](<https://example.com/image with space.png>)');
+      });
+
+      it('Given 上传器返回带 title 的 Markdown 链接, When formatCloudLink, Then 保留完整 URL 且移除 title', () => {
+        const result = CloudLinkFormatter.formatCloudLink(
+          '![uploaded](<https://example.com/image with space.png> "Uploaded title")',
+          defaultSettings
+        );
+
+        expect(result).toBe('![ ](<https://example.com/image with space.png>)');
+      });
+
+      it('Given 上传器返回路径含括号的 Markdown 链接, When formatCloudLink, Then 不截断 URL', () => {
+        const result = CloudLinkFormatter.formatCloudLink(
+          '![uploaded](https://example.com/image(1).png "Uploaded title")',
+          defaultSettings
+        );
+
+        expect(result).toBe('![ ](<https://example.com/image(1).png>)');
       });
     });
 
@@ -112,9 +132,35 @@ describe('CloudLinkFormatter', () => {
         
         expect(result).toBe('![caption|400](https://example.com/new.png)');
       });
+
+      it('Given Wiki 路径含转义管道符, When formatCloudLink, Then 不把路径片段误当成题注', () => {
+        const result = CloudLinkFormatter.formatCloudLink(
+          'https://example.com/new.png',
+          defaultSettings,
+          '![[folder/a\\|b.png|caption|400]]'
+        );
+
+        expect(result).toBe('![caption|400](https://example.com/new.png)');
+      });
     });
 
     describe('全局尺寸设置', () => {
+      it('Given 实际尺寸模式保留了旧固定宽高, When 格式化, Then 不写入旧尺寸', () => {
+        const settings: CloudUploadSettings = {
+          ...defaultSettings,
+          imageSizeSource: 'actual',
+          imageSizeWidth: 800,
+          imageSizeHeight: 600
+        };
+
+        const result = CloudLinkFormatter.formatCloudLink(
+          'https://example.com/image.png',
+          settings
+        );
+
+        expect(result).toBe('![ ](https://example.com/image.png)');
+      });
+
       it('Given 设置了宽度和高度, When 无原始链接, Then 添加 |WxH 参数', () => {
         const settings: CloudUploadSettings = {
           ...defaultSettings,
@@ -200,8 +246,8 @@ describe('CloudLinkFormatter', () => {
           defaultSettings
         );
         
-        // 实际行为：提取()中的内容，包括嵌套的Markdown (缺少最后一个括号)
-        expect(result).toBe('![ ](![inner](https://example.com/image.png)');
+        // 保持容错：不把嵌套内容截断成损坏的 Markdown destination。
+        expect(result).toBe('![ ](<![inner](https://example.com/image.png)>)');
       });
 
       it('Given 原始链接包含多个 | 分隔符, When formatCloudLink, Then 正确解析题注和尺寸', () => {
@@ -225,7 +271,7 @@ describe('CloudLinkFormatter', () => {
         expect(result).toBe('![My Image Caption](https://example.com/new.png)');
       });
 
-      it('Given 设置宽度为 0, When formatCloudLink, Then 添加尺寸参数0', () => {
+      it('Given 设置宽度无效, When formatCloudLink, Then 不添加尺寸参数', () => {
         const settings: CloudUploadSettings = {
           ...defaultSettings,
           imageSizeWidth: 0
@@ -236,8 +282,7 @@ describe('CloudLinkFormatter', () => {
           settings
         );
         
-        // 0 也会被添加为尺寸参数
-        expect(result).toBe('![ |0](https://example.com/image.png)');
+        expect(result).toBe('![ ](https://example.com/image.png)');
       });
 
       it('Given 原始链接格式异常, When formatCloudLink, Then 优雅降级', () => {

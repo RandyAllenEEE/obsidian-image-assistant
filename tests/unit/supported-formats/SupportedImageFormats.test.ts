@@ -36,12 +36,14 @@ function makeBmpHeaderBytes(): ArrayBuffer {
 }
 
 function makeTiffHeaderBytes(littleEndian: boolean): ArrayBuffer {
-  // 'II' (0x49 0x49) or 'MM' (0x4D 0x4D)
+  // TIFF byte order followed by the required 42 magic value.
   const u8 = new Uint8Array(8);
   if (littleEndian) {
     u8[0] = 0x49; u8[1] = 0x49;
+    u8[2] = 0x2A; u8[3] = 0x00;
   } else {
     u8[0] = 0x4D; u8[1] = 0x4D;
+    u8[2] = 0x00; u8[3] = 0x2A;
   }
   return u8.buffer;
 }
@@ -101,6 +103,11 @@ describe('SupportedImageFormats — extension-based support (6.1–6.4, 6.10–6
     expect(formats.isSupported(undefined, 'anim.gif')).toBe(true);
   });
 
+  it('Given ICO filename or MIME, When checked, Then isSupported returns true', () => {
+    expect(formats.isSupported(undefined, 'favicon.ico')).toBe(true);
+    expect(formats.isSupported('image/vnd.microsoft.icon', 'favicon.bin')).toBe(true);
+  });
+
   it('Given invalid extension, When checked, Then isSupported returns false (6.11)', () => {
     expect(formats.isSupported(undefined, 'doc.txt')).toBe(false);
     expect(formats.isSupported(undefined, 'file.doc')).toBe(false);
@@ -108,6 +115,23 @@ describe('SupportedImageFormats — extension-based support (6.1–6.4, 6.10–6
 
   it('Given conflicting MIME and extension, When MIME is supported and extension is not, Then MIME takes precedence (contract)', () => {
     expect(formats.isSupported('image/png', 'file.txt')).toBe(true);
+  });
+
+  it('normalizes MIME parameters, casing, and common browser aliases', () => {
+    expect(formats.isSupported('IMAGE/JPEG; charset=binary', 'file.bin')).toBe(true);
+    expect(formats.isSupported('image/pjpeg', 'file.bin')).toBe(true);
+    expect(formats.isSupported('image/x-png', 'file.bin')).toBe(true);
+  });
+
+  it('does not trust an image extension when an explicit non-image MIME is present', () => {
+    expect(formats.isSupported('application/pdf', 'document.png')).toBe(false);
+    expect(formats.isSupported('text/plain', 'document.jpg')).toBe(false);
+    expect(formats.isSupported('application/octet-stream', 'image.webp')).toBe(true);
+  });
+
+  it('keeps compatibility with Vault callers that pass a bare extension as the first argument', () => {
+    expect(formats.isSupported('png', 'image.png')).toBe(true);
+    expect(formats.isSupported('md', 'note.md')).toBe(false);
   });
 });
 
@@ -147,10 +171,22 @@ describe('SupportedImageFormats — header-based MIME detection (6.5–6.9, 6.18
   });
 
   it.each([
-    'heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'
-  ])('Given HEIC/HEIF ftyp=%s, When detected, Then returns image/heic (6.5)', async (brand) => {
+    'heic', 'heix', 'hevc', 'hevx'
+  ])('Given HEIC ftyp=%s, When detected, Then returns image/heic (6.5)', async (brand) => {
     const blob = makeImageBlob(makeIsoBmffFtypBytes(brand), 'application/octet-stream');
     await expect(formats.getMimeTypeFromFile(blob)).resolves.toBe('image/heic');
+  });
+
+  it('Given ICO header, When detected from Blob, Then returns image/x-icon', async () => {
+    const blob = makeImageBlob(new Uint8Array([0, 0, 1, 0, 1, 0]).buffer, 'application/octet-stream');
+    await expect(formats.getMimeTypeFromFile(blob)).resolves.toBe('image/x-icon');
+  });
+
+  it.each([
+    'mif1', 'msf1'
+  ])('Given generic HEIF ftyp=%s, When detected, Then returns image/heif (6.5)', async (brand) => {
+    const blob = makeImageBlob(makeIsoBmffFtypBytes(brand), 'application/octet-stream');
+    await expect(formats.getMimeTypeFromFile(blob)).resolves.toBe('image/heif');
   });
 
   it.each([
@@ -186,6 +222,17 @@ describe('SupportedImageFormats — SVG and Blob.type fallback (6.8, 6.12, 6.13)
 
   it('Given .svg filename, When isSupported called, Then returns true (6.8)', () => {
     expect(formats.isSupported(undefined, 'vector.svg')).toBe(true);
+  });
+
+  it('detects a large SVG with a generic MIME after reading the complete XML document', async () => {
+    const padding = '<!--' + 'x'.repeat(5000) + '-->';
+    const svg = new File(
+      [`<?xml version="1.0"?>${padding}<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>`],
+      'diagram.svg',
+      { type: 'application/octet-stream' }
+    );
+
+    await expect(formats.getMimeTypeFromFile(svg)).resolves.toBe('image/svg+xml');
   });
 });
 

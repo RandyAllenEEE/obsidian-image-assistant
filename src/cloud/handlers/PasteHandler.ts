@@ -5,7 +5,9 @@ import { CloudLinkFormatter } from "../CloudLinkFormatter";
 import { EditorContentInserter } from "../../utils/EditorContentInserter";
 import { t } from "../../lang/helpers";
 import { CloudResourceHelpers } from "../utils/CloudResourceHelpers";
-import { getAllImageLinks } from "../../utils/RegexPatterns";
+import { getContextualImageLinks } from "../../utils/MarkdownSourceContext";
+import { isHttpUrl } from "../../utils/NetworkPolicy";
+import { getErrorMessage } from "../../utils/ErrorUtils";
 
 import { BasePasteHandler } from "../../core/BasePasteHandler";
 
@@ -26,13 +28,16 @@ export class PasteHandler extends BasePasteHandler {
 
         const items = this.collectClipboardData(evt);
         const supportedFiles = this.filterSupportedFiles(items);
+        const fileItemCount = items.filter(item => item.kind === "file").length;
 
         if (supportedFiles.length > 0) {
+            if (supportedFiles.length !== fileItemCount) return;
             const clipboardText = evt.clipboardData.getData('text/plain') || evt.clipboardData.getData('text') || '';
             if (clipboardText.trim() && !this.plugin.settings.pasteHandling.cloud.applyImage) {
                 return;
             }
 
+            if (!this.canProcessFiles()) return;
             evt.preventDefault();
             await this.processFiles(supportedFiles, editor);
             return;
@@ -92,7 +97,7 @@ export class PasteHandler extends BasePasteHandler {
                 }
             } catch (error) {
                 console.error('[Cloud Upload] Upload failed:', error);
-                new Notice(`${t("MODAL_UPLOAD_FAILED") || "Upload failed"}: ${error.message}`);
+                new Notice(`${t("MODAL_UPLOAD_FAILED") || "Upload failed"}: ${getErrorMessage(error)}`);
                 inserter.removeLoadingText();
             }
         }
@@ -117,10 +122,11 @@ export class PasteHandler extends BasePasteHandler {
             return;
         }
 
-        // Use centralized getAllImageLinks to extract both markdown and wiki image links
-        const allLinks = getAllImageLinks(clipboardText);
+        // Do not upload image-looking text copied from source-only Markdown
+        // contexts; Admonition content remains eligible.
+        const allLinks = getContextualImageLinks(clipboardText);
         const networkLinks = allLinks.filter(link =>
-            (link.path.startsWith('http://') || link.path.startsWith('https://')) &&
+            isHttpUrl(link.path) &&
             !this.helpers.isBlacklistedDomain(link.path)
         );
 

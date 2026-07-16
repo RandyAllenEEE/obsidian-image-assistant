@@ -1,13 +1,15 @@
 // ProcessSingleImageModal.ts
-import { App, Modal, Notice, TFile, Setting, MarkdownView } from "obsidian";
+import { App, Modal, Notice, TFile, Setting } from "obsidian";
 import ImageConverterPlugin from "../../main";
-import { createAnyLinkRegex } from "../../utils/RegexPatterns";
-import { ImageLinkPathReplacer } from "../../utils/ImageLinkPathReplacer";
-import { ImageAssistantSettings } from "../../settings/defaults";
 import { AvifEncoder, OutputFormat, ResizeMode, EnlargeReduce, SingleImageOperationDefaults } from "../../settings/types";
 import { t } from "../../lang/helpers";
 import { AVIF_ENCODER_CONFIGS, ImageProcessor } from "../../local/ImageProcessor";
 import { findFfmpegExecutablePath, normalizeExecutablePath } from "../../utils/ffmpegPath";
+import { ImageConversionCommitError, ImageConversionCommitter } from "../../local/ImageConversionCommitter";
+import { OperationResultModal } from "./OperationResultModal";
+import { getErrorMessage } from "../../utils/ErrorUtils";
+import { detectImageBinaryType } from "../../utils/ImageBinaryType";
+import { resolveProcessedImageFilename } from "../../utils/ProcessedImageFilename";
 
 export interface SingleImageModalSettings extends SingleImageOperationDefaults {
     outputFormat: OutputFormat;
@@ -33,6 +35,9 @@ export class ProcessSingleImageModal extends Modal {
     private modalSettings: SingleImageModalSettings;
     private previewImageUrl: string | null = null;
     private previewContainer: HTMLDivElement;
+    private previewVersion = 0;
+    private closed = false;
+    private processing = false;
 
     // --- Dedicated containers for each section ---
     private conversionSettingsContainer: HTMLDivElement;
@@ -61,6 +66,7 @@ export class ProcessSingleImageModal extends Modal {
     }
 
     async onOpen() {
+        this.closed = false;
         this.contentEl.empty();
         this.contentEl.addClass("process-single-image-modal");
 
@@ -382,6 +388,12 @@ export class ProcessSingleImageModal extends Modal {
 
 
     private async generatePreview() {
+        const version = ++this.previewVersion;
+        if (this.previewImageUrl) {
+            URL.revokeObjectURL(this.previewImageUrl);
+            this.previewImageUrl = null;
+        }
+
         //  Skip preview for PNGQUANT and AVIF
         if (this.modalSettings.outputFormat === "PNGQUANT" || this.modalSettings.outputFormat === "AVIF") {
             this.previewContainer.empty();
@@ -394,11 +406,12 @@ export class ProcessSingleImageModal extends Modal {
 
         try {
             const fileBuffer = await this.app.vault.readBinary(this.imageFile);
-            const imageBlob = new Blob([fileBuffer], { type: this.imageFile.extension ? `image/${this.imageFile.extension}` : 'application/octet-stream' });
+            const detected = await detectImageBinaryType(fileBuffer);
+            const imageBlob = new Blob([fileBuffer], { type: detected?.mime ?? 'application/octet-stream' });
 
             // Preview uses modal settings directly.
 
-            const processedImageBuffer = await this.plugin.imageProcessor.processImage(
+            const processedImage = await this.plugin.imageProcessor.processImageDetailed(
                 imageBlob,
                 this.modalSettings.outputFormat,
                 this.modalSettings.quality / 100,
@@ -413,8 +426,13 @@ export class ProcessSingleImageModal extends Modal {
                 this.plugin.settings
             );
 
-            const blob = new Blob([processedImageBuffer], { type: `image/${this.modalSettings.outputFormat.toLowerCase()}` });
-            this.previewImageUrl = URL.createObjectURL(blob);
+            const blob = new Blob([processedImage.data], { type: processedImage.mimeType });
+            const previewUrl = URL.createObjectURL(blob);
+            if (this.closed || version !== this.previewVersion) {
+                URL.revokeObjectURL(previewUrl);
+                return;
+            }
+            this.previewImageUrl = previewUrl;
 
             const img = this.previewContainer.createEl("img", {
                 attr: {
@@ -433,27 +451,19 @@ export class ProcessSingleImageModal extends Modal {
             loadingEl.remove();
 
         } catch (error) {
-            loadingEl.setText(t("MODAL_PREVIEW_FAILED") + error.message);
+            if (this.closed || version !== this.previewVersion) return;
+            const message = error instanceof Error ? error.message : String(error);
+            loadingEl.setText(t("MODAL_PREVIEW_FAILED") + message);
             console.error("Preview generation failed:", error);
         }
     }
     private async processImage() {
-        //No Changes needed
+        if (this.processing) return;
+        this.processing = true;
         try {
             const fileBuffer = await this.app.vault.readBinary(this.imageFile);
-            const imageFile = new File([fileBuffer], this.imageFile.name, { type: this.imageFile.extension ? `image/${this.imageFile.extension}` : 'application/octet-stream' });
-
-            const destinationPath: string = this.imageFile.parent?.path || "";
-            let newFilename: string = (this.modalSettings.outputFormat === "NONE" || this.modalSettings.outputFormat === "ORIGINAL")
-                ? this.imageFile.name
-                : `${this.imageFile.name.substring(0, this.imageFile.name.lastIndexOf("."))}.${this.modalSettings.outputFormat.toLowerCase()}`;
-
-            //  Handle PNGQuant extension
-            if (this.modalSettings.outputFormat === "PNGQUANT") {
-                newFilename = `${this.imageFile.name.substring(0, this.imageFile.name.lastIndexOf("."))}.png`; // Force .png
-            }
-
-            const fullPath: string = this.plugin.folderAndFilenameManagement.combinePath(destinationPath, newFilename);
+            const detected = await detectImageBinaryType(fileBuffer);
+            const imageFile = new File([fileBuffer], this.imageFile.name, { type: detected?.mime ?? 'application/octet-stream' });
 
             // Skip if the conversion is not needed
             if (this.modalSettings.outputFormat === "NONE" && this.modalSettings.resizeMode === "None") {
@@ -463,154 +473,122 @@ export class ProcessSingleImageModal extends Modal {
             }
 
             const originalSize = this.imageFile.stat.size;
-            let processedImageBuffer: ArrayBuffer | undefined;
+            const processedImage = await this.plugin.imageProcessor.processImageDetailed(
+                imageFile,
+                this.modalSettings.outputFormat,
+                this.modalSettings.outputFormat === "AVIF" ? 100 : this.modalSettings.quality / 100,
+                this.modalSettings.colorDepth,
+                this.modalSettings.resizeMode,
+                this.modalSettings.desiredWidth,
+                this.modalSettings.desiredHeight,
+                this.modalSettings.desiredLongestEdge,
+                this.modalSettings.enlargeOrReduce,
+                this.modalSettings.allowLargerFiles,
+                ["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat) ? {
+                    pngquantExecutablePath: this.modalSettings.pngquantExecutablePath,
+                    pngquantQuality: this.modalSettings.pngquantQuality,
+                    ffmpegExecutablePath: this.modalSettings.ffmpegExecutablePath,
+                    ffmpegCrf: this.modalSettings.ffmpegCrf,
+                    ffmpegPreset: this.modalSettings.ffmpegPreset,
+                    ffmpegDetectedEncoder: this.modalSettings.ffmpegDetectedEncoder,
+                    ffmpegDetectedEncoderPath: this.modalSettings.ffmpegDetectedEncoderPath,
+                    useSystemPathForBinary: this.plugin.settings.localProcessing.externalTools.useSystemPathForBinary,
+                } : undefined,
+                this.plugin.settings
+            );
 
-            // --- Handle NONE and ORIGINAL formats, and resizing ---
-            if (this.modalSettings.outputFormat === "NONE" && this.modalSettings.resizeMode !== "None") {
-                // No conversion, BUT resizing is needed.
-                processedImageBuffer = await this.plugin.imageProcessor.resizeImage(
-                    imageFile,
-                    this.modalSettings.resizeMode,
-                    this.modalSettings.desiredWidth,
-                    this.modalSettings.desiredHeight,
-                    this.modalSettings.desiredLongestEdge,
-                    this.modalSettings.enlargeOrReduce
-                );
-            } else if (this.modalSettings.outputFormat === "ORIGINAL") {
-                // Compress using the original format.
-                processedImageBuffer = await this.plugin.imageProcessor.compressOriginalImage(
-                    imageFile,
-                    this.modalSettings.quality / 100,
-                    this.modalSettings.resizeMode,
-                    this.modalSettings.desiredWidth,
-                    this.modalSettings.desiredHeight,
-                    this.modalSettings.desiredLongestEdge,
-                    this.modalSettings.enlargeOrReduce
-                );
-
-            } else {
-                // All other conversion cases (WEBP, JPEG, PNG, etc.)
-                // Pass pngquant settings if applicable
-                processedImageBuffer = await this.plugin.imageProcessor.processImage(
-                    imageFile,
-                    this.modalSettings.outputFormat,
-                    this.modalSettings.outputFormat === "AVIF" ? 100 : this.modalSettings.quality / 100, // Pass 100 for quality, it is ignored,
-                    this.modalSettings.colorDepth,
-                    this.modalSettings.resizeMode,
-                    this.modalSettings.desiredWidth,
-                    this.modalSettings.desiredHeight,
-                    this.modalSettings.desiredLongestEdge,
-                    this.modalSettings.enlargeOrReduce,
-                    this.modalSettings.allowLargerFiles,
-                    ["PNGQUANT", "AVIF"].includes(this.modalSettings.outputFormat) ? {
-                        pngquantExecutablePath: this.modalSettings.pngquantExecutablePath,
-                        pngquantQuality: this.modalSettings.pngquantQuality,
-                        ffmpegExecutablePath: this.modalSettings.ffmpegExecutablePath,
-                        ffmpegCrf: this.modalSettings.ffmpegCrf,
-                        ffmpegPreset: this.modalSettings.ffmpegPreset,
-                        ffmpegDetectedEncoder: this.modalSettings.ffmpegDetectedEncoder,
-                        ffmpegDetectedEncoderPath: this.modalSettings.ffmpegDetectedEncoderPath,
-                        useSystemPathForBinary: this.plugin.settings.localProcessing.externalTools.useSystemPathForBinary,
-                    } : undefined,
-                    this.plugin.settings
-                );
+            if (processedImage.outcome !== "converted") {
+                new Notice(processedImage.reason ?? `No processing needed for "${this.imageFile.name}".`, 1500);
+                return;
             }
+
+            const newFilename = await resolveProcessedImageFilename(this.imageFile, fileBuffer, processedImage);
 
 
             // --- File Creation/Replacement ---
-            if (processedImageBuffer && !this.modalSettings.allowLargerFiles && processedImageBuffer.byteLength > originalSize) {
-                this.plugin.showSizeComparisonNotification(originalSize, processedImageBuffer.byteLength);
+            if (!this.modalSettings.allowLargerFiles && processedImage.data.byteLength > originalSize) {
+                this.plugin.showSizeComparisonNotification(originalSize, processedImage.data.byteLength);
                 new Notice(`Using original image for "${this.imageFile.name}" as processed image is larger.`, 1000);
-                // We don't create/modify a file, but the link *might* need updating (if format changed).
-            } else if (processedImageBuffer) {
-                this.plugin.showSizeComparisonNotification(originalSize, processedImageBuffer.byteLength);
-
-                // Check if the file needs renaming *before* modifying it
-                if (this.imageFile.path !== fullPath) {
-                    // File needs to be renamed. Use renameFile for atomic operation.
-                    await this.app.fileManager.renameFile(this.imageFile, fullPath);
-                    // Get a reference to the *renamed* file.
-                    const renamedFile = this.app.vault.getAbstractFileByPath(fullPath);
-                    if (renamedFile instanceof TFile) {
-                        // Now modify the *renamed* file.
-                        await this.app.vault.modifyBinary(renamedFile, processedImageBuffer);
-                    } else {
-                        new Notice(`Error: Could not find renamed file at ${fullPath}`);
-                        return; // Exit if rename failed
-                    }
-                } else {
-                    // No rename needed, just modify the existing file in place.
-                    await this.app.vault.modifyBinary(this.imageFile, processedImageBuffer); // Modify in place
-                }
-
-            } // If there is no `processedImageBuffer` then only rename happened, so do nothing.
-
-
-            // --- Update Link in Active Note ---
-            const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-            if (activeView) {
-                const { editor } = activeView;
-                const fileContent = editor.getValue();
-
-                // const escapedOriginalName = this.imageFile.name.replace(/[[\]]/g, '\\$&');
-                // const linkRegex = new RegExp(`!\\[\\[${ escapedOriginalName }(?: \\| [^\\]] +)?\\]\\[\\] | !\\[.*?\\]\\((${ escapedOriginalName }) (?: \\?[^)] *)?\\)`, 'g');
-
-                // Use centralized factory
-                const linkRegex = createAnyLinkRegex(this.imageFile.name);
-
-                // Use ImageLinkPathReplacer to preserve wiki/markdown format and pipe syntax
-                const newContent = fileContent.replace(linkRegex, (match) => {
-                    return ImageLinkPathReplacer.replacePath(match, newFilename);
-                });
-                if (newContent !== fileContent) {
-                    editor.setValue(newContent);
-                    new Notice(`Link updated in "${activeView.file?.name}"`, 1000);
-                }
+                return;
+            } else {
+                this.plugin.showSizeComparisonNotification(originalSize, processedImage.data.byteLength);
+                const committer = new ImageConversionCommitter(
+                    this.app,
+                    this.plugin.folderAndFilenameManagement,
+                    this.plugin.vaultReferenceManager,
+                    { includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing },
+                    () => this.plugin.settings.localProcessing.link
+                );
+                this.imageFile = await committer.commit(this.imageFile, newFilename, processedImage.data);
             }
 
-            this.refreshActiveNote();
+            await this.refreshActiveNote();
             new Notice(`Image "${this.imageFile.name}" processed`, 1000);
             this.close();
 
         } catch (error) {
             console.error("Error processing image:", error);
-            new Notice(`Failed to process image: ${error.message}`, 2000);
-        } finally {
-            if (this.previewImageUrl) {
-                URL.revokeObjectURL(this.previewImageUrl);
-                this.previewImageUrl = null;
+            if (error instanceof ImageConversionCommitError) {
+                const completed = [
+                    ...(error.report.markdown?.files ?? [])
+                        .filter(file => file.replaced > 0)
+                        .map(file => `${file.filePath}: ${file.replaced}/${file.found} reference(s)`),
+                    ...(error.report.canvas?.files ?? [])
+                        .filter(file => file.replaced > 0)
+                        .map(file => `${file.filePath}: ${file.replaced}/${file.found} Canvas reference(s)`)
+                ];
+                const failed = [
+                    ...(error.report.markdown?.files ?? [])
+                        .filter(file => !!file.error || file.replaced !== file.found)
+                        .map(file => `${file.filePath}: ${file.error ?? `${file.replaced}/${file.found} updated`}`),
+                    ...(error.report.canvas?.files ?? [])
+                        .filter(file => !!file.error || file.replaced !== file.found)
+                        .map(file => `${file.filePath}: ${file.error ?? `${file.replaced}/${file.found} updated`}`)
+                ];
+                new OperationResultModal(this.app, {
+                    title: "Image conversion was only partially committed",
+                    summary: `Stage: ${error.report.stage}. The source was preserved${error.report.targetPath ? ` and the target remains at ${error.report.targetPath}` : ""}.`,
+                    successful: completed,
+                    failed,
+                    uncertain: error.report.uncertainFiles
+                }).open();
             }
+            new Notice(`Failed to process image: ${getErrorMessage(error)}`, 2000);
+        } finally {
+            this.processing = false;
         }
     }
 
     async refreshActiveNote() {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (activeFile) {
-            const activeLeaf = this.app.workspace.getLeaf();
-            if (activeLeaf) {
-                // Get the current leaf using getMostRecentLeaf (or getLeaf for specific cases)
-                const leaf = this.app.workspace.getMostRecentLeaf();
-                if (leaf) {
-                    // Store current state
-                    const currentState = leaf.getViewState();
+        const leaf = this.app.workspace.getMostRecentLeaf();
+        if (!leaf) {
+            this.plugin.imageStateManager?.refreshAllImages();
+            return;
+        }
 
-                    // Switch to a different view type temporarily
-                    await leaf.setViewState({
-                        type: 'empty',
-                        state: {}
-                    });
-
-                    // Switch back to the original view
+        const currentState = leaf.getViewState();
+        let restoreNeeded = false;
+        try {
+            await leaf.setViewState({ type: 'empty', state: {} });
+            restoreNeeded = true;
+            await leaf.setViewState(currentState);
+            restoreNeeded = false;
+        } catch (error) {
+            console.warn("Image was processed, but the active note could not be refreshed:", error);
+            if (restoreNeeded) {
+                try {
                     await leaf.setViewState(currentState);
-
+                } catch (restoreError) {
+                    console.error("Failed to restore the active note view:", restoreError);
                 }
-                // Reopen the file to refresh its content
-                await activeLeaf.openFile(activeFile, { active: true });
             }
+        } finally {
+            this.plugin.imageStateManager?.refreshAllImages();
         }
     }
     onClose() {
-        // No Changes
+        this.closed = true;
+        this.previewVersion++;
         this.saveModalSettings();
         if (this.previewImageUrl) {
             URL.revokeObjectURL(this.previewImageUrl);

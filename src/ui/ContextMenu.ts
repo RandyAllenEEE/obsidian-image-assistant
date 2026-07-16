@@ -1,11 +1,12 @@
 import {
 	Menu,
-	View,
 	TFile,
 	Platform,
 	Component,
 	App,
 	MarkdownView,
+	Notice,
+	View,
 } from 'obsidian';
 import { t } from '../lang/helpers';
 
@@ -26,6 +27,9 @@ import { RenameHandler } from './contextMenu/handlers/RenameHandler';
 import { ImagePathUtils } from './contextMenu/utils/ImagePathUtils';
 import { ImageMatchFinder } from './contextMenu/utils/ImageMatchFinder';
 import { EditorLinkRemover } from './contextMenu/utils/EditorLinkRemover';
+import { ImageViewContextResolver } from './contextMenu/utils/ImageViewContextResolver';
+import { isHttpUrl } from '../utils/NetworkPolicy';
+import { getErrorMessage } from '../utils/ErrorUtils';
 
 // Import input builders
 import { RenameInputBuilder } from './contextMenu/inputs/RenameInputBuilder';
@@ -34,7 +38,7 @@ export class ContextMenu extends Component {
 	private contextMenuRegistered = false;
 	private currentMenu: Menu | null = null;
 	private cloudDeleter: CloudImageDeleter;
-	private registeredContextMenuDocuments = new WeakSet<Document>();
+	private contextMenuDocumentScopes = new Map<Document, Component>();
 
 	// Handlers
 	private deleteHandler: DeleteHandler;
@@ -47,6 +51,7 @@ export class ContextMenu extends Component {
 	// Utils
 	private imageMatchFinder: ImageMatchFinder;
 	private linkRemover: EditorLinkRemover;
+	private imageViewContextResolver: ImageViewContextResolver;
 
 	// Input builders
 	private renameInputBuilder: RenameInputBuilder;
@@ -79,6 +84,7 @@ export class ContextMenu extends Component {
 		// Initialize utils
 		this.imageMatchFinder = new ImageMatchFinder(app);
 		this.linkRemover = new EditorLinkRemover();
+		this.imageViewContextResolver = new ImageViewContextResolver(app);
 
 		// Initialize handlers
 		this.deleteHandler = new DeleteHandler(
@@ -87,25 +93,29 @@ export class ContextMenu extends Component {
 			folderAndFilenameManagement,
 			this.imageMatchFinder,
 			this.linkRemover,
-			this.cloudDeleter
+			this.cloudDeleter,
+			this.imageViewContextResolver
 		);
 
 		this.uploadDownloadHandler = new UploadDownloadHandler(
 			app,
 			plugin,
-			folderAndFilenameManagement
+			folderAndFilenameManagement,
+			this.imageViewContextResolver
 		);
 
 		this.clipboardHandler = new ClipboardHandler(
 			app,
 			folderAndFilenameManagement,
 			this.imageMatchFinder,
-			this.linkRemover
+			this.linkRemover,
+			this.imageViewContextResolver
 		);
 
 		this.processingHandler = new ProcessingHandler(
 			app,
-			plugin
+			plugin,
+			folderAndFilenameManagement
 		);
 
 		this.navigationHandler = new NavigationHandler(
@@ -143,22 +153,31 @@ export class ContextMenu extends Component {
 	}
 
 	private registerContextMenuListenerForDocument(ownerDocument: Document): void {
-		if (this.registeredContextMenuDocuments.has(ownerDocument)) {
+		if (this.contextMenuDocumentScopes.has(ownerDocument)) {
 			return;
 		}
 
-		this.registerDomEvent(
+		const scope = this.addChild(new Component());
+		scope.registerDomEvent(
 			ownerDocument,
 			'contextmenu',
 			this.handleContextMenuEvent,
 			true
 		);
-		this.registerDomEvent(
+		scope.registerDomEvent(
 			ownerDocument,
 			'click',
 			this.documentClickHandler
 		);
-		this.registeredContextMenuDocuments.add(ownerDocument);
+		this.contextMenuDocumentScopes.set(ownerDocument, scope);
+	}
+
+	private unregisterContextMenuListenerForDocument(ownerDocument: Document): void {
+		const scope = this.contextMenuDocumentScopes.get(ownerDocument);
+		if (!scope) return;
+
+		this.contextMenuDocumentScopes.delete(ownerDocument);
+		this.removeChild(scope);
 	}
 
 	private registerContextMenuListenersForWorkspaceDocuments(): void {
@@ -190,6 +209,13 @@ export class ContextMenu extends Component {
 			this.app.workspace.on('window-open' as any, (_workspaceWindow: unknown, win: Window) => {
 				if (win?.document) {
 					this.registerContextMenuListenerForDocument(win.document);
+				}
+			})
+		);
+		this.registerEvent(
+			this.app.workspace.on('window-close' as any, (_workspaceWindow: unknown, win: Window) => {
+				if (win?.document) {
+					this.unregisterContextMenuListenerForDocument(win.document);
 				}
 			})
 		);
@@ -244,13 +270,6 @@ export class ContextMenu extends Component {
 		}
 
 		const target = event.target;
-		const activeView = this.app.workspace.getActiveViewOfType(View);
-		const isCanvasView = activeView?.getViewType() === 'canvas';
-
-		if (isCanvasView) {
-			return;
-		}
-
 		const img = this.resolveImageFromTarget(target);
 		if (!img) {
 			return;
@@ -258,6 +277,12 @@ export class ContextMenu extends Component {
 
 		// Skip Excalidraw images
 		if (this.plugin.supportedImageFormats.isExcalidrawImage(img)) {
+			return;
+		}
+
+		const ownerContext = this.imageViewContextResolver.resolveOwner(img);
+		const activeView = this.app.workspace.getActiveViewOfType(View);
+		if (activeView?.getViewType() === 'canvas' && !ownerContext) {
 			return;
 		}
 
@@ -283,7 +308,8 @@ export class ContextMenu extends Component {
 				this.currentMenu = null;
 			}
 		});
-		let activeFile = this.app.workspace.getActiveFile();
+		let activeFile = ownerContext?.file
+			?? this.app.workspace.getActiveFile();
 		if (!activeFile) {
 			const mv = this.app.workspace.getActiveViewOfType(MarkdownView) as any;
 			activeFile = (mv && (mv as any).file) ? (mv as any).file : null;
@@ -327,36 +353,47 @@ export class ContextMenu extends Component {
 
 		// If inputs were created, add event handler to confirm button
 		if (inputs) {
-			inputs.confirmButton.addEventListener('click', async () => {
-				if (inputs.isImageResolvable && !isNetwork) {
-					// Handle rename and move for local resolvable images
-					await this.renameHandler.handleRenameAndMove(
-						menu,
-						inputs.nameInput,
-						inputs.pathInput,
-						img,
-						inputs.isImageResolvable,
-						inputs.fileNameWithoutExt,
-						inputs.fileExtension,
-						inputs.obsidianVaultPathForRename,
-						inputs.file,
-						activeFile
-					);
-				}
+			let applying = false;
+			inputs.confirmButton.addEventListener('click', () => {
+				if (applying) return;
+				applying = true;
+				inputs.confirmButton.disabled = true;
 
-				// Handle caption and dimensions update for any editable image type
-				if (inputs.isImageResolvable || isNetwork) {
-					await this.renameHandler.handleDimensionsAndCaptionUpdate(
-						menu,
-						inputs.captionInput,
-						inputs.widthInput,
-						inputs.heightInput,
-						inputs.getAlignment(), // Pass alignment
-						img,
-						activeFile,
-						inputs.isImageResolvable || isNetwork
-					);
-				}
+				void (async () => {
+					if (inputs.isImageResolvable && !isNetwork) {
+						await this.renameHandler.handleRenameAndMove(
+							menu,
+							inputs.nameInput,
+							inputs.pathInput,
+							img,
+							inputs.isImageResolvable,
+							inputs.fileNameWithoutExt,
+							inputs.fileExtension,
+							inputs.obsidianVaultPathForRename,
+							inputs.file,
+							activeFile
+						);
+					}
+
+					if (inputs.isImageResolvable || isNetwork) {
+						await this.renameHandler.handleDimensionsAndCaptionUpdate(
+							menu,
+							inputs.captionInput,
+							inputs.widthInput,
+							inputs.heightInput,
+							inputs.getAlignment(),
+							img,
+							activeFile,
+							inputs.isImageResolvable || isNetwork
+						);
+					}
+				})().catch(error => {
+					console.error("Failed to apply image menu changes:", error);
+					new Notice(getErrorMessage(error));
+				}).finally(() => {
+					applying = false;
+					inputs.confirmButton.disabled = false;
+				});
 			});
 		}
 
@@ -369,15 +406,16 @@ export class ContextMenu extends Component {
 			menu.addSeparator();
 
 			// Start of Consolidated Tool Block (No internal separators)
-			this.addCutImageMenuItem(menu, event);
+			this.addCutImageMenuItem(menu, img, event);
+			this.addCutAllImageLinksMenuItem(menu, img);
 		} else {
 			// Mobile start of tool block
 		}
 
 		// Hide Copy operations for network images (CORS issues)
 		if (!isNetwork) {
-			this.addCopyImageMenuItem(menu, event);
-			this.addCopyBase64ImageMenuItem(menu, event);
+			this.addCopyImageMenuItem(menu, img, event);
+			this.addCopyBase64ImageMenuItem(menu, img, event);
 		}
 
 		// Network images: only show download option
@@ -386,13 +424,16 @@ export class ContextMenu extends Component {
 			this.addDownloadNetworkImageMenuItem(menu, img, event);
 		} else {
 			this.addProcessImageMenuItem(menu, img, event);
-			this.addCropRotateFlipMenuItem(menu, img);
-			this.addAnnotateImageMenuItem(menu, img);
+			if (this.processingHandler.canEditImage(img)) {
+				this.addCropRotateFlipMenuItem(menu, img);
+				this.addAnnotateImageMenuItem(menu, img);
+			}
 			this.addUploadToCloudMenuItem(menu, img, event);
 		}
 
 		// Delete option (Moved to Middle Section, end of tool block)
-		this.addDeleteImageAndLinkMenuItem(menu, event);
+		this.addDeleteImageAndLinkMenuItem(menu, img, event);
+		this.addDeleteAllImageLinksMenuItem(menu, img, event);
 
 		menu.addSeparator();
 
@@ -433,12 +474,22 @@ export class ContextMenu extends Component {
 	/**
 	 * Adds the "Cut" menu item.
 	 */
-	addCutImageMenuItem(menu: Menu, event: MouseEvent) {
+	addCutImageMenuItem(menu: Menu, img: HTMLImageElement, event: MouseEvent) {
 		menu.addItem((item) => {
 			item.setTitle(t("MENU_CUT"))
 				.setIcon('scissors')
 				.onClick(async () => {
-					await this.clipboardHandler.cutImageAndLink(event);
+					await this.clipboardHandler.cutImageAndLink(event, img);
+				});
+		});
+	}
+
+	addCutAllImageLinksMenuItem(menu: Menu, img: HTMLImageElement) {
+		menu.addItem((item) => {
+			item.setTitle(t("MENU_CUT_ALL_MATCHES"))
+				.setIcon('copy-minus')
+				.onClick(async () => {
+					await this.clipboardHandler.cutAllMatchingImageLinks(img);
 				});
 		});
 	}
@@ -446,13 +497,13 @@ export class ContextMenu extends Component {
 	/**
 	 * Adds the "Copy image" menu item.
 	 */
-	addCopyImageMenuItem(menu: Menu, event: MouseEvent) {
+	addCopyImageMenuItem(menu: Menu, img: HTMLImageElement, event: MouseEvent) {
 		menu.addItem((item) =>
 			item
 				.setTitle(t("MENU_COPY_IMAGE"))
 				.setIcon('copy')
 				.onClick(async () => {
-					await this.clipboardHandler.copyImage(event);
+					await this.clipboardHandler.copyImage(event, img);
 				})
 		);
 	}
@@ -460,13 +511,13 @@ export class ContextMenu extends Component {
 	/**
 	 * Adds the "Copy as Base64 encoded image" menu item.
 	 */
-	addCopyBase64ImageMenuItem(menu: Menu, event: MouseEvent) {
+	addCopyBase64ImageMenuItem(menu: Menu, img: HTMLImageElement, event: MouseEvent) {
 		menu.addItem((item) =>
 			item
 				.setTitle(t("MENU_COPY_BASE64"))
 				.setIcon('copy')
 				.onClick(() => {
-					this.clipboardHandler.copyImageAsBase64(event);
+					this.clipboardHandler.copyImageAsBase64(event, img);
 				})
 		);
 	}
@@ -548,7 +599,7 @@ export class ContextMenu extends Component {
 		if (!src) return;
 
 		// Only show for local images (not network URLs)
-		if (src.startsWith('http://') || src.startsWith('https://')) {
+		if (isHttpUrl(src)) {
 			return;
 		}
 
@@ -569,7 +620,7 @@ export class ContextMenu extends Component {
 		if (!src) return;
 
 		// Only show for network images
-		if (!src.startsWith('http://') && !src.startsWith('https://')) {
+		if (!isHttpUrl(src)) {
 			return;
 		}
 
@@ -585,13 +636,24 @@ export class ContextMenu extends Component {
 	/**
 	 * Adds the "Delete Image and Link" menu item.
 	 */
-	addDeleteImageAndLinkMenuItem(menu: Menu, event: MouseEvent) {
+	addDeleteImageAndLinkMenuItem(menu: Menu, img: HTMLImageElement, event: MouseEvent) {
 		menu.addItem((item) => {
 			item
 				.setTitle(t("MENU_DELETE_LINK"))
 				.setIcon('trash')
 				.onClick(async () => {
-					await this.deleteHandler.deleteImageAndLink(event);
+					await this.deleteHandler.deleteImageAndLink(event, img);
+				});
+		});
+	}
+
+	addDeleteAllImageLinksMenuItem(menu: Menu, img: HTMLImageElement, event: MouseEvent) {
+		menu.addItem((item) => {
+			item
+				.setTitle(t("MENU_DELETE_ALL_MATCHES"))
+				.setIcon('trash-2')
+				.onClick(async () => {
+					await this.deleteHandler.deleteAllMatchingImageLinks(event, img);
 				});
 		});
 	}

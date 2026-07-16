@@ -6,7 +6,7 @@
     
     // Module settings optimized for Obsidian plugin
     "module": "ESNext",
-    "target": "ES2024",           // Electron 37 (Chromium 138) - Full ES2024 support!
+    "target": "ES2022",
     "moduleResolution": "node",
     
     // Type checking - only what ESLint can't handle
@@ -36,13 +36,7 @@
     "lib": [
       "DOM",
       "DOM.Iterable",
-      "ES2024"
-    ],
-    
-    // Type roots for Obsidian and custom types
-    "typeRoots": [
-      "./node_modules/@types",
-      "./src/types"              // Custom type definitions
+      "ES2022"
     ]
   },
   

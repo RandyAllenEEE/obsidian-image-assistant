@@ -14,7 +14,7 @@ function makePlugin() {
     },
     batchImageProcessor: {
       batchProcess: vi.fn(async (files: TFile[]) => ({
-        successful: files.map(file => ({ success: true, item: file })),
+        successful: files.map(file => ({ status: 'success' as const, success: true as const, item: file })),
         failed: [],
         cancelled: false
       }))
@@ -46,9 +46,21 @@ describe('Folder batch processing with current LocalProcessMode', () => {
   it('collects recursive folder image tasks for the selected folder', async () => {
     const mode = new LocalProcessMode(app, plugin, folder, 'folder');
 
-    const tasks = await mode.loadTasks();
+    const { tasks } = await mode.loadTasks();
 
     expect(tasks.map(task => task.path).sort()).toEqual(files.map(file => file.path).sort());
+  });
+
+  it('applies batch-local skip formats when loading folder tasks', async () => {
+    plugin.settings.operationDefaults.batchLocal.skipFormats = 'jpg, webp';
+    const mode = new LocalProcessMode(app, plugin, folder, 'folder');
+
+    const { tasks } = await mode.loadTasks();
+
+    expect(tasks.map(task => task.path).sort()).toEqual([
+      'images/a.png',
+      'images/sub/e.png'
+    ]);
   });
 
   it('ImageFileCollector can distinguish direct vs recursive folder scans', () => {
@@ -64,7 +76,7 @@ describe('Folder batch processing with current LocalProcessMode', () => {
 
   it('processTask delegates a single selected file to batchProcess', async () => {
     const mode = new LocalProcessMode(app, plugin, folder, 'folder');
-    const tasks = await mode.loadTasks();
+    const { tasks } = await mode.loadTasks();
 
     const result = await mode.processTask(tasks[0]);
 

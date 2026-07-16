@@ -1,40 +1,73 @@
 import TexWrapper from "./tex-wrapper";
 import { OCRSettings } from "../OCRSettings";
+import { createBasicAuthorization, fetchWithTimeout } from "../../utils/NetworkRequestUtils";
+import { createOcrImagePayload } from "./ImagePayload";
+import { App } from "obsidian";
 
 export default class Pic2Tex extends TexWrapper {
 	settings: OCRSettings;
 
-	constructor(isMultiline: boolean, settings: OCRSettings) {
+	constructor(isMultiline: boolean, settings: OCRSettings, private readonly app?: App) {
 		super(isMultiline);
 		this.settings = settings;
 	}
 
 	async getTex(image: Uint8Array): Promise<string> {
+		const payload = await createOcrImagePayload(image);
 		const formData = new FormData();
-		const uint8Array = new Uint8Array(image);
-		const blob = new Blob([uint8Array], { type: 'image/png' });
-		formData.append("file", blob, "test.png");
+		const file = new File([payload.data], payload.fileName, { type: payload.mimeType });
+		formData.append("file", file);
 
-		let response;
-		let options: any = {
+		const options: any = {
 			method: "POST",
 			body: formData,
-		};		if (this.settings.pix2tex.username && this.settings.pix2tex.password) {
+		};
+		const password = this.getPassword();
+		if (this.settings.pix2tex.username || password) {
 			options.headers = {
-				Authorization: `Basic ${btoa(`${this.settings.pix2tex.username}:${this.settings.pix2tex.password}`)
-					}`,
+				Authorization: createBasicAuthorization(
+					this.settings.pix2tex.username,
+					password
+				),
 			};
 		}
-		response = await fetch(this.settings.pix2tex.url, options);
+		const response = await fetchWithTimeout(this.settings.pix2tex.url, options);
 
-		if (!response.ok) throw response; // Not a ok response, we throw here and let method calling to show error message
+		if (!response.ok) {
+			const detail = (await response.text()).trim();
+			throw new Error(`Pic2Tex request failed with status ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
+		}
 
-		const jsonString = await response.text();
-		// Remove the quotes at the start and end of the string
-		let latexText = jsonString.substring(1, jsonString.length - 1);
-		// Replace all occurrences of \ with \
-		latexText = latexText.replace(/\\\\/g, "\\");
+		const responseText = (await response.text()).trim();
+		if (!responseText) throw new Error("Pic2Tex returned an empty response");
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(responseText);
+		} catch {
+			throw new Error("Pic2Tex returned malformed JSON");
+		}
+		const latexText = typeof parsed === "string"
+			? parsed.trim()
+			: this.extractLatex(parsed);
+		if (!latexText) throw new Error("Pic2Tex returned no LaTeX content");
 		return latexText;
 
+	}
+
+	private extractLatex(value: unknown): string {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) return "";
+		const candidate = value as Record<string, unknown>;
+		for (const key of ["latex", "result", "text"]) {
+			if (typeof candidate[key] === "string") return candidate[key].trim();
+		}
+		return "";
+	}
+
+	private getPassword(): string {
+		const secretId = this.settings.pix2tex.passwordSecretId.trim();
+		return secretId && this.app?.secretStorage
+			? this.app.secretStorage.getSecret(secretId) ?? ""
+			: "";
 	}
 }

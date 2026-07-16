@@ -92,6 +92,46 @@ const file = new File([new Uint8Array([1])], 'img.png', { type: 'image/png' });
     expect(res.destinationPath).toBe('attachments');
   });
 
+  it('keeps an extensionless image name and derives its real extension in ORIGINAL mode', async () => {
+    const { ffm } = makeDeps();
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64'
+    );
+    const file = new File([png], 'clipboard-image', { type: 'application/octet-stream' });
+    const conv: LocalConversionSettings = {
+      ...DEFAULT_SETTINGS.localProcessing.conversion,
+      outputFormat: 'ORIGINAL'
+    };
+    const fname: LocalFilenameSettings = {
+      customTemplate: '',
+      skipRenamePatterns: '',
+      conflictResolution: 'increment'
+    };
+
+    const res = await ffm.determineDestination(file, active, conv, fname, { type: 'CURRENT' });
+
+    expect(res.newFilename).toBe('clipboard-image.png');
+  });
+
+  it('does not create a dot-only hidden filename when converting an extensionless image', async () => {
+    const { ffm } = makeDeps();
+    const file = new File([new Uint8Array([0xff, 0xd8, 0xff])], 'camera', { type: 'image/jpeg' });
+    const conv: LocalConversionSettings = {
+      ...DEFAULT_SETTINGS.localProcessing.conversion,
+      outputFormat: 'WEBP'
+    };
+    const fname: LocalFilenameSettings = {
+      customTemplate: '',
+      skipRenamePatterns: '',
+      conflictResolution: 'increment'
+    };
+
+    const res = await ffm.determineDestination(file, active, conv, fname, { type: 'CURRENT' });
+
+    expect(res.newFilename).toBe('camera.webp');
+  });
+
   it('3.12 combinePath normalizes and handles root base', () => {
     const { ffm } = makeDeps();
     expect(ffm.combinePath('/', 'file.png')).toBe('/file.png');

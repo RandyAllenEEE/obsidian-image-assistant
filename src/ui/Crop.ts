@@ -1,11 +1,17 @@
 import { App, Component, Modal, Notice, TFile } from 'obsidian';
 import { t } from '../lang/helpers';
+import {
+	assertCanvasOutputMatchesExtension,
+	getCanvasExportMime
+} from '../utils/CanvasImageOutput';
+import { getErrorMessage } from '../utils/ErrorUtils';
 
 
 type SupportedImageFormat = 'jpeg' | 'png' | 'webp' | 'avif';
 
 export class Crop extends Modal {
 	private componentContainer = new Component();
+	private openVersion = 0;
 
 	private readonly MODAL_PADDING = 16;
 	private readonly HEADER_HEIGHT = 60;
@@ -25,6 +31,7 @@ export class Crop extends Modal {
 
 	private imageFile: TFile;
 	private originalArrayBuffer: ArrayBuffer | null = null;
+	private saving = false;
 	private cropContainer: HTMLDivElement;
 	private selectionArea: HTMLDivElement;
 	private isDrawing = false;
@@ -36,7 +43,11 @@ export class Crop extends Modal {
 	private currentPanX = 0;
 	private currentPanY = 0;
 	private originalImage: HTMLImageElement;
+	private originalImageUrl: string | null = null;
+	private abortImageLoad: (() => void) | null = null;
+	private wasClosed = false;
 	private imageScale: { x: number, y: number } = { x: 1, y: 1 };
+	private static readonly IMAGE_LOAD_TIMEOUT_MS = 30_000;
 
 	private currentAspectRatio: number | null = null;
 
@@ -52,8 +63,15 @@ export class Crop extends Modal {
 	constructor(app: App, imageFile: TFile) {
 		super(app);
 		this.imageFile = imageFile;
-		this.componentContainer.load();
 		this.containerEl.addClass('crop-tool-modal');
+	}
+
+	private get ownerDocument(): Document {
+		return this.modalEl.ownerDocument;
+	}
+
+	private get ownerWindow(): Window {
+		return this.ownerDocument.defaultView ?? window;
 	}
 
 	private setupEventListeners() {
@@ -130,6 +148,11 @@ export class Crop extends Modal {
 	}
 
 	async onOpen() {
+		const openVersion = ++this.openVersion;
+		this.wasClosed = false;
+		this.componentContainer.unload();
+		this.componentContainer = new Component();
+		this.componentContainer.load();
 		const { contentEl } = this;
 		contentEl.empty();
 
@@ -249,7 +272,7 @@ export class Crop extends Modal {
 		this.createImageControls(modalHeader);
 
 		// Early Escape key handler so reset works even before image load completes
-		this.componentContainer.registerDomEvent(document, 'keydown', (e: KeyboardEvent) => {
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'keydown', (e: KeyboardEvent) => {
 			if (e.key === 'Escape') {
 				this.resetSelection();
 				// keep modal open; prevent default close behavior
@@ -258,26 +281,32 @@ export class Crop extends Modal {
 		});
 
 		try {
-			await this.loadImage();
+			await this.loadImage(openVersion);
+			if (this.wasClosed || openVersion !== this.openVersion) return;
 
 			// Add button listeners
 			this.componentContainer.registerDomEvent(saveButton, 'click', () => this.saveImage());
 			this.componentContainer.registerDomEvent(cancelButton, 'click', () => this.close());
 			this.componentContainer.registerDomEvent(resetButton, 'click', () => this.resetSelection());
 		} catch (error) {
+			if (this.wasClosed || openVersion !== this.openVersion) return;
 			new Notice(t("MSG_CROP_LOAD_FAIL"));
 			console.error('Crop modal error:', error);
-			this.close();
+			if (!this.wasClosed) this.close();
 		}
 	}
 
-	private async loadImage() {
+	private async loadImage(openVersion: number) {
 		this.originalArrayBuffer = await this.app.vault.readBinary(this.imageFile);
+		if (this.wasClosed || openVersion !== this.openVersion) {
+			throw new Error('Image load cancelled');
+		}
 		const blob = new Blob([this.originalArrayBuffer]);
 		const imageUrl = URL.createObjectURL(blob);
+		this.originalImageUrl = imageUrl;
 
 		// Create and load the original image
-		this.originalImage = document.createElement('img');
+		this.originalImage = this.ownerDocument.createElement('img');
 		this.originalImage.className = 'crop-original-image';
 
 		// Append the image element immediately so tests (and UI) can reference it before load
@@ -287,7 +316,22 @@ export class Crop extends Modal {
 		}
 
 		return new Promise<void>((resolve, reject) => {
-			this.originalImage.onload = () => {
+			let settled = false;
+			let timeout: number | null = null;
+			const finish = (error?: Error) => {
+				if (settled) return;
+				settled = true;
+				if (timeout !== null) this.ownerWindow.clearTimeout(timeout);
+				this.originalImage.onload = null;
+				this.originalImage.onerror = null;
+				this.abortImageLoad = null;
+
+				if (error || this.wasClosed || openVersion !== this.openVersion) {
+					this.releaseOriginalImageUrl();
+					reject(error ?? new Error('Image load cancelled'));
+					return;
+				}
+
 				this.currentPanX = 0;
 				this.currentPanY = 0;
 				this.applyTransforms();
@@ -298,9 +342,21 @@ export class Crop extends Modal {
 				this.imageScale.y = this.originalImage.naturalHeight / this.originalImage.clientHeight;
 				resolve();
 			};
-			this.originalImage.onerror = reject;
+			this.abortImageLoad = () => finish(new Error('Image load cancelled'));
+			this.originalImage.onload = () => finish();
+			this.originalImage.onerror = () => finish(new Error('Failed to load image'));
+			timeout = this.ownerWindow.setTimeout(
+				() => finish(new Error('Image load timed out')),
+				Crop.IMAGE_LOAD_TIMEOUT_MS
+			);
 			this.originalImage.src = imageUrl;
 		});
+	}
+
+	private releaseOriginalImageUrl(): void {
+		if (!this.originalImageUrl) return;
+		URL.revokeObjectURL(this.originalImageUrl);
+		this.originalImageUrl = null;
 	}
 
 	private adjustModalSize() {
@@ -309,7 +365,7 @@ export class Crop extends Modal {
 		const modalElement = this.containerEl.querySelector('.modal') as HTMLElement;
 		if (!modalElement) return;
 
-		const isMobile = window.innerWidth <= 768;
+		const isMobile = this.ownerWindow.innerWidth <= 768;
 
 		// Get image dimensions
 		const imgWidth = this.originalImage.naturalWidth;
@@ -320,15 +376,15 @@ export class Crop extends Modal {
 
 		if (isMobile) {
 			// Mobile layout: full width with padding
-			modalWidth = window.innerWidth - (this.MODAL_PADDING * 2);
+			modalWidth = this.ownerWindow.innerWidth - (this.MODAL_PADDING * 2);
 			modalHeight = Math.min(
-				window.innerHeight - (this.MODAL_PADDING * 2),
+				this.ownerWindow.innerHeight - (this.MODAL_PADDING * 2),
 				modalWidth / imgAspectRatio + this.CHROME_HEIGHT
 			);
 		} else {
 			// Desktop layout: static size at 80% of window
-			modalWidth = window.innerWidth * this.STATIC_DESKTOP_WIDTH_RATIO;
-			modalHeight = window.innerHeight * this.STATIC_DESKTOP_HEIGHT_RATIO;
+			modalWidth = this.ownerWindow.innerWidth * this.STATIC_DESKTOP_WIDTH_RATIO;
+			modalHeight = this.ownerWindow.innerHeight * this.STATIC_DESKTOP_HEIGHT_RATIO;
 
 			// Ensure the image container maintains aspect ratio within these bounds
 			const availableImageHeight = modalHeight - this.CHROME_HEIGHT;
@@ -549,7 +605,7 @@ export class Crop extends Modal {
 			this.selectionArea.style.cursor = 'move';
 		});
 
-		this.componentContainer.registerDomEvent(document, 'mousemove', (e: MouseEvent) => {
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'mousemove', (e: MouseEvent) => {
 			if (!isDragging) return;
 
 			// Calculate the distance moved from the start position
@@ -573,7 +629,7 @@ export class Crop extends Modal {
 			this.selectionArea.style.top = `${newTop}px`;
 		});
 
-		this.componentContainer.registerDomEvent(document, 'mouseup', (e: MouseEvent) => {
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'mouseup', (e: MouseEvent) => {
 			isDragging = false;
 			this.selectionArea.style.cursor = 'move';
 		});
@@ -646,7 +702,7 @@ export class Crop extends Modal {
 		];
 
 		handles.forEach(position => {
-			const handle = document.createElement('div');
+			const handle = this.ownerDocument.createElement('div');
 			handle.className = `resize-handle ${position}-resize`;
 			this.selectionArea.appendChild(handle);
 		});
@@ -680,7 +736,7 @@ export class Crop extends Modal {
 			});
 		});
 
-		this.componentContainer.registerDomEvent(document, 'mousemove', (e: MouseEvent) => {
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'mousemove', (e: MouseEvent) => {
 			if (!isResizing) return;
 
 			const deltaX = e.clientX - startX;
@@ -767,7 +823,7 @@ export class Crop extends Modal {
 			this.selectionArea.style.top = `${newTop}px`;
 		});
 
-		this.componentContainer.registerDomEvent(document, 'mouseup', (e: MouseEvent) => {
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'mouseup', (e: MouseEvent) => {
 			isResizing = false;
 			currentHandle = null;
 		});
@@ -784,8 +840,14 @@ export class Crop extends Modal {
 	}
 
 	async saveImage() {
+		if (this.saving) return;
+		this.saving = true;
 		try {
-			const originalCanvas = document.createElement('canvas');
+			const outputMime = getCanvasExportMime(this.imageFile.extension);
+			if (!outputMime) {
+				throw new Error(`The image editor cannot safely overwrite .${this.imageFile.extension} files`);
+			}
+			const originalCanvas = this.ownerDocument.createElement('canvas');
 			const originalCtx = originalCanvas.getContext('2d');
 			if (!originalCtx) {
 				throw new Error('Could not get canvas context');
@@ -795,7 +857,7 @@ export class Crop extends Modal {
 			originalCtx.drawImage(this.originalImage, 0, 0);
 
 			// Step 1: Apply Rotation and Flipping to the ENTIRE image
-			const rotatedCanvas = document.createElement('canvas');
+			const rotatedCanvas = this.ownerDocument.createElement('canvas');
 			const rotatedCtx = rotatedCanvas.getContext('2d');
 			if (!rotatedCtx) {
 				throw new Error('Could not get canvas context for rotation');
@@ -815,7 +877,7 @@ export class Crop extends Modal {
 			rotatedCtx.drawImage(originalCanvas, -originalCanvas.width / 2, -originalCanvas.height / 2);
 
 			// Step 2: Apply Cropping to the Rotated Image
-			const finalCanvas = document.createElement('canvas');
+			const finalCanvas = this.ownerDocument.createElement('canvas');
 			const finalCtx = finalCanvas.getContext('2d');
 			if (!finalCtx) {
 				throw new Error('Could not get canvas context for cropping');
@@ -882,12 +944,10 @@ export class Crop extends Modal {
 			}
 
 			// --- Rest of the saveImage function (determining format and saving) ---
-			const extension = this.imageFile.extension.toLowerCase();
-			let outputFormat: SupportedImageFormat = 'png';
+			let outputFormat = (outputMime === 'image/jpeg' ? 'jpeg' : outputMime.replace('image/', '')) as SupportedImageFormat;
 			let quality = 1.0;
 
-			switch (extension) {
-				case 'jpg':
+			switch (outputFormat) {
 				case 'jpeg':
 					outputFormat = 'jpeg';
 					quality = 0.92;
@@ -928,35 +988,53 @@ export class Crop extends Modal {
 			if (!arrayBuffer) {
 				throw new Error('Failed to create array buffer from blob');
 			}
+			await assertCanvasOutputMatchesExtension(arrayBuffer, this.imageFile.extension);
 
 			await this.app.vault.modifyBinary(this.imageFile, arrayBuffer);
 
 			new Notice('Image saved successfully');
 
-			const leaf = this.app.workspace.getMostRecentLeaf();
-			if (leaf) {
-				const currentState = leaf.getViewState();
-				await leaf.setViewState({
-					type: 'empty',
-					state: {}
-				});
-				await leaf.setViewState(currentState);
-			}
+			await this.refreshActiveView();
 
 			this.close();
 
 		} catch (error) {
 			console.error('Save error:', error);
-			new Notice(`Error saving image: ${error.message}`);
+			new Notice(t("MSG_CROP_SAVE_FAIL", [getErrorMessage(error)]));
+		} finally {
+			this.saving = false;
+		}
+	}
+
+	private async refreshActiveView(): Promise<void> {
+		const leaf = this.app.workspace.getMostRecentLeaf();
+		if (!leaf) return;
+
+		const currentState = leaf.getViewState();
+		let restoreNeeded = false;
+		try {
+			await leaf.setViewState({ type: 'empty', state: {} });
+			restoreNeeded = true;
+			await leaf.setViewState(currentState);
+			restoreNeeded = false;
+		} catch (error) {
+			console.warn('Image was saved, but the preview could not be refreshed', error);
+			if (restoreNeeded) {
+				try {
+					await leaf.setViewState(currentState);
+				} catch (restoreError) {
+					console.error('Failed to restore the active view after cropping an image', restoreError);
+				}
+			}
 		}
 	}
 
 	// Add these cleanup methods
 	onClose() {
-		// Clean up URLs
-		if (this.originalImage?.src) {
-			URL.revokeObjectURL(this.originalImage.src);
-		}
+		this.wasClosed = true;
+		this.openVersion++;
+		this.abortImageLoad?.();
+		this.releaseOriginalImageUrl();
 
 		// Clean up canvases
 		const canvases = this.containerEl.querySelectorAll('canvas');

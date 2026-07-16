@@ -28,7 +28,6 @@ describe('PicGoUploader', () => {
             workOnNetWork: false,
             newWorkBlackDomains: '',
             applyImage: true,
-            downloadPath: 'attachments',
             uploadConcurrency: 3,
             cloudLinkFormat: 'markdown' as const,
         };
@@ -193,55 +192,8 @@ describe('PicGoUploader', () => {
         });
     });
 
-    describe('PicGo 响应格式说明', () => {
-        it('PicGo 标准响应格式文档', () => {
-            /*
-             * PicGo 响应格式说明：
-             * 
-             * 成功响应：
-             * {
-             *   success: true,
-             *   result: string[] | string,  // URL 数组或单个 URL
-             *   fullResult?: Array<{        // PicList 扩展字段（可选）
-             *     url: string,
-             *     fileName: string,
-             *     ... other metadata
-             *   }>
-             * }
-             * 
-             * 失败响应：
-             * {
-             *   success: false,
-             *   msg?: string,      // 错误消息（优先）
-             *   message?: string   // 备用错误消息
-             * }
-             * 
-             * HTTP 状态码：
-             * - 200: 正常（但仍需检查 success 字段）
-             * - 非 200: 请求失败
-             */
-            expect(true).toBe(true);
-        });
-
-        it('uploadedImages 持久化说明', () => {
-            /*
-             * uploadedImages 功能：
-             * 
-             * 1. 仅在使用 PicList 时有效（PicList 提供 fullResult 字段）
-             * 2. 保存所有上传记录的完整元数据
-             * 3. 每次上传成功后追加到数组
-             * 4. 通过 plugin.saveSettings() 持久化到磁盘
-             * 5. 用于：
-             *    - 查看上传历史
-             *    - 管理已上传图片
-             *    - 删除云端图片
-             */
-            expect(true).toBe(true);
-        });
-    });
-
     describe('边界情况和错误处理', () => {
-        it('Given 空数组结果, When handleResponse, Then 正常处理', async () => {
+        it('Given an empty result array, When handling the response, Then returns a usable failure result', async () => {
             const mockResponse = {
                 status: 200,
                 json: {
@@ -252,8 +204,56 @@ describe('PicGoUploader', () => {
 
             const result = await (uploader as any).handleResponse(mockResponse);
 
-            expect(result.success).toBe(true);
+            expect(result.success).toBe(false);
             expect(result.result).toEqual([]);
+        });
+
+        it('Given a malformed success response, When handling it, Then returns a failure instead of throwing', async () => {
+            const result = await (uploader as any).handleResponse({
+                status: 200,
+                json: { success: true, result: { unexpected: true } },
+            });
+
+            expect(result).toEqual({
+                success: false,
+                msg: 'Cloud upload returned no image URL',
+                result: [],
+            });
+        });
+
+        it('rejects non-HTTP upload results and does not persist them to history', async () => {
+            const result = await (uploader as any).handleResponse({
+                status: 200,
+                json: {
+                    success: true,
+                    result: ['not-a-url', 'file:///tmp/image.png'],
+                    fullResult: [{ url: 'javascript:alert(1)' }],
+                },
+            });
+
+            expect(result).toEqual({
+                success: false,
+                msg: 'Cloud upload returned no image URL',
+                result: [],
+            });
+            expect(mockHistoryManager.addRecord).not.toHaveBeenCalled();
+        });
+
+        it('keeps a successful upload result when PicList history persistence fails', async () => {
+            mockHistoryManager.addRecord.mockRejectedValueOnce(new Error('history disk full'));
+            vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+            const result = await (uploader as any).handleResponse({
+                status: 200,
+                json: {
+                    success: true,
+                    result: ['https://example.com/image.png'],
+                    fullResult: [{ url: 'https://example.com/image.png' }],
+                },
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.result).toEqual(['https://example.com/image.png']);
         });
 
         it('Given 结果包含特殊字符 URL, When handleResponse, Then 原样返回', async () => {
@@ -309,93 +309,4 @@ describe('PicGoUploader', () => {
         });
     });
 
-    describe('Local 模式和 Remote 模式说明', () => {
-        it('Local 模式工作原理', () => {
-            /*
-             * Local 模式 (remoteServerMode = false)：
-             * 
-             * 1. 发送文件路径而非文件内容
-             * 2. 请求格式：
-             *    POST /upload
-             *    { list: ["/absolute/path/to/image.png"] }
-             * 
-             * 3. PicGo 本地服务读取文件并上传
-             * 4. 适用场景：
-             *    - 开发环境
-             *    - 本地运行 PicGo
-             *    - 文件可被 PicGo 进程访问
-             * 
-             * 5. 优势：
-             *    - 请求体小
-             *    - 传输速度快
-             *    - 不需要读取文件内容
-             */
-            expect(true).toBe(true);
-        });
-
-        it('Remote 模式工作原理', () => {
-            /*
-             * Remote 模式 (remoteServerMode = true)：
-             * 
-             * 1. 读取文件为 ArrayBuffer
-             * 2. 创建 File 对象
-             * 3. 使用 FormData 上传二进制数据
-             * 4. 适用场景：
-             *    - 生产环境
-             *    - PicGo 运行在远程服务器
-             *    - 跨网络上传
-             * 
-             * 5. 优势：
-             *    - 不依赖文件系统路径
-             *    - 支持跨平台/跨网络
-             * 
-             * 6. 注意事项：
-             *    - 需要读取文件内容
-             *    - 请求体较大
-             *    - 适合较小的图片文件
-             */
-            expect(true).toBe(true);
-        });
-
-        it('文件命名规则', () => {
-            /*
-             * 文件名格式：{timestamp}{extension}
-             * 
-             * 例如：
-             * - 原始文件：/path/to/my-photo.jpg
-             * - 上传名称：1702800000000.jpg
-             * 
-             * 目的：
-             * - 避免文件名冲突
-             * - 生成唯一标识
-             * - 兼容各种字符集
-             */
-            expect(true).toBe(true);
-        });
-    });
-
-    describe('集成测试建议', () => {
-        it('实际 PicGo 服务测试说明', () => {
-            /*
-             * 完整测试 PicGoUploader 需要：
-             * 
-             * 1. 启动本地 PicGo 服务（端口 36677）
-             * 2. 配置有效的图床（如 SM.MS、GitHub）
-             * 3. 准备测试图片文件
-             * 4. 测试场景：
-             *    - Local 模式上传本地文件
-             *    - Remote 模式上传文件内容
-             *    - 剪贴板图片上传
-             *    - 错误处理（无效文件、网络错误）
-             * 
-             * 单元测试局限：
-             * - 无法测试实际网络请求
-             * - 无法验证 PicGo 集成
-             * - 无法测试文件读取逻辑
-             * 
-             * 建议：编写集成测试或手动测试
-             */
-            expect(true).toBe(true);
-        });
-    });
 });

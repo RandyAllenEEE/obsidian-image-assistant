@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { LinkFormatter } from '../../../src/utils/LinkFormatter';
 import type { LinkFormat, PathFormat } from '../../../src/settings/LinkFormatSettings';
-import type { NonDestructiveResizePreset } from '../../../src/settings/NonDestructiveResizeSettings';
+import type { EmbedResizeSettings } from '../../../src/settings/NonDestructiveResizeSettings';
 import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
 import { setMockImageSize } from '../../helpers/test-setup';
+
+type NonDestructiveResizePreset = EmbedResizeSettings & { name?: string };
 
 function makeFormatterWithFiles(paths: string[]) {
   const files = paths.map((pathStr) => fakeTFile({ path: pathStr, name: pathStr.split('/').pop()! }));
@@ -83,10 +85,10 @@ describe('LinkFormatter.formatLink', () => {
     expect(out).toBe('![[/img/My Pic.png]]');
   });
 
-  it('5.8 Special characters (non-space) are not encoded in markdown', async () => {
+  it('5.8 Reserved Markdown destination characters are encoded', async () => {
     const { formatter, files } = makeFormatterWithFiles(['img/p#ic(1).png']);
     const out = await formatter.formatLink(files[0].path, 'markdown', 'absolute', null, null);
-    expect(out).toBe('![](/img/p#ic(1).png)');
+    expect(out).toBe('![](/img/p%23ic%281%29.png)');
   });
 
   it('5.9 Resize in wikilink appends |WxH', async () => {
@@ -132,5 +134,38 @@ describe('LinkFormatter.formatLink', () => {
     const out = await formatter.formatLink(files[0].path, 'wikilink', 'absolute', null, null);
     expect(out.startsWith('![[/')).toBe(true);
     expect(out.includes('\\')).toBe(false);
+  });
+
+  it('uses the width and height fields written by the Both settings UI', async () => {
+    const { formatter, files } = makeFormatterWithFiles(['img/pic.png']);
+    const preset: NonDestructiveResizePreset = {
+      resizeDimension: 'both',
+      width: 40,
+      height: 30,
+      resizeScaleMode: 'auto',
+      respectEditorMaxWidth: false,
+      maintainAspectRatio: false,
+      resizeUnits: 'pixels',
+    };
+
+    const out = await formatter.formatLink(files[0].path, 'wikilink', 'absolute', null, preset);
+
+    expect(out).toBe('![[/img/pic.png|40x30]]');
+  });
+
+  it('implements the Original Height option exposed by the settings UI', async () => {
+    const { formatter, files } = makeFormatterWithFiles(['img/pic.png']);
+    setMockImageSize(120, 80);
+    const preset: NonDestructiveResizePreset = {
+      resizeDimension: 'original-height',
+      resizeScaleMode: 'auto',
+      respectEditorMaxWidth: false,
+      maintainAspectRatio: true,
+      resizeUnits: 'pixels',
+    };
+
+    const out = await formatter.formatLink(files[0].path, 'markdown', 'absolute', null, preset);
+
+    expect(out).toBe('![|120x80](/img/pic.png)');
   });
 });

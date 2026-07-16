@@ -17,10 +17,15 @@ vi.mock('fabric', () => {
     setZoom(_z: number) {}
     setDimensions(_dims: any) {}
     toCanvasElement(_multiplier?: number) { const canvasElement = document.createElement('canvas'); canvasElement.width=10; canvasElement.height=10; return canvasElement; }
-    toDataURL(_opts?: any) { return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottQAAAABJRU5ErkJggg=='; }
+    toDataURL(opts?: any) {
+      return opts?.format === 'jpeg'
+        ? 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/AT//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/AT//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8Qf//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8Qf//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8Qf//Z'
+        : 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottQAAAABJRU5ErkJggg==';
+    }
     getElement() { const canvasElement = document.createElement('canvas'); canvasElement.width=10; canvasElement.height=10; return canvasElement; }
     on(evt: string, cb: Function) { (this._handlers[evt] ||= []).push(cb); }
     off() {}
+    dispose() {}
     trigger(evt: string, payload: any) { (this._handlers[evt]||[]).forEach(cb=>cb(payload)); }
     bringObjectToFront(){} bringObjectForward(){} sendObjectBackwards(){} sendObjectToBack(){} moveObjectTo(){}
     getScenePoint(_e: any) { return { x: 100, y: 100 }; }
@@ -70,6 +75,56 @@ describe('ImageAnnotation — 16.1 Initialization (integration-lite)', () => {
 
     const modalRoot = (modal as any).modalEl as HTMLElement;
     expect(modalRoot.classList.contains('image-converter-annotation-tool-image-annotation-modal')).toBe(true);
+  });
+
+  it('clears periodic checks and Blob URLs when the modal closes', async () => {
+    vi.useFakeTimers();
+    try {
+      const modal = new ImageAnnotationModal(app as any, plugin, imageFile);
+      await modal.onOpen();
+      await Promise.resolve();
+
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+
+      modal.onClose();
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a vault read that completes after close', async () => {
+    let resolveRead!: (data: ArrayBuffer) => void;
+    app.vault.readBinary = vi.fn(() => new Promise<ArrayBuffer>(resolve => {
+      resolveRead = resolve;
+    }));
+    const modal = new ImageAnnotationModal(app as any, plugin, imageFile);
+
+    const opening = modal.onOpen();
+    modal.onClose();
+    resolveRead(new ArrayBuffer(16));
+    await opening;
+
+    expect((modal as any).canvas).toBeFalsy();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('can safely reopen the same modal instance after closing', async () => {
+    const modal = new ImageAnnotationModal(app as any, plugin, imageFile);
+    await modal.onOpen();
+    await Promise.resolve();
+    const firstCanvas = (modal as any).canvas;
+
+    modal.onClose();
+    await modal.onOpen();
+    await Promise.resolve();
+
+    expect((modal as any).canvas).toBeTruthy();
+    expect((modal as any).canvas).not.toBe(firstCanvas);
+    expect(modal.contentEl.querySelectorAll('canvas')).toHaveLength(1);
+    modal.onClose();
   });
 });
 
@@ -206,6 +261,17 @@ describe('ImageAnnotation — 16.2–16.11 Behaviors (integration-lite)', () => 
     (modal as any).canvas.trigger('mouse:dblclick', { e: new MouseEvent('dblclick') });
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await Promise.resolve();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('ignores a duplicate annotation save while one is already running', async () => {
+    const modal = new ImageAnnotationModal(app as any, plugin, imageFile);
+    await modal.onOpen();
+    (modal as any).saving = true;
+    const spy = vi.spyOn((app.vault as any), 'modifyBinary');
+
+    await modal.saveAnnotation();
+
     expect(spy).not.toHaveBeenCalled();
   });
 

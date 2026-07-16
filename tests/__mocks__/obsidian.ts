@@ -1,4 +1,14 @@
 import { vi } from 'vitest';
+import { StateEffect, StateField } from '@codemirror/state';
+
+export const setEditorLivePreviewEffect = StateEffect.define<boolean>();
+export const editorLivePreviewField = StateField.define<boolean>({
+  create: () => true,
+  update: (value, transaction) => {
+    const effect = transaction.effects.find(candidate => candidate.is(setEditorLivePreviewEffect));
+    return effect ? effect.value : value;
+  }
+});
 
 /**
  * Mock implementation of the Obsidian module
@@ -35,7 +45,10 @@ export class Plugin {
   addCommand(command: any) {}
   addRibbonIcon(icon: string, title: string, callback: () => void) {}
   addSettingTab(tab: any) {}
+  register(cb?: () => void) {}
   registerEvent(event: any) {}
+  registerEditorExtension(_extension: any) {}
+  registerMarkdownPostProcessor(_processor: any) {}
   addChild<T extends { load?: () => void; onunload?: () => void }>(child: T): T {
     this.children.push(child);
     child.load?.();
@@ -255,6 +268,7 @@ export class ToggleComponent {
     containerEl.appendChild(this.toggleEl);
   }
   setValue(value: boolean): this { this.toggleEl.checked = value; return this; }
+  setTooltip(text: string): this { this.toggleEl.title = text; return this; }
   onChange(cb: (value: boolean) => void): this {
     this.changeCb = cb;
     this.toggleEl.addEventListener('change', (event) => cb((event.target as HTMLInputElement).checked));
@@ -281,9 +295,16 @@ export class Setting {
   }
   
   setClass(cls: string): this { this.settingEl.classList.add(cls); return this; }
-  setName(_name: string): this { return this; }
+  setName(name: string): this {
+    this.nameEl.textContent = name;
+    this.settingEl.setAttribute('data-setting-name', name);
+    return this;
+  }
   setHeading(): this { this.settingEl.classList.add('setting-item-heading'); return this; }
-  setDesc(_desc: string): this { return this; }
+  setDesc(desc: string): this {
+    this.descEl.textContent = desc;
+    return this;
+  }
   setTooltip(_text: string): this { return this; }
   addText(cb: (text: TextComponent) => void): this { const textComponent = new TextComponent(this.controlEl); cb(textComponent); this.components.push(textComponent); return this; }
   addTextArea(cb: (text: TextComponent) => void): this { const textComponent = new TextComponent(this.controlEl); cb(textComponent); this.components.push(textComponent); return this; }
@@ -496,6 +517,35 @@ export class Component {
     this.disposables.forEach(dispose => dispose());
     this.disposables = [];
   }
+  unload() { this.onunload(); }
+}
+
+export class MarkdownRenderChild extends Component {
+  constructor(public containerEl: HTMLElement) {
+    super();
+  }
+}
+
+export class SecretComponent {
+  private callback: ((value: string) => unknown) | null = null;
+  readonly inputEl: HTMLInputElement;
+
+  constructor(_app: App, containerEl: HTMLElement) {
+    this.inputEl = document.createElement('input');
+    this.inputEl.type = 'password';
+    this.inputEl.addEventListener('change', () => this.callback?.(this.inputEl.value));
+    containerEl.appendChild(this.inputEl);
+  }
+
+  setValue(value: string): this {
+    this.inputEl.value = value;
+    return this;
+  }
+
+  onChange(callback: (value: string) => unknown): this {
+    this.callback = callback;
+    return this;
+  }
 }
 
 export class MenuItem {
@@ -549,6 +599,10 @@ export function setTooltip(el: HTMLElement, text: string): void {
 }
 
 export const requestUrl = vi.fn();
+
+export function getBlobArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  return blob.arrayBuffer();
+}
 
 export function getIcon(_name: string): string | null {
   return null;

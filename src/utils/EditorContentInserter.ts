@@ -1,11 +1,12 @@
 import { Editor, EditorPosition, MarkdownView } from "obsidian";
+import { createPlaceholderSession, PlaceholderSession } from "./EditorReplacement";
 
 export class EditorContentInserter {
     view: MarkdownView;
     editor: Editor;
     // Cache cursor position
     cursor: EditorPosition;
-    private loadingTextLength: number = 0;
+    private placeholder: PlaceholderSession | null = null;
 
     constructor(view: MarkdownView) {
         this.view = view;
@@ -19,13 +20,8 @@ export class EditorContentInserter {
      * @param text The text to display as a placeholder
      */
     insertLoadingText(text: string): void {
-        this.loadingTextLength = text.length;
-        // Use cached cursor position
-        this.editor.replaceRange(text, this.cursor);
-        this.editor.setCursor({
-            line: this.cursor.line,
-            ch: this.cursor.ch + this.loadingTextLength,
-        });
+        this.placeholder = createPlaceholderSession(this.editor, text, this.cursor);
+        this.cursor = this.placeholder.start;
     }
 
     /**
@@ -33,24 +29,9 @@ export class EditorContentInserter {
      * @param res The final content to insert
      */
     insertResponseToEditor(res: string): void {
-        // [Safety Check] 1. Check if line is still valid
-        if (this.cursor.line >= this.editor.lineCount()) {
-            console.warn("EditorContentInserter: Cursor line no longer exists. Aborting insertion.");
-            return;
+        if (this.placeholder) {
+            this.placeholder.replace(res);
         }
-
-        // [Safety Check] 2. Check if column is within bounds (prevents crash if line was truncated)
-        const currentLineLength = this.editor.getLine(this.cursor.line).length;
-        if (this.cursor.ch > currentLineLength) {
-            console.warn("EditorContentInserter: Cursor column out of bounds. Aborting insertion.");
-            return;
-        }
-
-        // Use cached cursor position to calculate the end of the placeholder
-        this.editor.replaceRange(res, this.cursor, {
-            line: this.cursor.line,
-            ch: this.cursor.ch + this.loadingTextLength,
-        });
     }
 
 
@@ -58,12 +39,8 @@ export class EditorContentInserter {
      * Remove loading text (used for cleanup on error)
      */
     removeLoadingText(): void {
-        // [Safety Check]
-        if (this.cursor.line >= this.editor.lineCount()) return;
-
-        this.editor.replaceRange("", this.cursor, {
-            line: this.cursor.line,
-            ch: this.cursor.ch + this.loadingTextLength,
-        });
+        if (this.placeholder) {
+            this.placeholder.remove();
+        }
     }
 }

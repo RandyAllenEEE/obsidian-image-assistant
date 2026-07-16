@@ -29,7 +29,10 @@ import ImageConverterPlugin from '../main';
 import { t } from '../lang/helpers';
 
 import { ToolPreset, BlendMode } from "../settings/types";
-import mime from "../mime.min.js"
+import {
+	assertCanvasOutputMatchesExtension,
+	getCanvasExportMime
+} from "../utils/CanvasImageOutput";
 
 function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
 	try {
@@ -46,8 +49,6 @@ function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
 		return new ArrayBuffer(0);
 	}
 }
-
-
 type ExtendedImageFormat = ImageFormat | 'webp' | 'avif'; // extend the default jpeg and png types supported by FABRICjs to also include webp
 type BackgroundOptions = readonly ['transparent', '#ffffff', '#000000', 'grid', 'dots'];
 type BackgroundType = BackgroundOptions[number];
@@ -62,6 +63,9 @@ enum ToolMode {
 
 export class ImageAnnotationModal extends Modal {
 	private componentContainer = new Component();
+	private openVersion = 0;
+	private closed = true;
+	private loadingImage: HTMLImageElement | null = null;
 	private currentTool: ToolMode = ToolMode.NONE;
 	private canvas: Canvas;
 
@@ -104,6 +108,10 @@ export class ImageAnnotationModal extends Modal {
 	private boundKeyDownHandler: (e: KeyboardEvent) => void;
 	private boundKeyUpHandler: (e: KeyboardEvent) => void;
 	private lastPanPoint: { x: number; y: number } | null = null;
+	private stateCheckInterval: ReturnType<typeof setInterval> | null = null;
+	private saving = false;
+	private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+	private imageBlobUrl: string | null = null;
 
 	// History Management
 	private undoStack: string[] = [];
@@ -135,13 +143,10 @@ export class ImageAnnotationModal extends Modal {
 	) {
 		super(app);
 		this.setupModal();
-		this.setupEventHandlers();
 	}
 
 	private setupModal() {
-		this.componentContainer.load();
 		this.modalEl.addClass('image-converter-annotation-tool-image-annotation-modal');
-		this.setupCloseButton();
 	}
 
 	private setupEventHandlers() {
@@ -176,7 +181,16 @@ export class ImageAnnotationModal extends Modal {
 	}
 
 	async onOpen() {
+		const openVersion = ++this.openVersion;
+		this.closed = false;
+		this.componentContainer.unload();
+		this.componentContainer = new Component();
+		this.componentContainer.load();
+		this.setupCloseButton();
+		this.setupEventHandlers();
+
 		const { contentEl } = this;
+		contentEl.empty();
 		contentEl.style.padding = '0';
 		contentEl.style.overflow = 'hidden';
 
@@ -189,11 +203,22 @@ export class ImageAnnotationModal extends Modal {
 
 		try {
 			const arrayBuffer = await this.app.vault.readBinary(this.file);
+			if (!this.isCurrentOpen(openVersion)) return;
 			const blob = new Blob([arrayBuffer]);
 			const blobUrl = URL.createObjectURL(blob);
+			this.imageBlobUrl = blobUrl;
 
-			const img = new Image();
+			const ImageConstructor = (this.ownerWindow as unknown as { Image: typeof Image }).Image ?? Image;
+			const img = new ImageConstructor();
+			this.loadingImage = img;
 			img.onload = () => {
+				if (!this.isCurrentOpen(openVersion)) {
+					this.releaseLoadingImage(img, blobUrl);
+					return;
+				}
+				this.loadingImage = null;
+				img.onload = null;
+				img.onerror = null;
 				this.undoStack = [JSON.stringify([])];
 				this.redoStack = [];
 				// Calculate dimensions to fit the window while maintaining aspect ratio
@@ -201,8 +226,8 @@ export class ImageAnnotationModal extends Modal {
 				const toolbarHeight = 60;
 
 				// Calculate maximum available space
-				const maxWidth = window.innerWidth * 0.9 - padding;
-				const maxHeight = window.innerHeight * 0.9 - padding - toolbarHeight;
+				const maxWidth = this.ownerWindow.innerWidth * 0.9 - padding;
+				const maxHeight = this.ownerWindow.innerHeight * 0.9 - padding - toolbarHeight;
 
 
 				// Set canvas dimensions to maximum available space
@@ -228,6 +253,8 @@ export class ImageAnnotationModal extends Modal {
 
 				// Add the image to canvas
 				const fabricImg = new FabricImage(img, {
+					originX: 'left',
+					originY: 'top',
 					selectable: false,
 					evented: false,
 					scaleX: scale,
@@ -274,18 +301,44 @@ export class ImageAnnotationModal extends Modal {
 
 				this.setupSelectionEvents();
 
-				URL.revokeObjectURL(blobUrl);
+				this.revokeImageBlobUrl(blobUrl);
 				this.canvas.renderAll();
 
+			};
+			img.onerror = () => {
+				this.releaseLoadingImage(img, blobUrl);
+				if (!this.isCurrentOpen(openVersion)) return;
+				new Notice(t("MSG_ANNOTATION_LOAD_FAIL"));
+				this.close();
 			};
 
 			img.src = blobUrl;
 
 		} catch (error) {
+			if (!this.isCurrentOpen(openVersion)) return;
 			console.error('Error loading image:', error);
 			new Notice(t("MSG_ANNOTATION_LOAD_FAIL"));
-			return;
+			this.close();
 		}
+	}
+
+	private get ownerDocument(): Document {
+		return this.modalEl.ownerDocument;
+	}
+
+	private get ownerWindow(): Window {
+		return this.ownerDocument.defaultView ?? window;
+	}
+
+	private isCurrentOpen(version: number): boolean {
+		return !this.closed && version === this.openVersion;
+	}
+
+	private releaseLoadingImage(img: HTMLImageElement, blobUrl: string): void {
+		img.onload = null;
+		img.onerror = null;
+		if (this.loadingImage === img) this.loadingImage = null;
+		this.revokeImageBlobUrl(blobUrl);
 	}
 
 
@@ -622,7 +675,7 @@ export class ImageAnnotationModal extends Modal {
 			// Force render before entering edit mode
 			this.canvas?.requestRenderAll();
 
-			setTimeout(() => {
+			this.schedule(() => {
 				text.enterEditing();
 				text.selectAll();
 				this.canvas?.requestRenderAll();
@@ -1628,7 +1681,8 @@ export class ImageAnnotationModal extends Modal {
 		});
 
 		// Add a periodic state check
-		setInterval(() => {
+		if (this.stateCheckInterval) clearInterval(this.stateCheckInterval);
+		this.stateCheckInterval = setInterval(() => {
 			const activeObject = this.canvas?.getActiveObject();
 			if (activeObject instanceof IText && !activeObject.isEditing && this.isTextEditingBlocked) {
 				console.debug('Resetting blocked text editing state');
@@ -1840,7 +1894,7 @@ export class ImageAnnotationModal extends Modal {
 	}
 	private async analyzeImageColors(img: HTMLImageElement): Promise<void> {
 		// Create a temporary canvas for analysis
-		const tempCanvas = document.createElement('canvas');
+		const tempCanvas = this.ownerDocument.createElement('canvas');
 		const ctx = tempCanvas.getContext('2d');
 		if (!ctx) return;
 
@@ -2004,8 +2058,8 @@ export class ImageAnnotationModal extends Modal {
 
 		// Add resize functionality
 		this.componentContainer.registerDomEvent(this.resizeHandle, 'mousedown', this.startResize.bind(this));
-		this.componentContainer.registerDomEvent(document, 'mousemove', this.resize.bind(this));
-		this.componentContainer.registerDomEvent(document, 'mouseup', this.stopResize.bind(this));
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'mousemove', this.resize.bind(this));
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'mouseup', this.stopResize.bind(this));
 
 		// Add resize class to modal
 		this.modalEl.addClass('resizable-modal');
@@ -2117,7 +2171,7 @@ export class ImageAnnotationModal extends Modal {
 				this.zoomToPoint(point, newZoom);
 
 				// Re-enable object caching after a short delay
-				setTimeout(() => {
+				this.schedule(() => {
 					if (backgroundImage) {
 						backgroundImage.objectCaching = true;
 						this.canvas?.requestRenderAll();
@@ -2127,8 +2181,8 @@ export class ImageAnnotationModal extends Modal {
 		});
 
 		// Add event listeners using the bound handlers
-		this.componentContainer.registerDomEvent(document, 'keydown', this.boundKeyDownHandler);
-		this.componentContainer.registerDomEvent(document, 'keyup', this.boundKeyUpHandler);
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'keydown', this.boundKeyDownHandler);
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'keyup', this.boundKeyUpHandler);
 
 		// Update mouse events
 		this.canvas.on('mouse:down', (opt) => {
@@ -2274,7 +2328,7 @@ export class ImageAnnotationModal extends Modal {
 		this.canvas.requestRenderAll();
 
 		// Additional render after a short delay
-		setTimeout(() => {
+		this.schedule(() => {
 			this.canvas?.requestRenderAll();
 		}, 50);
 	}
@@ -2369,14 +2423,14 @@ export class ImageAnnotationModal extends Modal {
 		});
 
 		// Close dropdown when clicking outside
-		this.componentContainer.registerDomEvent(document, 'click', () => {
+		this.componentContainer.registerDomEvent(this.ownerDocument, 'click', () => {
 			this.hideBackgroundDropdown();
 		});
 	}
 
 	private createBackgroundPattern(type: BackgroundType): string | Pattern {
 		if (type === 'grid' || type === 'dots') {
-			const patternCanvas = document.createElement('canvas');
+			const patternCanvas = this.ownerDocument.createElement('canvas');
 			const ctx = patternCanvas.getContext('2d');
 			if (!ctx) return 'transparent';
 
@@ -2509,7 +2563,7 @@ export class ImageAnnotationModal extends Modal {
 			if (previousState) {
 				const objects = JSON.parse(previousState);
 				for (const objData of objects) {
-					const enlivenedObjects = await util.enlivenObjects([objData]);
+					const enlivenedObjects = await util.enlivenObjects([this.withExplicitOrigin(objData)]);
 					enlivenedObjects.forEach(obj => {
 						if (obj instanceof FabricObject) {
 							this.canvas.add(obj);
@@ -2553,7 +2607,7 @@ export class ImageAnnotationModal extends Modal {
 			// Restore the next state
 			const objects = JSON.parse(nextState);
 			for (const objData of objects) {
-				const enlivenedObjects = await util.enlivenObjects([objData]);
+				const enlivenedObjects = await util.enlivenObjects([this.withExplicitOrigin(objData)]);
 				enlivenedObjects.forEach(obj => {
 					if (obj instanceof FabricObject) {
 						this.canvas.add(obj);
@@ -2575,16 +2629,19 @@ export class ImageAnnotationModal extends Modal {
 	private clearAll() {
 		if (!this.canvas) return;
 
-		const message = 'Are you sure you want to clear all annotations?';
-		const confirmText = 'Clear';
-
-		new ConfirmDialog(this.app, 'Clear Annotations', message, confirmText, () => {
+		new ConfirmDialog(
+			this.app,
+			t('DIALOG_ANNOTATION_CLEAR_TITLE'),
+			t('DIALOG_ANNOTATION_CLEAR_MSG'),
+			t('BUTTON_CLEAR'),
+			() => {
 			const objects = this.canvas.getObjects();
 			// Remove all objects except the background image (first object)
 			objects.slice(1).forEach(obj => this.canvas.remove(obj));
 			this.canvas.requestRenderAll();
 			this.saveState(); // IMPORTANT: Save the cleared state
-		}).open();
+			}
+		).open();
 	}
 
 	private selectAll() {
@@ -2612,7 +2669,9 @@ export class ImageAnnotationModal extends Modal {
 		} else {
 			// If there are multiple objects, create a multiple selection
 			const activeSelection = new ActiveSelection(objects, {
-				canvas: this.canvas
+				canvas: this.canvas,
+				originX: 'center',
+				originY: 'center'
 			});
 			this.canvas.setActiveObject(activeSelection);
 		}
@@ -2631,33 +2690,29 @@ export class ImageAnnotationModal extends Modal {
 
 	async saveAnnotation() {
 		if (!this.canvas) return;
+		if (this.saving) return;
+		this.saving = true;
+		let originalStacking: boolean | null = null;
+		let currentVPT: [number, number, number, number, number, number] | null = null;
+		let shouldClose = false;
 
 		try {
 
 			// Store original preserveObjectStacking value
-			const originalStacking = this.canvas.preserveObjectStacking;
+			originalStacking = this.canvas.preserveObjectStacking;
 
 			// Temporarily disable preserveObjectStacking for export
 			this.canvas.preserveObjectStacking = false;
 
 
 			// Get MIME type from the file
-			const mimeType = mime.getType(this.file.name) || `image/${this.file.extension}`;
-			if (!mimeType) throw new Error('Unable to determine file type');
+			const mimeType = getCanvasExportMime(this.file.extension);
+			if (!mimeType) throw new Error(`The image editor cannot safely overwrite .${this.file.extension} files`);
 
 			// Determine export format, defaulting to PNG for unsupported types
-			let exportFormat: ExtendedImageFormat = 'png';
-
-			// Only override if it's one of our supported formats
-			if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') {
-				exportFormat = 'jpeg';
-			} else if (mimeType === 'image/png') {
-				exportFormat = 'png';
-			} else if (mimeType === 'image/webp') {
-				exportFormat = 'webp';
-			} else if (mimeType === 'image/avif') {
-				exportFormat = 'avif'
-			}
+			const exportFormat: ExtendedImageFormat = mimeType === 'image/jpeg'
+				? 'jpeg'
+				: mimeType.replace('image/', '') as ExtendedImageFormat;
 
 			const objects = this.canvas.getObjects();
 			if (objects.length === 0) return;
@@ -2779,7 +2834,7 @@ export class ImageAnnotationModal extends Modal {
 			);
 
 			// Reset zoom and viewport temporarily
-			const currentVPT = (Array.isArray((this.canvas as any).viewportTransform) ? [...(this.canvas as any).viewportTransform] : [1, 0, 0, 1, 0, 0]) as [number, number, number, number, number, number];
+			currentVPT = (Array.isArray((this.canvas as any).viewportTransform) ? [...(this.canvas as any).viewportTransform] : [1, 0, 0, 1, 0, 0]) as [number, number, number, number, number, number];
 			this.canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
 			if (typeof (this.canvas as any).setZoom === 'function') {
 				this.canvas.setZoom(1);
@@ -2808,7 +2863,7 @@ export class ImageAnnotationModal extends Modal {
 				const canvasElement = this.canvas.toCanvasElement(scaleToOriginal);
 
 				// Create a temporary canvas for cropping
-				const tempCanvas = document.createElement('canvas');
+				const tempCanvas = this.ownerDocument.createElement('canvas');
 				tempCanvas.width = finalWidth * scaleToOriginal;
 				tempCanvas.height = finalHeight * scaleToOriginal;
 				const tempCtx = tempCanvas.getContext('2d');
@@ -2845,7 +2900,7 @@ export class ImageAnnotationModal extends Modal {
 					}
 				}
 			} catch (e) {
-				console.log('toCanvasElement method failed, trying alternative...', e);
+				console.warn('toCanvasElement method failed, trying alternative...', e);
 			}
 
 
@@ -2871,7 +2926,7 @@ export class ImageAnnotationModal extends Modal {
 
 					arrayBuffer = dataUrlToArrayBuffer(dataUrl);
 				} catch (e) {
-					console.log('toDataURL method failed, trying alternative...', e);
+					console.warn('toDataURL method failed, trying alternative...', e);
 				}
 			}
 
@@ -2879,7 +2934,7 @@ export class ImageAnnotationModal extends Modal {
 			if (!arrayBuffer) {
 				try {
 					const nativeCanvas = this.canvas.getElement();
-					const tempCanvas = document.createElement('canvas');
+					const tempCanvas = this.ownerDocument.createElement('canvas');
 					tempCanvas.width = finalWidth * scaleToOriginal;
 					tempCanvas.height = finalHeight * scaleToOriginal;
 					const tempCtx = tempCanvas.getContext('2d');
@@ -2907,67 +2962,103 @@ export class ImageAnnotationModal extends Modal {
 						}
 					}
 				} catch (e) {
-					console.log('Native canvas fallback failed', e);
+					console.warn('Native canvas fallback failed', e);
 				}
 			}
 
 			// If all methods failed, bail out without writing
 			if (!arrayBuffer || arrayBuffer.byteLength === 0) {
 				// Restore viewport transform and stacking before exiting
-				this.canvas.setViewportTransform(currentVPT);
-				this.canvas.renderAll();
-				this.canvas.preserveObjectStacking = originalStacking;
-				this.canvas.requestRenderAll();
 				new Notice('Failed to export image');
 				return;
 			}
 
-			// Restore viewport transform
-			this.canvas.setViewportTransform(currentVPT);
-			this.canvas.renderAll();
+			await assertCanvasOutputMatchesExtension(arrayBuffer, this.file.extension);
 
 			await this.app.vault.modifyBinary(this.file, arrayBuffer);
 
 			// Success notification
 			new Notice('Image saved successfully');
 
-			// Close the modal after successful save
-			this.close();
-
-
-			// Get the active view
-			const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-			if (!activeView) return;
-
-
-
-			// Get the current leaf using getMostRecentLeaf (or getLeaf for specific cases)
-			const leaf = this.app.workspace.getMostRecentLeaf();
-			if (leaf) {
-				// Store current state
-				const currentState = leaf.getViewState();
-
-				// Switch to a different view type temporarily
-				await leaf.setViewState({
-					type: 'empty',
-					state: {}
-				});
-
-				// Switch back to the original view
-				await leaf.setViewState(currentState);
-
+			try {
+				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (activeView) {
+					const leaf = this.app.workspace.getMostRecentLeaf();
+					if (leaf) {
+						const currentState = leaf.getViewState();
+						await leaf.setViewState({ type: 'empty', state: {} });
+						await leaf.setViewState(currentState);
+					}
+				}
+			} catch (refreshError) {
+				console.warn('Image was saved, but the preview could not be refreshed', refreshError);
 			}
-			// Restore original preserveObjectStacking value
-			this.canvas.preserveObjectStacking = originalStacking;
-			this.canvas.requestRenderAll();
+			shouldClose = true;
 		} catch (error) {
 			console.error('Save error:', error);
-			new Notice('Error saving image');
+			new Notice(error instanceof Error ? `Error saving image: ${error.message}` : 'Error saving image');
+		} finally {
+			if (currentVPT) {
+				this.canvas.setViewportTransform(currentVPT);
+				this.canvas.renderAll();
+			}
+			if (originalStacking !== null) {
+				this.canvas.preserveObjectStacking = originalStacking;
+				this.canvas.requestRenderAll();
+			}
+			this.saving = false;
 		}
+		if (shouldClose) this.close();
+	}
+
+	private withExplicitOrigin(value: unknown): Record<string, unknown> {
+		const object = typeof value === 'object' && value !== null
+			? value as Record<string, unknown>
+			: {};
+		return {
+			...object,
+			originX: typeof object.originX === 'string' ? object.originX : 'left',
+			originY: typeof object.originY === 'string' ? object.originY : 'top'
+		};
+	}
+
+	private schedule(callback: () => void, delay: number): void {
+		const openVersion = this.openVersion;
+		const timer = setTimeout(() => {
+			this.pendingTimers.delete(timer);
+			if (this.isCurrentOpen(openVersion)) callback();
+		}, delay);
+		this.pendingTimers.add(timer);
+	}
+
+	private revokeImageBlobUrl(expectedUrl?: string): void {
+		if (!this.imageBlobUrl) return;
+		if (expectedUrl && this.imageBlobUrl !== expectedUrl) {
+			URL.revokeObjectURL(expectedUrl);
+			return;
+		}
+		URL.revokeObjectURL(this.imageBlobUrl);
+		this.imageBlobUrl = null;
 	}
 
 	// Update the cleanup method
 	private cleanup() {
+		this.closed = true;
+		this.openVersion++;
+		if (this.loadingImage) {
+			this.loadingImage.onload = null;
+			this.loadingImage.onerror = null;
+			this.loadingImage.removeAttribute('src');
+			this.loadingImage = null;
+		}
+		if (this.stateCheckInterval) {
+			clearInterval(this.stateCheckInterval);
+			this.stateCheckInterval = null;
+		}
+		for (const timer of this.pendingTimers) clearTimeout(timer);
+		this.pendingTimers.clear();
+		this.revokeImageBlobUrl();
+
 		if (this.canvas) {
 			this.canvas.off();
 			this.canvas.dispose();
@@ -2995,11 +3086,6 @@ export class ImageAnnotationModal extends Modal {
 			this.textButton.buttonEl.removeClass('is-active');
 		}
 
-		// Reset zoom
-		if (this.canvas) {
-			this.resetZoom();
-		}
-
 		this.isPanning = false;
 		this.isSpacebarDown = false;
 		this.lastPanPoint = null;
@@ -3023,12 +3109,6 @@ export class ImageAnnotationModal extends Modal {
 		contentEl.empty();
 		this.cleanup();
 
-		// Remove resize listeners
-		this.componentContainer.registerDomEvent(document, 'mousemove', this.resize.bind(this));
-		this.componentContainer.registerDomEvent(document, 'mouseup', this.stopResize.bind(this));
-
-		// Unload child components to remove event listeners
-		this.componentContainer.unload();
 		super.onClose();
 
 	}
@@ -3141,6 +3221,8 @@ class ArrowBrush extends PencilBrush {
 			}
 
 			return new Path(pathData, {
+				originX: 'left',
+				originY: 'top',
 				stroke: this.color,
 				strokeWidth: this.width,
 				fill: '',
@@ -3253,6 +3335,8 @@ class ArrowBrush extends PencilBrush {
 			const arrowPath = `M ${endPoint.x} ${endPoint.y} L ${x1} ${y1} M ${endPoint.x} ${endPoint.y} L ${x2} ${y2}`;
 
 			return new Path(arrowPath, {
+				originX: 'left',
+				originY: 'top',
 				stroke: this.color,
 				strokeWidth: arrowWidth,
 				fill: '',
@@ -3266,18 +3350,4 @@ class ArrowBrush extends PencilBrush {
 			return null;
 		}
 	}
-}
-
-// Helper function to convert base64 to ArrayBuffer
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-	const binary = atob(base64.split(',')[1]);
-	const { length } = binary;
-	const buffer = new ArrayBuffer(length);
-	const view = new Uint8Array(buffer);
-
-	for (let i = 0; i < length; i++) {
-		view[i] = binary.charCodeAt(i);
-	}
-
-	return buffer;
 }

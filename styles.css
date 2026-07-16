@@ -669,6 +669,27 @@
     display: none;
 }
 
+.image-assistant-caption-settings-preview {
+    width: min(260px, 100%);
+    min-width: 0;
+}
+
+.image-assistant-caption-preview-image {
+    width: 100%;
+    aspect-ratio: 16 / 7;
+    border: 1px solid var(--background-modifier-border);
+    background-color: var(--background-secondary);
+}
+
+.image-assistant-caption-preview-text {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
 .settings-section-clarification-text {
     margin-left: 19px;
     color: var(--text-muted);
@@ -962,6 +983,9 @@
     grid-row: 1 / span 4;
     color: var(--text-normal);
     width: 28px;
+    min-width: 28px;
+    border: 0;
+    background: transparent;
     /* Fixed width */
     align-self: stretch;
     /* Makes button fill entire height */
@@ -1645,6 +1669,11 @@
     min-width: 0;
 }
 
+.image-converter-contextmenu-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .process-single-image-modal .setting-item {
     padding: var(--size-4-2) 0;
 }
@@ -2238,321 +2267,136 @@
 
 
 /* ---------------------- IMAGE ALIGNMENT --------------------------- */
-/* ------------------------------------------------------------------ */
-/* We could add a border or other visual indicator here?? For now it is just
-    generally class to keep for identification purposes.*/
-/*.image-converter-aligned {
-    border: 1px solid red; 
-} */
-
-/* General styles for image positioning (using flexbox) - apply to containers */
-.image-position-left {
-    justify-content: flex-start;
-    /* Align to the left */
+/* A single plugin-owned element controls alignment for each image. */
+[data-image-assistant-layout-owner="true"] {
+    box-sizing: border-box;
+    max-width: 100%;
 }
 
-.image-position-center {
-    justify-content: center;
-    /* Align to the center */
-}
-
-.image-position-right {
-    justify-content: flex-end;
-    /* Align to the right */
-}
-
-/* General styles for wrapping - apply to containers */
-.image-wrap {
-    float: left;
-    /* Allow text to wrap.  Apply to the image itself. */
-    margin-right: 10px;
-    /* Add spacing. Apply to the image. */
-    clear: left;
-    /* Ensure it clears previous floats.  Apply to the image. */
-}
-
-.image-no-wrap {
-    float: none;
-    /* Prevent text wrapping. Apply to the image itself. */
+[data-image-assistant-layout-owner="true"][data-image-assistant-wrap="false"] {
+    display: block !important;
+    float: none !important;
     clear: both;
-    /* Clear any previous floats */
+    width: fit-content;
 }
 
-/* Styles for bare img elements (network images) with alignment classes */
-/* USING MAXIMUM SPECIFICITY to override themes/Live Preview defaults */
-/* We use html body ... to ensure we are specific enough, and include .mod-cm6 if present */
-
-html body .markdown-source-view.mod-cm6 img.image-converter-aligned.image-position-left,
-html body .markdown-reading-view img.image-converter-aligned.image-position-left,
-html body .markdown-source-view img.image-converter-aligned.image-position-left {
-    display: block !important;
+[data-image-assistant-layout-owner="true"][data-image-assistant-align="left"][data-image-assistant-wrap="false"] {
     margin-left: 0 !important;
     margin-right: auto !important;
-    float: none !important;
-}
-
-html body .markdown-source-view.mod-cm6 img.image-converter-aligned.image-position-center,
-html body .markdown-reading-view img.image-converter-aligned.image-position-center,
-html body .markdown-source-view img.image-converter-aligned.image-position-center {
-    display: block !important;
-    margin-left: auto !important;
-    margin-right: auto !important;
-    float: none !important;
-}
-
-html body .markdown-source-view.mod-cm6 img.image-converter-aligned.image-position-right,
-html body .markdown-reading-view img.image-converter-aligned.image-position-right,
-html body .markdown-source-view img.image-converter-aligned.image-position-right {
-    display: block !important;
-    margin-left: auto !important;
-    margin-right: 0 !important;
-    float: none !important;
-}
-
-html body .markdown-source-view.mod-cm6 img.image-converter-aligned.image-wrap.image-position-left,
-html body .markdown-reading-view img.image-converter-aligned.image-wrap.image-position-left,
-html body .markdown-source-view img.image-converter-aligned.image-wrap.image-position-left {
-    display: inline !important;
-    float: left !important;
-    margin-right: 1em !important;
-    margin-bottom: 0.5em !important;
-}
-
-html body .markdown-source-view.mod-cm6 img.image-converter-aligned.image-wrap.image-position-right,
-html body .markdown-reading-view img.image-converter-aligned.image-wrap.image-position-right,
-html body .markdown-source-view img.image-converter-aligned.image-wrap.image-position-right {
-    display: inline !important;
-    float: right !important;
-    margin-left: 1em !important;
-    margin-bottom: 0.5em !important;
-}
-
-/* Styles for external image container wrappers (created by applyCaption for network images) */
-html body .markdown-source-view .external-image-container.image-position-left,
-html body .markdown-reading-view .external-image-container.image-position-left {
-    display: block !important;
-    text-align: left !important;
-    margin-right: auto !important;
-    margin-left: 0 !important;
-}
-
-html body .markdown-source-view .external-image-container.image-position-center,
-html body .markdown-reading-view .external-image-container.image-position-center {
-    display: block !important;
-    text-align: center !important;
-    margin-left: auto !important;
-    margin-right: auto !important;
-}
-
-html body .markdown-source-view .external-image-container.image-position-right,
-html body .markdown-reading-view .external-image-container.image-position-right {
-    display: block !important;
-    text-align: right !important;
-    margin-left: auto !important;
-    margin-right: 0 !important;
-}
-
-html body .markdown-source-view .external-image-container.image-wrap,
-html body .markdown-reading-view .external-image-container.image-wrap {
-    display: inline-block !important;
-}
-
-html body .markdown-source-view .external-image-container.image-wrap.image-position-left,
-html body .markdown-reading-view .external-image-container.image-wrap.image-position-left {
-    float: left !important;
-    margin-right: 1em !important;
-}
-
-html body .markdown-source-view .external-image-container.image-wrap.image-position-right,
-html body .markdown-reading-view .external-image-container.image-wrap.image-position-right {
-    float: right !important;
-    margin-left: 1em !important;
-}
-
-/* Ensure image inside inherits or behaves correctly - RESET image styles inside container */
-html body .markdown-source-view .external-image-container img,
-html body .markdown-reading-view .external-image-container img {
-    display: inline-block !important;
-    margin: 0 !important;
-    float: none !important;
-}
-
-/* ================================================================= */
-/* Caption Styles - Fix for invisible captions */
-/* High Specificity to ensure visibility */
-/* ================================================================= */
-
-/* Toggle mechanism based on body class added by settings */
-html body.image-captions-enabled .internal-embed[alt]:not([alt=""]):not([alt=" "])::after,
-html body.image-captions-enabled .external-image-container[alt]:not([alt=""]):not([alt=" "])::after,
-html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not([alt=" "])::after {
-    content: attr(alt);
-    display: block;
-    font-size: 0.9em;
-    color: var(--text-muted);
-    margin-top: 4px;
-    line-height: 1.3;
-    width: 100%;
-    /* Ensure it takes full width of container for alignment */
-    /* pointer-events: none; Optional: don't block clicks */
-}
-
-/* Ensure container allows pseudo-element to flow correctly */
-.external-image-container,
-.image-resize-container {
-    /* display: inline-block;  <-- Already set elsewhere, likely sufficient */
-    /* Ensure relative positioning if we ever wanted absolute captions (we don't for standard flow) */
-}
-
-/* Adjust caption alignment based on container alignment */
-.image-position-center::after {
-    text-align: center;
-}
-
-.image-position-right::after {
-    text-align: right;
-    /* Or center? usually captions are centered or follow image align */
-    text-align: center;
-    /* Let's stick to center for consistency, or inherit? */
-}
-
-.image-position-left::after {
-    text-align: left;
-    /* Or center? */
-    text-align: center;
-}
-
-/* Case: Resized images often have a specific structure. */
-/* The resizing container wraps the image. Caption on container appears below image. */
-
-
-/* Styles for internal embeds to control alignment without affecting image size */
-.internal-embed.image-embed.image-position-left {
     text-align: left;
 }
 
-.internal-embed.image-embed.image-position-center {
+[data-image-assistant-layout-owner="true"][data-image-assistant-align="center"] {
+    margin-left: auto !important;
+    margin-right: auto !important;
     text-align: center;
 }
 
-.internal-embed.image-embed.image-position-right {
+[data-image-assistant-layout-owner="true"][data-image-assistant-align="right"][data-image-assistant-wrap="false"] {
+    margin-left: auto !important;
+    margin-right: 0 !important;
     text-align: right;
 }
 
-/* ===== Live Preview Specific Styles ===== */
-.markdown-source-view.mod-cm6 {
-
-    /* Left alignment WITH wrapping */
-    .image-wrap.image-position-left .image-wrap.image-position-left {
-        float: left !important;
-        /* !important to override Obsidian */
-        margin: 0 1em 0.5em 0 !important;
-        clear: left !important;
-        /* position: relative !important;  to allow right-click and allow it to be above any other content
-        z-index: 10 !important */
-    }
-
-    /* Right alignment WITH wrapping */
-    .image-wrap.image-position-right {
-        float: right !important;
-        margin: 0em 0 0.5em 1em !important;
-        clear: right !important;
-        /* position: relative; THIS WORKS BUT BREAKS HANDLES to allow right-click and allow it to be above any other content */
-        /* z-index: 10; */
-    }
-
-    /* Left alignment WITHOUT wrapping */
-    .image-no-wrap.image-position-left {
-        display: block !important;
-        margin: auto !important;
-        margin-left: 0 !important;
-        clear: both !important;
-        float: none !important;
-    }
-
-    /* Right alignment WITHOUT wrapping */
-    .image-no-wrap.image-position-right {
-        display: block !important;
-        margin: auto !important;
-        margin-right: 0 !important;
-        clear: both !important;
-        float: none !important;
-    }
-
-    /* Center alignment (always no wrap) */
-    .image-position-center {
-        display: block !important;
-        margin: auto !important;
-        clear: both !important;
-        float: none !important;
-        text-align: center !important;
-        /* For the image itself */
-    }
-
-    .image-captions-figure {
-        margin: 0;
-        padding: 2px;
-        display: inline-table;
-        border-radius: 2px;
-    }
-
-
-
-    /* Center alignment for internal embeds */
-    .internal-embed.image-embed.image-position-center {
-        text-align: center !important;
-    }
+[data-image-assistant-layout-owner="true"]:not(img) > img,
+[data-image-assistant-layout-owner="true"]:not(img) > .image-wrapper > img {
+    float: none !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    max-width: 100%;
 }
 
+/* Reading Mode keeps standalone image and Caption in one floated owner. */
+.markdown-reading-view [data-image-assistant-layout-owner="true"][data-image-assistant-align="left"][data-image-assistant-wrap="true"],
+.markdown-preview-view [data-image-assistant-layout-owner="true"][data-image-assistant-align="left"][data-image-assistant-wrap="true"] {
+    display: block !important;
+    float: left !important;
+    clear: left;
+    width: fit-content;
+    margin: 0 1.5rem 0.5rem 0 !important;
+}
 
-/* ------------------------ Reading Mode Styles --------------------------------------*/
-.markdown-reading-view {
+.markdown-reading-view [data-image-assistant-layout-owner="true"][data-image-assistant-align="right"][data-image-assistant-wrap="true"],
+.markdown-preview-view [data-image-assistant-layout-owner="true"][data-image-assistant-align="right"][data-image-assistant-wrap="true"] {
+    display: block !important;
+    float: right !important;
+    clear: right;
+    width: fit-content;
+    margin: 0 0 0.5rem 1.5rem !important;
+}
 
-    /* Left alignment WITH wrapping */
-    .image-wrap.image-position-left {
-        float: left !important;
-        margin: 0 1em 0.5em 0 !important;
-        clear: left !important;
-    }
+/* Live Preview wrapping is opt-in and only applied to resolved standalone images. */
+.image-assistant-wrap-in-edit-mode .markdown-source-view [data-image-assistant-layout-owner="true"][data-image-assistant-align="left"][data-image-assistant-wrap="true"] {
+    display: block !important;
+    float: left !important;
+    clear: left;
+    width: fit-content;
+    margin: 0 1.5rem 0.5rem 0 !important;
+}
 
-    /* Right alignment WITH wrapping */
-    .image-wrap.image-position-right {
-        float: right !important;
-        margin: 0em 0 0.5em 1em !important;
-        clear: right !important;
-    }
+.image-assistant-wrap-in-edit-mode .markdown-source-view [data-image-assistant-layout-owner="true"][data-image-assistant-align="right"][data-image-assistant-wrap="true"] {
+    display: block !important;
+    float: right !important;
+    clear: right;
+    width: fit-content;
+    margin: 0 0 0.5rem 1.5rem !important;
+}
 
-    /* Left alignment WITHOUT wrapping */
-    .image-no-wrap.image-position-left {
-        display: block !important;
-        margin: auto !important;
-        margin-left: 0 !important;
-        clear: both !important;
-        float: none !important;
-    }
+body:not(.image-assistant-wrap-in-edit-mode) .markdown-source-view [data-image-assistant-layout-owner="true"][data-image-assistant-wrap="true"] {
+    display: block !important;
+    float: none !important;
+    clear: both;
+    width: fit-content;
+}
 
-    /* Right alignment WITHOUT wrapping */
-    .image-no-wrap.image-position-right {
-        display: block !important;
-        margin: auto !important;
-        margin-right: 0 !important;
-        clear: both !important;
-        float: none !important;
-    }
+body:not(.image-assistant-wrap-in-edit-mode) .markdown-source-view [data-image-assistant-layout-owner="true"][data-image-assistant-align="left"][data-image-assistant-wrap="true"] {
+    margin-left: 0 !important;
+    margin-right: auto !important;
+}
 
-    /* Center alignment (always no wrap) */
-    .image-position-center {
-        display: block !important;
-        margin: auto !important;
-        clear: both !important;
-        float: none !important;
-        text-align: center !important;
-    }
+body:not(.image-assistant-wrap-in-edit-mode) .markdown-source-view [data-image-assistant-layout-owner="true"][data-image-assistant-align="right"][data-image-assistant-wrap="true"] {
+    margin-left: auto !important;
+    margin-right: 0 !important;
+}
 
-    /* Center alignment for internal embeds */
-    .internal-embed.image-embed.image-position-center {
-        text-align: center !important;
-    }
+/* A fixed-width Live Preview Caption aligns its box, not only its text. */
+.image-assistant-live-preview-caption[data-image-assistant-caption-align="left"] {
+    margin-left: 0 !important;
+    margin-right: auto !important;
+}
+
+.image-assistant-live-preview-caption[data-image-assistant-caption-align="center"] {
+    margin-left: auto !important;
+    margin-right: auto !important;
+}
+
+.image-assistant-live-preview-caption[data-image-assistant-caption-align="right"] {
+    margin-left: auto !important;
+    margin-right: 0 !important;
+}
+
+/* Explicit-width widgets share the rendered image's actual coordinate space. */
+.image-assistant-live-preview-caption[data-image-assistant-caption-positioned="true"] {
+    width: var(--image-assistant-caption-rendered-width, var(--img-width, 100%)) !important;
+    position: relative;
+    left: var(--image-assistant-caption-offset, 0px);
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+}
+
+.markdown-source-view [data-image-assistant-layout-positioned="true"] {
+    position: relative;
+    left: var(--image-assistant-layout-offset, 0px);
+}
+
+.image-assistant-wrap-in-edit-mode .image-assistant-live-preview-caption[data-image-assistant-caption-wrap="true"][data-image-assistant-caption-standalone="true"][data-image-assistant-caption-align="left"] {
+    float: left;
+    clear: left;
+}
+
+.image-assistant-wrap-in-edit-mode .image-assistant-live-preview-caption[data-image-assistant-caption-wrap="true"][data-image-assistant-caption-standalone="true"][data-image-assistant-caption-align="right"] {
+    float: right;
+    clear: right;
 }
 
 /* --- List Handle Position --- */
@@ -3809,81 +3653,6 @@ html body.image-captions-enabled .image-resize-container[alt]:not([alt=""]):not(
     background-color: var(--background-primary);
 }
 
-/* --- Image Alignment & Wrapping --- */
-
-/* Base Alignment (Block behavior for non-wrapped or disabled-wrapped) */
-.image-converter-aligned {
-    display: block;
-    max-width: 100%;
-}
-
-/* Left Align (No Wrap) */
-.image-position-left:not(.image-wrap) {
-    margin-left: 0;
-    margin-right: auto;
-}
-
-/* Center Align */
-.image-position-center {
-    display: block !important;
-    margin-left: auto;
-    margin-right: auto;
-}
-
-/* Right Align (No Wrap) */
-.image-position-right:not(.image-wrap) {
-    margin-left: auto;
-    margin-right: 0;
-}
-
-/* --- Wrapping Logic --- */
-
-/* Reading Mode: Always Enable Wrap */
-.markdown-reading-view .image-position-left.image-wrap,
-.markdown-preview-view .image-position-left.image-wrap {
-    float: left;
-    margin-right: 1.5rem;
-    margin-bottom: 0.5rem;
-}
-
-.markdown-reading-view .image-position-right.image-wrap,
-.markdown-preview-view .image-position-right.image-wrap {
-    float: right;
-    margin-left: 1.5rem;
-    margin-bottom: 0.5rem;
-}
-
-/* Edit Mode: Conditional Wrap via Body Class */
-.image-assistant-wrap-in-edit-mode .markdown-source-view .image-position-left.image-wrap,
-.image-assistant-wrap-in-edit-mode .cm-scroller .image-position-left.image-wrap {
-    float: left;
-    margin-right: 1.5rem;
-    margin-bottom: 0.5rem;
-}
-
-.image-assistant-wrap-in-edit-mode .markdown-source-view .image-position-right.image-wrap,
-.image-assistant-wrap-in-edit-mode .cm-scroller .image-position-right.image-wrap {
-    float: right;
-    margin-left: 1.5rem;
-    margin-bottom: 0.5rem;
-}
-
-/* When Wrap is Disabled in Edit Mode, force block behavior for Wrapped images */
-body:not(.image-assistant-wrap-in-edit-mode) .markdown-source-view .image-position-left.image-wrap,
-body:not(.image-assistant-wrap-in-edit-mode) .cm-scroller .image-position-left.image-wrap {
-    margin-left: 0;
-    margin-right: auto;
-    float: none;
-    display: block;
-}
-
-body:not(.image-assistant-wrap-in-edit-mode) .markdown-source-view .image-position-right.image-wrap,
-body:not(.image-assistant-wrap-in-edit-mode) .cm-scroller .image-position-right.image-wrap {
-    margin-left: auto;
-    margin-right: 0;
-    float: none;
-    display: block;
-}
 
 /* ========================================================================== */
 /*               GENERIC SETTINGS SECTION STYLES (Refactored)                  */
@@ -4021,4 +3790,10 @@ body:not(.image-assistant-wrap-in-edit-mode) .cm-scroller .image-position-right.
 .image-converter-alignment-button.active:hover {
     /* active state hover usually stays active, maybe slightly brighter */
     opacity: 0.9;
+}
+
+.image-assistant-operation-result {
+    max-height: min(70vh, 720px);
+    overflow-y: auto;
+    overflow-wrap: anywhere;
 }

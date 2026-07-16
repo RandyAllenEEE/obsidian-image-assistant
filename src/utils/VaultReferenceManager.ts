@@ -1,7 +1,19 @@
-import { App, TFile, LinkCache, EmbedCache } from "obsidian";
-import { normalizePath } from "obsidian";
+import { App, TFile, LinkCache, EmbedCache, normalizePath } from "obsidian";
 import type ImageConverterPlugin from "../main";
-import { pipeSyntaxParser } from "./PipeSyntaxParser";
+import { getAllReferenceLinks, type ReferenceLink } from "./RegexPatterns";
+import {
+    getContextualReferenceLinks,
+    MarkdownSourceContextIndex,
+    type ContextualReferenceLink,
+    type MarkdownSourceScanOptions
+} from "./MarkdownSourceContext";
+import { isHttpUrl, isSameHttpUrl } from "./NetworkPolicy";
+import {
+    getComparableLocalBasename,
+    inferLocalReferenceSyntax,
+    LocalImageTargetResolver,
+    type LocalReferenceSyntax
+} from "./LocalImageTargetResolver";
 
 export interface ReferenceLocation {
     file: TFile;
@@ -12,19 +24,169 @@ export interface ReferenceLocation {
     line: number;     // The line number (0-indexed)
 }
 
+export interface ReferenceUpdateResult {
+    found: number;
+    replaced: number;
+    complete: boolean;
+    files: ReferenceFileUpdateResult[];
+    failedFiles: string[];
+    uncertainFiles: string[];
+}
+
+export type ReferenceMutationResult = ReferenceUpdateResult;
+
+export interface ReferenceFileUpdateResult {
+    filePath: string;
+    found: number;
+    replaced: number;
+    error?: string;
+}
+
+export interface ReferenceScanResult {
+    locations: ReferenceLocation[];
+    complete: boolean;
+    uncertainFiles: string[];
+}
+
+export interface MultiReferenceScanResult {
+    references: Map<string, ReferenceLocation[]>;
+    complete: boolean;
+    uncertainFiles: string[];
+}
+
 export class VaultReferenceManager {
+    private readonly localTargetResolver: LocalImageTargetResolver;
+
     constructor(
         private app: App,
         private plugin?: ImageConverterPlugin
-    ) { }
+    ) {
+        this.localTargetResolver = new LocalImageTargetResolver(app);
+    }
 
     private isCodeBlockImageLinkIndexingEnabled(): boolean {
         return !!this.plugin?.settings?.global?.codeBlockImageLinkIndexing;
     }
 
-    private isProbablyImageLinkText(text: string): boolean {
-        const trimmed = (text ?? '').trim();
-        return trimmed.startsWith('![') || trimmed.startsWith('![[');
+    private getSourceScanOptions(): MarkdownSourceScanOptions {
+        return {
+            // Standalone consumers historically scanned fences. Plugin-owned
+            // instances honor the user setting; the default keeps the helper
+            // backward compatible for callers without plugin settings.
+            includeFencedCode: this.plugin
+                ? this.isCodeBlockImageLinkIndexingEnabled()
+                : true
+        };
+    }
+
+    private isSupportedReferenceText(text: string): boolean {
+        return this.extractSingleReferencePath(text) !== null;
+    }
+
+    /**
+     * Read every Markdown file and build a fail-closed reference snapshot.
+     * Destructive operations use this instead of relying on potentially stale
+     * metadata-cache offsets.
+     */
+    async scanReferencesDetailed(imagePath: string): Promise<ReferenceScanResult> {
+        const result = await this.scanReferencesForTargetsDetailed([imagePath]);
+        return {
+            locations: result.references.get(imagePath) ?? [],
+            complete: result.complete,
+            uncertainFiles: result.uncertainFiles
+        };
+    }
+
+    async scanReferencesForTargetsDetailed(targets: string[]): Promise<MultiReferenceScanResult> {
+        const references = new Map<string, ReferenceLocation[]>();
+        const uncertainFiles: string[] = [];
+        const localTargets = new Map<string, string[]>();
+        const localTargetsByBasename = new Map<string, string[]>();
+        const urlTargets: string[] = [];
+
+        for (const target of targets) {
+            if (references.has(target)) continue;
+            references.set(target, []);
+            if (isHttpUrl(target)) {
+                urlTargets.push(target);
+            } else {
+                const normalized = normalizePath(this.stripSubpath(target));
+                const originals = localTargets.get(normalized) ?? [];
+                originals.push(target);
+                localTargets.set(normalized, originals);
+
+                const basename = (normalized.split("/").pop() ?? normalized).toLowerCase();
+                const basenameTargets = localTargetsByBasename.get(basename) ?? [];
+                basenameTargets.push(target);
+                localTargetsByBasename.set(basename, basenameTargets);
+            }
+        }
+
+        for (const file of this.app.vault.getMarkdownFiles()) {
+            try {
+                const content = await this.app.vault.read(file);
+                let hasUnresolvedCandidate = false;
+                const parsedLinks = getContextualReferenceLinks(content, this.getSourceScanOptions());
+                for (const link of parsedLinks) {
+                    const linkPath = this.stripSubpath(link.path);
+                    const matchedTargets = new Set<string>();
+                    if (isHttpUrl(linkPath)) {
+                        for (const target of urlTargets) {
+                            if (this.isUrlMatch(linkPath, target)) matchedTargets.add(target);
+                        }
+                    } else {
+                        const syntax = toLocalReferenceSyntax(link.syntax);
+                        const resolution = this.localTargetResolver.resolve(linkPath, file, { syntax });
+                        if (resolution.status === "resolved" && resolution.file) {
+                            for (const target of localTargets.get(normalizePath(resolution.file.path)) ?? []) {
+                                matchedTargets.add(target);
+                            }
+                        } else {
+                            const candidateMatchesTarget = resolution.candidates.some(candidate =>
+                                localTargets.has(normalizePath(candidate.path))
+                            );
+                            const basename = getComparableLocalBasename(linkPath, syntax);
+                            hasUnresolvedCandidate ||= candidateMatchesTarget
+                                || localTargetsByBasename.has(basename);
+                        }
+                    }
+                    if (matchedTargets.size === 0) continue;
+
+                    const line = content.slice(0, link.index).split("\n").length - 1;
+                    const location: ReferenceLocation = {
+                        file,
+                        start: link.index,
+                        end: link.index + link.source.length,
+                        original: link.source,
+                        link: link.path,
+                        line
+                    };
+                    for (const target of matchedTargets) references.get(target)?.push(location);
+                }
+                for (const target of urlTargets) {
+                    if (this.hasUnparsedUrlCandidate(content, target, parsedLinks, this.getSourceScanOptions())) {
+                        hasUnresolvedCandidate = true;
+                    }
+                }
+                if (hasUnresolvedCandidate) uncertainFiles.push(file.path);
+            } catch (error) {
+                console.warn(`[VaultReferenceManager] Failed to scan ${file.path}:`, error);
+                uncertainFiles.push(file.path);
+            }
+        }
+
+        return {
+            references,
+            complete: uncertainFiles.length === 0,
+            uncertainFiles
+        };
+    }
+
+    async updateReferenceLocationsDetailed(
+        locations: ReferenceLocation[],
+        replacementGenerator: (location: ReferenceLocation) => string
+    ): Promise<ReferenceUpdateResult> {
+        return this.processUpdatesDetailed(locations, replacementGenerator);
     }
 
     /**
@@ -55,23 +217,22 @@ export class VaultReferenceManager {
             }
         }
 
-        // 2) Optional slow path: scan fenced code blocks and admonition blocks in files
-        // that metadataCache may not have indexed into resolvedLinks.
-        if (this.isCodeBlockImageLinkIndexingEnabled()) {
-            const targetBasename = normalizedImagePath.split('/').pop() ?? normalizedImagePath;
-            const markdownFiles = this.app.vault.getMarkdownFiles();
+        // Callouts and `ad-*` fences are rendered Markdown but are not
+        // consistently represented in resolvedLinks. Scan source in every
+        // candidate file; the setting only decides whether ordinary fences are
+        // included by the shared scanner.
+        const targetBasename = normalizedImagePath.split('/').pop() ?? normalizedImagePath;
+        const markdownFiles = this.app.vault.getMarkdownFiles();
 
-            for (const file of markdownFiles) {
-                if (!(file instanceof TFile)) continue;
-                if (candidateFilePaths.has(file.path)) continue;
+        for (const file of markdownFiles) {
+            if (!(file instanceof TFile)) continue;
+            if (candidateFilePaths.has(file.path)) continue;
 
-                // Prefilter by basename to reduce IO.
-                const content = await this.app.vault.read(file);
-                if (!content.includes(targetBasename)) continue;
+            const content = await this.app.vault.read(file);
+            if (!content.includes(targetBasename)) continue;
 
-                const scanned = await this.scanCodeAndAdmonitionReferences(file, normalizedImagePath, content);
-                locations.push(...scanned);
-            }
+            const scanned = await this.scanCodeAndAdmonitionReferences(file, normalizedImagePath, content);
+            locations.push(...scanned);
         }
 
         // Deduplicate across sources by file+offset.
@@ -87,6 +248,72 @@ export class VaultReferenceManager {
         return merged;
     }
 
+    async getFilesReferencingImages(imagePaths: string[]): Promise<Map<string, ReferenceLocation[]>> {
+        const normalizedToOriginal = new Map<string, string>();
+        const results = new Map<string, ReferenceLocation[]>();
+        for (const imagePath of imagePaths) {
+            const normalized = normalizePath(imagePath);
+            normalizedToOriginal.set(normalized, imagePath);
+            results.set(imagePath, []);
+        }
+        if (normalizedToOriginal.size === 0) return results;
+
+        const addLocation = (
+            file: TFile,
+            linkPath: string,
+            original: string,
+            start: number,
+            end: number,
+            line: number
+        ) => {
+            const syntax = inferLocalReferenceSyntax(original);
+            const destination = this.localTargetResolver.resolve(linkPath, file, { syntax });
+            if (destination.status !== "resolved" || !destination.file) return;
+            const originalPath = normalizedToOriginal.get(normalizePath(destination.file.path));
+            if (!originalPath) return;
+            results.get(originalPath)?.push({ file, start, end, original, link: linkPath, line });
+        };
+
+        for (const file of this.app.vault.getMarkdownFiles()) {
+            const cache = this.app.metadataCache.getFileCache(file);
+            for (const link of [...(cache?.embeds ?? []), ...(cache?.links ?? [])]) {
+                addLocation(
+                    file,
+                    this.getCacheLinkPath(link),
+                    link.original,
+                    link.position.start.offset,
+                    link.position.end.offset,
+                    link.position.start.line
+                );
+            }
+
+            const content = await this.app.vault.read(file);
+            for (const link of getContextualReferenceLinks(content, this.getSourceScanOptions())) {
+                const line = content.slice(0, link.index).split('\n').length - 1;
+                addLocation(
+                    file,
+                    link.path,
+                    link.source,
+                    link.index,
+                    link.index + link.source.length,
+                    line
+                );
+            }
+        }
+
+        for (const [imagePath, locations] of results.entries()) {
+            const seen = new Set<string>();
+            results.set(imagePath, locations.filter(location => {
+                const key = `${location.file.path}:${location.start}-${location.end}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            }));
+        }
+
+        return results;
+    }
+
     /**
      * Get precise locations of references within a specific file using MetadataCache.
      */
@@ -94,14 +321,14 @@ export class VaultReferenceManager {
         const cache = this.app.metadataCache.getFileCache(file);
         const locations: ReferenceLocation[] = [];
         const targetNormal = normalizePath(targetImagePath);
-        const isUrl = targetImagePath.startsWith('http://') || targetImagePath.startsWith('https://');
+        const isUrl = isHttpUrl(targetImagePath);
 
         // 1) Fast path: use metadataCache positions when available.
         const checkLink = (link: LinkCache | EmbedCache) => {
-            const linkpath = link.link.split('#')[0].split('|')[0];
+            const linkpath = this.getCacheLinkPath(link);
 
             if (isUrl) {
-                if (linkpath === targetImagePath) {
+                if (this.isUrlMatch(linkpath, targetImagePath)) {
                     locations.push({
                         file,
                         start: link.position.start.offset,
@@ -112,8 +339,9 @@ export class VaultReferenceManager {
                     });
                 }
             } else {
-                const dest = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
-                if (dest && dest.path === targetNormal) {
+                const syntax = inferLocalReferenceSyntax(link.original ?? "");
+                const dest = this.localTargetResolver.resolve(linkpath, file, { syntax });
+                if (dest.status === "resolved" && dest.file?.path === targetNormal) {
                     locations.push({
                         file,
                         start: link.position.start.offset,
@@ -129,32 +357,12 @@ export class VaultReferenceManager {
         cache?.embeds?.forEach(checkLink);
         cache?.links?.forEach(checkLink);
 
-        // 2) Optional slow path: scan fenced code blocks and admonition blocks.
-        if (!this.isCodeBlockImageLinkIndexingEnabled()) return locations;
+        if (typeof this.app.vault.read !== 'function') return locations;
 
-        const scanned = await this.scanCodeAndAdmonitionReferences(file, targetImagePath);
-        if (scanned.length === 0) return locations;
-
-        // Deduplicate by offsets.
-        const seen = new Set<string>();
-        const merged: ReferenceLocation[] = [];
-
-        for (const loc of locations) {
-            const key = `${loc.start}-${loc.end}`;
-            if (!seen.has(key)) {
-                seen.add(key);
-                merged.push(loc);
-            }
-        }
-        for (const loc of scanned) {
-            const key = `${loc.start}-${loc.end}`;
-            if (!seen.has(key)) {
-                seen.add(key);
-                merged.push(loc);
-            }
-        }
-
-        return merged;
+        // Source offsets are the authoritative view for mutable operations.
+        // Metadata may index source-only literals differently across Obsidian
+        // versions, so do not merge those positions back into replacements.
+        return this.scanCodeAndAdmonitionReferences(file, targetImagePath);
     }
 
     private async scanCodeAndAdmonitionReferences(
@@ -163,102 +371,27 @@ export class VaultReferenceManager {
         contentOverride?: string
     ): Promise<ReferenceLocation[]> {
         const content = contentOverride ?? await this.app.vault.read(file);
-        const lines = content.split(/\r?\n/);
-
-        // Map line index -> absolute start offset.
-        const lineStartOffsets: number[] = [];
-        lineStartOffsets.push(0);
-        for (let i = 0; i < content.length; i++) {
-            if (content[i] === '\n') lineStartOffsets.push(i + 1);
-        }
-
-        // If for some reason split lengths mismatch, fall back to best-effort scanning.
-        if (lineStartOffsets.length < lines.length) {
-            // Best-effort: clamp to available offsets.
-            // (Data safety: we still avoid throwing)
-        }
-
         const locations: ReferenceLocation[] = [];
-        const seen = new Set<string>();
-
         const targetNormal = normalizePath(targetImagePath);
-        const isUrl = targetImagePath.startsWith('http://') || targetImagePath.startsWith('https://');
+        const isUrl = isHttpUrl(targetImagePath);
 
-        let inFencedCodeBlock = false;
-        let inAdmonition = false;
+        for (const link of getContextualReferenceLinks(content, this.getSourceScanOptions())) {
+            const linkPath = link.path;
+            const matches = isUrl
+                ? this.isUrlMatch(linkPath, targetImagePath)
+                : this.localTargetResolver.resolve(linkPath, file, {
+                    syntax: toLocalReferenceSyntax(link.syntax)
+                }).file?.path === targetNormal;
+            if (!matches) continue;
 
-        const fenceStartOrEnd = (line: string) => /^\s*```/.test(line);
-        const admonitionStart = (line: string) => /^\s*>\s*\[![^\]]+\]/.test(line);
-        const isBlockquoteContinuation = (line: string) => /^\s*>/.test(line);
-
-        for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-            const line = lines[lineIdx];
-
-            const isFenceLine = fenceStartOrEnd(line);
-            let closeFencedAfterScan = false;
-
-            // Toggle fenced state only on fence lines, and only close after scanning the end fence line.
-            if (isFenceLine) {
-                if (!inFencedCodeBlock) {
-                    inFencedCodeBlock = true; // start fence
-                } else {
-                    closeFencedAfterScan = true; // end fence
-                }
-            }
-
-            if (inAdmonition && !isBlockquoteContinuation(line)) {
-                inAdmonition = false;
-            }
-            if (!inAdmonition && admonitionStart(line)) {
-                inAdmonition = true;
-            }
-
-            const shouldScan = inFencedCodeBlock || inAdmonition;
-            if (shouldScan) {
-                const links = pipeSyntaxParser.extractAllLinks(line);
-                for (const link of links) {
-                    const linkPath = link.data.path;
-
-                    if (isUrl) {
-                        if (linkPath === targetImagePath) {
-                            const start = (lineStartOffsets[lineIdx] ?? 0) + link.index;
-                            const end = start + link.fullMatch.length;
-                            const key = `${start}-${end}`;
-                            if (!seen.has(key)) {
-                                seen.add(key);
-                                locations.push({
-                                    file,
-                                    start,
-                                    end,
-                                    original: link.fullMatch,
-                                    link: linkPath,
-                                    line: lineIdx
-                                });
-                            }
-                        }
-                    } else {
-                        const dest = this.app.metadataCache.getFirstLinkpathDest(linkPath, file.path);
-                        if (dest && dest.path === targetNormal) {
-                            const start = (lineStartOffsets[lineIdx] ?? 0) + link.index;
-                            const end = start + link.fullMatch.length;
-                            const key = `${start}-${end}`;
-                            if (!seen.has(key)) {
-                                seen.add(key);
-                                locations.push({
-                                    file,
-                                    start,
-                                    end,
-                                    original: link.fullMatch,
-                                    link: linkPath,
-                                    line: lineIdx
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (closeFencedAfterScan) inFencedCodeBlock = false;
+            locations.push({
+                file,
+                start: link.index,
+                end: link.index + link.source.length,
+                original: link.source,
+                link: linkPath,
+                line: content.slice(0, link.index).split('\n').length - 1
+            });
         }
 
         return locations;
@@ -287,17 +420,31 @@ export class VaultReferenceManager {
         imagePath: string,
         replacementGenerator: (location: ReferenceLocation) => string
     ): Promise<number> {
-        // Detect if imagePath is a URL
-        const isUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
-        let locations: ReferenceLocation[] = [];
+        const result = await this.updateReferencesDetailed(imagePath, replacementGenerator);
+        return result.replaced;
+    }
 
-        if (isUrl) {
-            locations = await this.getFilesReferencingUrl(imagePath);
-        } else {
-            locations = await this.getFilesReferencingImage(imagePath);
+    async updateReferencesDetailed(
+        imagePath: string,
+        replacementGenerator: (location: ReferenceLocation) => string
+    ): Promise<ReferenceUpdateResult> {
+        try {
+            const isUrl = isHttpUrl(imagePath);
+            const locations = isUrl
+                ? await this.getFilesReferencingUrl(imagePath)
+                : await this.getFilesReferencingImage(imagePath);
+            return this.processUpdatesDetailed(locations, replacementGenerator);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return {
+                found: 0,
+                replaced: 0,
+                complete: false,
+                files: [],
+                failedFiles: [],
+                uncertainFiles: [`Reference scan failed: ${message}`]
+            };
         }
-
-        return this.processUpdates(locations, replacementGenerator);
     }
 
     /**
@@ -308,7 +455,6 @@ export class VaultReferenceManager {
         const results = new Map<string, ReferenceLocation[]>();
         const urlSet = new Set(urls);
         const files = this.app.vault.getMarkdownFiles();
-        const codeBlockIndexing = this.isCodeBlockImageLinkIndexingEnabled();
 
         for (const file of files) {
             const cache = this.app.metadataCache.getFileCache(file);
@@ -318,7 +464,7 @@ export class VaultReferenceManager {
             if (cache?.embeds) {
                 for (const embed of cache.embeds) {
                     for (const url of urlSet) {
-                        if (this.isUrlMatch(embed.link, url)) {
+                        if (this.isUrlMatch(this.getCacheLinkPath(embed), url)) {
                             // Match found
                             if (!results.has(url)) results.set(url, []);
                             const refs = await this.getReferencesInFile(file, url);
@@ -335,7 +481,7 @@ export class VaultReferenceManager {
                     for (const url of urlSet) {
                         if (foundInFile.has(url)) continue; // Already found in this file via embed
 
-                        if (this.isUrlMatch(link.link, url)) {
+                        if (this.isUrlMatch(this.getCacheLinkPath(link), url)) {
                             if (!results.has(url)) results.set(url, []);
                             const refs = await this.getReferencesInFile(file, url);
                             results.get(url)?.push(...refs);
@@ -345,17 +491,14 @@ export class VaultReferenceManager {
                 }
             }
 
-            // Optional slow path for fenced code blocks + admonitions.
-            if (codeBlockIndexing) {
-                const content = await this.app.vault.read(file);
-                if (!content.includes('http://') && !content.includes('https://')) continue;
+            const content = await this.app.vault.read(file);
+            if (!content.includes('http://') && !content.includes('https://')) continue;
 
-                for (const url of urlSet) {
-                    if (!content.includes(url)) continue;
-                    if (!results.has(url)) results.set(url, []);
-                    const scanned = await this.scanCodeAndAdmonitionReferences(file, url, content);
-                    results.get(url)?.push(...scanned);
-                }
+            for (const url of urlSet) {
+                if (!content.includes(url)) continue;
+                if (!results.has(url)) results.set(url, []);
+                const scanned = await this.scanCodeAndAdmonitionReferences(file, url, content);
+                results.get(url)?.push(...scanned);
             }
         }
 
@@ -384,7 +527,6 @@ export class VaultReferenceManager {
         const locations: ReferenceLocation[] = [];
         const files = this.app.vault.getMarkdownFiles();
         const candidateFilePaths = new Set<string>();
-        const codeBlockIndexing = this.isCodeBlockImageLinkIndexingEnabled();
 
         for (const file of files) {
             const cache = this.app.metadataCache.getFileCache(file);
@@ -392,7 +534,7 @@ export class VaultReferenceManager {
             // Check embeds
             if (cache?.embeds) {
                 for (const embed of cache.embeds) {
-                    if (this.isUrlMatch(embed.link, url)) {
+                    if (this.isUrlMatch(this.getCacheLinkPath(embed), url)) {
                         candidateFilePaths.add(file.path);
                         const refs = await this.getReferencesInFile(file, url);
                         locations.push(...refs);
@@ -410,7 +552,7 @@ export class VaultReferenceManager {
             // Usually we only care about embeds ![], but for completeness...
             if (cache?.links) {
                 for (const link of cache.links) {
-                    if (this.isUrlMatch(link.link, url)) {
+                    if (this.isUrlMatch(this.getCacheLinkPath(link), url)) {
                         // Avoid adding same file twice if it was already caught by embeds
                         const existing = locations.find(l => l.file === file);
                         if (!existing) {
@@ -424,19 +566,15 @@ export class VaultReferenceManager {
             }
         }
 
-        // Optional slow path: scan fenced code blocks and admonition blocks for URL refs
-        // that metadata cache did not index.
-        if (codeBlockIndexing) {
-            const targetToken = url.split(/[?#]/)[0].split('/').pop() ?? url;
+        const targetToken = url.split(/[?#]/)[0].split('/').pop() ?? url;
 
-            for (const file of files) {
-                if (candidateFilePaths.has(file.path)) continue;
-                const content = await this.app.vault.read(file);
-                if (!content.includes(targetToken)) continue;
+        for (const file of files) {
+            if (candidateFilePaths.has(file.path)) continue;
+            const content = await this.app.vault.read(file);
+            if (!content.includes(targetToken)) continue;
 
-                const scanned = await this.scanCodeAndAdmonitionReferences(file, url, content);
-                locations.push(...scanned);
-            }
+            const scanned = await this.scanCodeAndAdmonitionReferences(file, url, content);
+            locations.push(...scanned);
         }
 
         // Deduplicate by file+offset.
@@ -457,25 +595,53 @@ export class VaultReferenceManager {
      *
      * Normalization steps:
      * 1. Strip trailing slashes (http://a.com/ == http://a.com)
-     * 2. Strip common tracking/query params that don't affect the resource
-     * 3. Case-insensitive scheme comparison (http == https treated same if domain is same)
+     * 2. Normalize protocol and host casing.
+     * 3. Preserve case-sensitive path, query, and fragment components.
      *
      * We deliberately avoid over-aggressive normalization to preserve the ability
      * to distinguish URLs that differ only in meaningful query parameters.
      */
     private isUrlMatch(link: string, targetUrl: string): boolean {
-        if (link === targetUrl) return true;
+        return isSameHttpUrl(link, targetUrl);
+    }
 
-        // Strip trailing slashes for comparison.
-        const stripSlash = (s: string) => s.replace(/\/+$/, "");
-        const a = stripSlash(link);
-        const b = stripSlash(targetUrl);
-        if (a === b) return true;
+    private getCacheLinkPath(link: LinkCache | EmbedCache): string {
+        const originalPath = this.extractSingleReferencePath(link.original);
+        if (originalPath) {
+            return originalPath;
+        }
 
-        // Case-insensitive exact match (covers scheme+host+path exactly).
-        if (a.toLowerCase() === b.toLowerCase()) return true;
+        return this.stripCacheLinkText(link.link ?? '');
+    }
 
-        return false;
+    private stripCacheLinkText(linkText: string): string {
+        const withoutSubpath = this.stripSubpath(linkText);
+        const pipeIndex = this.findFirstUnescapedPipe(withoutSubpath);
+        const path = pipeIndex === -1 ? withoutSubpath : withoutSubpath.slice(0, pipeIndex);
+        return path.replace(/\\\|/g, '|');
+    }
+
+    private stripSubpath(path: string): string {
+        if (isHttpUrl(path)) return path;
+        const hashIndex = path.indexOf('#');
+        return hashIndex === -1 ? path : path.slice(0, hashIndex);
+    }
+
+    private findFirstUnescapedPipe(text: string): number {
+        for (let i = 0; i < text.length; i++) {
+            if (text[i] !== '|') continue;
+
+            let slashCount = 0;
+            for (let j = i - 1; j >= 0 && text[j] === '\\'; j--) {
+                slashCount++;
+            }
+
+            if (slashCount % 2 === 0) {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     /**
@@ -487,95 +653,194 @@ export class VaultReferenceManager {
         imagePath: string,
         replacementGenerator: (location: ReferenceLocation) => string
     ): Promise<number> {
-        const locations = await this.getReferencesInFile(file, imagePath);
-        return this.processUpdates(locations, replacementGenerator);
+        return (await this.updateReferencesInFileDetailed(file, imagePath, replacementGenerator)).replaced;
+    }
+
+    async updateReferencesInFileDetailed(
+        file: TFile,
+        imagePath: string,
+        replacementGenerator: (location: ReferenceLocation) => string
+    ): Promise<ReferenceUpdateResult> {
+        try {
+            const locations = await this.getReferencesInFile(file, imagePath);
+            return this.processUpdatesDetailed(locations, replacementGenerator);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return {
+                found: 0,
+                replaced: 0,
+                complete: false,
+                files: [{ filePath: file.path, found: 0, replaced: 0, error: message }],
+                failedFiles: [file.path],
+                uncertainFiles: [file.path]
+            };
+        }
     }
 
     /**
      * Core logic to apply updates to a list of locations.
      *
      * Strategy: process from END to START so replacements don't shift earlier offsets.
-     * After ANY skip (offset mismatch, non-image text), re-sort remaining locations
-     * against the current content to keep offsets valid.
+     * Because replacements run from END to START, earlier offsets remain valid
+     * even when later replacements change content length.
      */
     private async processUpdates(
         locations: ReferenceLocation[],
         replacementGenerator: (location: ReferenceLocation) => string
     ): Promise<number> {
-        // Group by file to minimize IO (read/write each file once)
-        const filesMap = new Map<TFile, ReferenceLocation[]>();
+        return (await this.processUpdatesDetailed(locations, replacementGenerator)).replaced;
+    }
+
+    private async processUpdatesDetailed(
+        locations: ReferenceLocation[],
+        replacementGenerator: (location: ReferenceLocation) => string
+    ): Promise<ReferenceUpdateResult> {
+        // Deduplicate cache/raw-scan overlap and group by path so each file is
+        // processed atomically exactly once, even if callers supplied distinct
+        // TFile instances for the same path.
+        const filesMap = new Map<string, { file: TFile; locations: ReferenceLocation[] }>();
+        const seenLocations = new Set<string>();
         for (const loc of locations) {
-            if (!filesMap.has(loc.file)) {
-                filesMap.set(loc.file, []);
-            }
-            filesMap.get(loc.file)?.push(loc);
+            const locationKey = `${loc.file.path}:${loc.start}-${loc.end}`;
+            if (seenLocations.has(locationKey)) continue;
+            seenLocations.add(locationKey);
+
+            const entry = filesMap.get(loc.file.path) ?? { file: loc.file, locations: [] };
+            entry.locations.push(loc);
+            filesMap.set(loc.file.path, entry);
         }
 
-        let totalFound = locations.length;
         let totalReplaced = 0;
-        let totalSkipped = 0;
+        const fileResults: ReferenceFileUpdateResult[] = [];
+        const failedFiles: string[] = [];
 
-        for (const [file, locs] of filesMap.entries()) {
-            await this.app.vault.process(file, (content) => {
-                // Sort by start descending (process from end to start).
-                locs.sort((a, b) => b.start - a.start);
+        for (const { file, locations: locs } of filesMap.values()) {
+            let fileReplaced = 0;
+            const issues: string[] = [];
+            try {
+                await this.app.vault.process(file, (content) => {
+                    fileReplaced = 0;
+                    issues.length = 0;
+                    const sortedLocations = [...locs].sort((a, b) => b.start - a.start);
+                    let newContent = content;
 
-                let newContent = content;
-                let offsetCorrection = 0;
-                let fileReplaced = 0;
-                let fileSkipped = 0;
+                    for (const loc of sortedLocations) {
+                        const adjStart = loc.start;
+                        const adjEnd = loc.end;
 
-                for (const loc of locs) {
-                    const adjStart = loc.start + offsetCorrection;
-                    const adjEnd   = loc.end   + offsetCorrection;
+                        if (adjStart < 0 || adjEnd > newContent.length || adjStart >= adjEnd) {
+                            issues.push(`Invalid reference range [${adjStart}, ${adjEnd}]`);
+                            continue;
+                        }
 
-                    if (adjStart < 0 || adjEnd > newContent.length || adjStart >= adjEnd) {
-                        console.warn(`[VaultReferenceManager] Invalid adjusted range [${adjStart}, ${adjEnd}] in ${file.path}. Skipping.`);
-                        fileSkipped++;
-                        continue;
+                        const actualOriginal = newContent.substring(adjStart, adjEnd);
+                        if (!this.isSupportedReferenceText(actualOriginal)) {
+                            issues.push(`Reference text changed at offset ${adjStart}`);
+                            continue;
+                        }
+                        if (!this.isSameReferenceTarget(actualOriginal, loc)) {
+                            issues.push(`Reference target changed at offset ${adjStart}`);
+                            continue;
+                        }
+
+                        const newLinkString = replacementGenerator({
+                            ...loc,
+                            start: adjStart,
+                            end: adjEnd,
+                            original: actualOriginal
+                        });
+                        if (newLinkString === actualOriginal) continue;
+
+                        newContent = newContent.substring(0, adjStart)
+                            + newLinkString
+                            + newContent.substring(adjEnd);
+                        fileReplaced++;
                     }
 
-                    const actualOriginal = newContent.substring(adjStart, adjEnd);
-
-                    if (!this.isProbablyImageLinkText(actualOriginal)) {
-                        console.warn(`[VaultReferenceManager] Not an image link at ${adjStart} in ${file.path}. Skipping.`);
-                        fileSkipped++;
-                        continue;
-                    }
-
-                    const locForGen: ReferenceLocation = {
-                        ...loc,
-                        start: adjStart,
-                        end: adjEnd,
-                        original: actualOriginal
-                    };
-
-                    const newLinkString = replacementGenerator(locForGen);
-                    if (newLinkString === actualOriginal) {
-                        fileSkipped++;
-                        continue;
-                    }
-
-                    newContent =
-                        newContent.substring(0, adjStart) +
-                        newLinkString +
-                        newContent.substring(adjEnd);
-
-                    offsetCorrection += (newLinkString.length - (adjEnd - adjStart));
-                    fileReplaced++;
-                }
-
-                if (fileReplaced > 0 || fileSkipped > 0) {
-                    console.log(`[VaultReferenceManager] ${file.path}: found=${locs.length}, replaced=${fileReplaced}, skipped=${fileSkipped}`);
-                }
+                    return newContent;
+                });
 
                 totalReplaced += fileReplaced;
-                totalSkipped += fileSkipped;
-                return newContent;
-            });
+                if (fileReplaced !== locs.length && issues.length === 0) {
+                    issues.push(`Updated ${fileReplaced} of ${locs.length} reference(s)`);
+                }
+                const error = issues.length > 0 ? issues.join("; ") : undefined;
+                fileResults.push({ filePath: file.path, found: locs.length, replaced: fileReplaced, error });
+                if (error) failedFiles.push(file.path);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                fileResults.push({ filePath: file.path, found: locs.length, replaced: 0, error: message });
+                failedFiles.push(file.path);
+            }
         }
 
-        console.log(`[VaultReferenceManager] Total: found=${totalFound}, replaced=${totalReplaced}, skipped=${totalSkipped}`);
-        return totalReplaced;
+        return {
+            found: seenLocations.size,
+            replaced: totalReplaced,
+            complete: failedFiles.length === 0,
+            files: fileResults,
+            failedFiles,
+            uncertainFiles: []
+        };
     }
+
+    private isSameReferenceTarget(actualOriginal: string, location: ReferenceLocation): boolean {
+        const actualPath = this.extractSingleReferencePath(actualOriginal);
+        const expectedPath = this.extractSingleReferencePath(location.original) ?? this.stripCacheLinkText(location.link);
+        if (!actualPath || !expectedPath) return false;
+
+        const actualIsUrl = isHttpUrl(actualPath);
+        const expectedIsUrl = isHttpUrl(expectedPath);
+        if (actualIsUrl || expectedIsUrl) {
+            return actualIsUrl && expectedIsUrl && this.isUrlMatch(actualPath, expectedPath);
+        }
+
+        // Exact source equality is sufficient to prove that this occurrence
+        // did not change after it was scanned. Resolution is still required
+        // when two different link texts are being compared.
+        if (actualPath === expectedPath) return true;
+
+        const actualDestination = this.localTargetResolver.resolve(actualPath, location.file, {
+            syntax: inferLocalReferenceSyntax(actualOriginal)
+        });
+        const expectedDestination = this.localTargetResolver.resolve(expectedPath, location.file, {
+            syntax: inferLocalReferenceSyntax(location.original)
+        });
+        return actualDestination.status === "resolved"
+            && expectedDestination.status === "resolved"
+            && actualDestination.file?.path === expectedDestination.file?.path;
+    }
+
+    private extractSingleReferencePath(text: string): string | null {
+        const links = getAllReferenceLinks(text);
+        if (links.length !== 1 || links[0].index !== 0 || links[0].source.length !== text.length) return null;
+        return this.stripSubpath(links[0].path);
+    }
+
+    private hasUnparsedUrlCandidate(
+        content: string,
+        targetUrl: string,
+        parsedLinks: ContextualReferenceLink[],
+        options: MarkdownSourceScanOptions
+    ): boolean {
+        const matchingRanges = parsedLinks
+            .filter(link => isHttpUrl(link.path) && isSameHttpUrl(link.path, targetUrl))
+            .map(link => ({ start: link.index, end: link.index + link.source.length }));
+
+        const contextIndex = MarkdownSourceContextIndex.create(content);
+        let index = content.indexOf(targetUrl);
+        while (index >= 0) {
+            const end = index + targetUrl.length;
+            if (contextIndex.includes(index, end, options)
+                && !matchingRanges.some(range => index >= range.start && end <= range.end)) {
+                return true;
+            }
+            index = content.indexOf(targetUrl, index + targetUrl.length);
+        }
+        return false;
+    }
+}
+
+function toLocalReferenceSyntax(syntax: ReferenceLink["syntax"]): LocalReferenceSyntax {
+    return syntax === "markdown" ? "markdown" : "wiki";
 }

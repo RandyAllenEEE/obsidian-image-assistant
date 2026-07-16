@@ -1,4 +1,4 @@
-import { App, Editor, Notice, MarkdownView, EditorPosition } from "obsidian";
+import { App, Editor } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { PasteHandler } from "./PasteHandler";
 
@@ -37,6 +37,8 @@ export class DropHandler {
             .map(data => data.file);
 
         if (supportedFiles.length === 0) return;
+        if (supportedFiles.length !== fileData.length) return;
+        if (!this.pasteHandler.canProcessFiles()) return;
 
         // For Drop, we must ensure cursor is where drop happened
         editor.setCursor(pos);

@@ -7,17 +7,8 @@ global.window = {
     },
 } as any;
 
-// Mock NetworkImageDownloadModal to avoid lang/helpers issues
-vi.mock('../../../src/cloud/NetworkImageDownloadModal', () => ({
-    NetworkImageDownloadModal: vi.fn(),
-    DownloadTask: {},
-    DownloadChoice: {},
-    DownloadMode: {},
-}));
-
 import { NetworkImageDownloader } from '../../../src/cloud/NetworkImageDownloader';
-import { App, TFile, requestUrl, normalizePath } from 'obsidian';
-import { UploadHelper } from '../../../src/utils/UploadHelper';
+import { App, TFile, requestUrl } from 'obsidian';
 import { FolderAndFilenameManagement } from '../../../src/local/FolderAndFilenameManagement';
 import ImageConverterPlugin from '../../../src/main';
 import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
@@ -29,16 +20,6 @@ vi.mock('obsidian', () => ({
     Notice: vi.fn(),
     requestUrl: vi.fn(),
     normalizePath: (path: string) => path.replace(/\\/g, '/'),
-}));
-
-// Mock path-browserify
-vi.mock('path-browserify', () => ({
-    join: (...paths: string[]) => paths.join('/').replace(/\/+/g, '/'),
-    parse: (path: string) => ({
-        dir: path.substring(0, path.lastIndexOf('/')),
-        name: path.substring(path.lastIndexOf('/') + 1, path.lastIndexOf('.')),
-        ext: path.substring(path.lastIndexOf('.')),
-    }),
 }));
 
 // Mock image-type
@@ -58,7 +39,6 @@ describe('NetworkImageDownloader', () => {
     let downloader: NetworkImageDownloader;
     let mockApp: App;
     let mockPlugin: ImageConverterPlugin;
-    let mockUploadHelper: UploadHelper;
     let mockFolderManager: FolderAndFilenameManagement;
     let mockActiveFile: TFile;
 
@@ -68,14 +48,24 @@ describe('NetworkImageDownloader', () => {
                 getActiveFile: vi.fn(),
             },
             vault: {
+                getAbstractFileByPath: vi.fn(() => null),
+                getMarkdownFiles: vi.fn(() => []),
+                getFiles: vi.fn(() => []),
                 read: vi.fn().mockResolvedValue(''),
+                readBinary: vi.fn().mockResolvedValue(new Uint8Array([137, 80, 78, 71]).buffer),
+                trash: vi.fn(),
+                modifyBinary: vi.fn(),
                 adapter: {
                     exists: vi.fn(),
                     writeBinary: vi.fn(),
                 },
             },
+            metadataCache: {
+                fileToLinktext: vi.fn(),
+                getFileCache: vi.fn(() => ({})),
+            },
             fileManager: {
-                getAvailablePathForAttachment: vi.fn().mockResolvedValue('attachments'),
+                getAvailablePathForAttachment: vi.fn().mockResolvedValue('wrong-file-api-path'),
             },
         } as any;
 
@@ -90,23 +80,33 @@ describe('NetworkImageDownloader', () => {
             settings: structuredClone(DEFAULT_SETTINGS),
             vaultReferenceManager: {
                 updateReferencesInFile: vi.fn().mockResolvedValue(1),
+                scanReferencesDetailed: vi.fn().mockResolvedValue({
+                    locations: [], complete: true, uncertainFiles: []
+                }),
+                getFilesReferencingImage: vi.fn().mockResolvedValue([]),
             },
         } as any;
 
-        mockUploadHelper = {
-            getAllImageLinks: vi.fn(),
-        } as any;
-
         mockFolderManager = {
+            getDefaultAttachmentFolderPath: vi.fn(() => 'attachments'),
             ensureFolderExists: vi.fn(),
             sanitizeFilename: vi.fn((name: string) => name.replace(/[<>:"/\\|?*]/g, '-')),
             handleNameConflicts: vi.fn((folder: string, name: string) => Promise.resolve(name)),
+            createUniqueBinaryDetailed: vi.fn(async (folder: string, name: string, data: ArrayBuffer, mode: string) => {
+                const resolvedName = await (mockFolderManager.handleNameConflicts as any)(folder, name, mode);
+                if (!resolvedName) return { file: null, disposition: 'skipped' };
+                const path = folder ? `${folder}/${resolvedName}` : resolvedName;
+                await (mockApp.vault.adapter.writeBinary as any)(path, data);
+                return {
+                    file: { path, name: resolvedName },
+                    disposition: 'created'
+                };
+            }),
         } as any;
 
         downloader = new NetworkImageDownloader(
             mockApp,
             mockPlugin,
-            mockUploadHelper,
             mockFolderManager
         );
 
@@ -214,43 +214,6 @@ describe('NetworkImageDownloader', () => {
         });
     });
 
-    describe('黑名单域名过滤 (hasBlackDomain)', () => {
-        it('Given 黑名单为空, When 检查任意 URL, Then 返回 false', () => {
-            const result = (downloader as any).hasBlackDomain('https://example.com/image.png', '');
-            expect(result).toBe(false);
-        });
-
-        it('Given URL 包含黑名单域名, When 检查, Then 返回 true', () => {
-            const blackDomains = 'example.com\nbad-site.net';
-            const result = (downloader as any).hasBlackDomain('https://example.com/image.png', blackDomains);
-            expect(result).toBe(true);
-        });
-
-        it('Given URL 不包含黑名单域名, When 检查, Then 返回 false', () => {
-            const blackDomains = 'bad-site.net';
-            const result = (downloader as any).hasBlackDomain('https://good-site.com/image.png', blackDomains);
-            expect(result).toBe(false);
-        });
-
-        it('Given 黑名单包含空行, When 检查, Then 忽略空行', () => {
-            const blackDomains = 'example.com\n\nbad-site.net';
-            const result = (downloader as any).hasBlackDomain('https://other.com/image.png', blackDomains);
-            expect(result).toBe(false);
-        });
-
-        it('Given 黑名单域名部分匹配, When 检查, Then 返回 true', () => {
-            const blackDomains = 'example';
-            const result = (downloader as any).hasBlackDomain('https://sub.example.com/image.png', blackDomains);
-            expect(result).toBe(true);
-        });
-
-        it('Given 无效 URL, When 检查黑名单, Then 返回 false 并记录错误', () => {
-            const blackDomains = 'example.com';
-            const result = (downloader as any).hasBlackDomain('not-a-url', blackDomains);
-            expect(result).toBe(false);
-        });
-    });
-
     describe('相对路径计算 (getRelativePath)', () => {
         it('Given 同级目录, When 计算相对路径, Then 返回 ./ 开头的路径', () => {
             const result = (downloader as any).getRelativePath('notes', 'notes/image.png');
@@ -283,54 +246,6 @@ describe('NetworkImageDownloader', () => {
         });
     });
 
-    describe('本地文件查找 (findLocalFile)', () => {
-        it('Given 直接匹配的文件存在, When 查找, Then 返回文件路径', async () => {
-            (mockApp.vault.adapter.exists as any).mockResolvedValue(true);
-            
-            const result = await (downloader as any).findLocalFile('attachments', 'image.png');
-            
-            expect(result).toBe('attachments/image.png');
-            expect(mockApp.vault.adapter.exists).toHaveBeenCalledWith('attachments/image.png');
-        });
-
-        it('Given 直接匹配失败但不同扩展名存在, When 查找, Then 返回匹配的文件', async () => {
-            (mockApp.vault.adapter.exists as any)
-                .mockResolvedValueOnce(false) // image.png 不存在
-                .mockResolvedValueOnce(true); // image.jpg 存在
-            
-            const result = await (downloader as any).findLocalFile('attachments', 'image.png');
-            
-            expect(result).toBe('attachments/image.jpg');
-        });
-
-        it('Given 带序号的文件存在, When 查找, Then 返回序号文件', async () => {
-            (mockApp.vault.adapter.exists as any)
-                .mockImplementation((path: string) => {
-                    return Promise.resolve(path === 'attachments/image_2.jpg');
-                });
-            
-            const result = await (downloader as any).findLocalFile('attachments', 'image.png');
-            
-            expect(result).toBe('attachments/image_2.jpg');
-        });
-
-        it('Given 无任何匹配文件, When 查找, Then 返回 null', async () => {
-            (mockApp.vault.adapter.exists as any).mockResolvedValue(false);
-            
-            const result = await (downloader as any).findLocalFile('attachments', 'nonexistent.png');
-            
-            expect(result).toBeNull();
-        });
-
-        it('Given 文件系统错误, When 查找, Then 返回 null 并记录错误', async () => {
-            (mockApp.vault.adapter.exists as any).mockRejectedValue(new Error('Permission denied'));
-            
-            const result = await (downloader as any).findLocalFile('attachments', 'image.png');
-            
-            expect(result).toBeNull();
-        });
-    });
-
     describe('单张图片下载 (downloadSingleImage)', () => {
         it('Given 有效图片 URL, When 下载, Then 成功保存文件', async () => {
             const pngBuffer = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]); // PNG 魔数
@@ -348,10 +263,65 @@ describe('NetworkImageDownloader', () => {
 
             expect(result.success).toBe(true);
             expect(result.fileName).toBe('photo.png'); // 根据魔数检测改为 .png
+            expect(result.vaultPath).toBe('attachments/photo.png');
             expect(mockApp.vault.adapter.writeBinary).toHaveBeenCalledWith(
                 'attachments/photo.png',
                 pngBuffer.buffer
             );
+        });
+
+        it.each([
+            ['JPEG', new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer, 'jpg'],
+            ['GIF', new TextEncoder().encode('GIF89a').buffer, 'gif'],
+            ['BMP', new Uint8Array([0x42, 0x4d, 0, 0]).buffer, 'bmp'],
+            ['ICO', new Uint8Array([0, 0, 1, 0, 1, 0]).buffer, 'ico'],
+            ['TIFF', new Uint8Array([0x49, 0x49, 0x2a, 0x00]).buffer, 'tiff'],
+            ['WebP', new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]).buffer, 'webp'],
+            ['AVIF', new Uint8Array([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0, 0, 0, 0]).buffer, 'avif'],
+            ['HEIC', new Uint8Array([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0]).buffer, 'heic'],
+            ['HEIF', new Uint8Array([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0]).buffer, 'heif'],
+        ])('Given a %s response behind a misleading .png URL, Then saves the detected format', async (_format, data, extension) => {
+            (requestUrl as any).mockResolvedValue({
+                status: 200,
+                headers: { 'content-type': 'application/octet-stream' },
+                arrayBuffer: data,
+            });
+
+            const result = await (downloader as any).downloadSingleImageInternal(
+                'https://example.com/image.png',
+                'attachments',
+                'image.png',
+                mockActiveFile
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.fileName).toBe(`image.${extension}`);
+            expect(mockFolderManager.createUniqueBinaryDetailed).toHaveBeenCalledWith(
+                'attachments',
+                `image.${extension}`,
+                data,
+                'increment',
+                { capturePreviousData: true }
+            );
+        });
+
+        it('Given valid image bytes with a wrong non-image content type, Then trusts the verified bytes', async () => {
+            const jpegBuffer = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer;
+            (requestUrl as any).mockResolvedValue({
+                status: 200,
+                headers: { 'content-type': 'text/plain; charset=utf-8' },
+                arrayBuffer: jpegBuffer,
+            });
+
+            const result = await (downloader as any).downloadSingleImageInternal(
+                'https://example.com/image',
+                'attachments',
+                'image',
+                mockActiveFile
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.fileName).toBe('image.jpg');
         });
 
         it('Given HTTP 500 错误, When 下载, Then 返回失败结果', async () => {
@@ -388,6 +358,33 @@ describe('NetworkImageDownloader', () => {
             expect(result.error).toBe('无法识别图片类型');
         });
 
+        it('Given a valid SVG document, When downloading, Then verifies XML and uses the SVG extension', async () => {
+            const svgBuffer = new TextEncoder().encode(
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10z"/></svg>'
+            ).buffer;
+            (requestUrl as any).mockResolvedValue({
+                status: 200,
+                headers: { 'content-type': 'image/svg+xml' },
+                arrayBuffer: svgBuffer,
+            });
+
+            const result = await (downloader as any).downloadSingleImageInternal(
+                'https://example.com/vector.png',
+                'attachments',
+                'vector.png',
+                mockActiveFile
+            );
+
+            expect(result.success).toBe(true);
+            expect(mockFolderManager.createUniqueBinaryDetailed).toHaveBeenCalledWith(
+                'attachments',
+                'vector.svg',
+                svgBuffer,
+                'increment',
+                { capturePreviousData: true }
+            );
+        });
+
         it('Given 非法 URL 协议, When 下载, Then 返回验证错误', async () => {
             const result = await (downloader as any).downloadSingleImageInternal(
                 'ftp://example.com/photo.jpg',
@@ -398,6 +395,21 @@ describe('NetworkImageDownloader', () => {
 
             expect(result.success).toBe(false);
             expect(result.error).toContain('Invalid protocol');
+        });
+
+        it('Given a blacklisted image domain, When downloading through any entry point, Then it is rejected before making a request', async () => {
+            mockPlugin.settings.pasteHandling.cloud.newWorkBlackDomains = 'blocked.example';
+
+            const result = await (downloader as any).downloadSingleImageInternal(
+                'https://cdn.blocked.example/photo.png',
+                'attachments',
+                'photo.png',
+                mockActiveFile
+            );
+
+            expect(result.success).toBe(false);
+            expect(result.error).toContain('blocked');
+            expect(requestUrl).not.toHaveBeenCalled();
         });
 
         it('Given 网络错误, When 下载, Then 返回错误消息', async () => {
@@ -471,162 +483,307 @@ describe('NetworkImageDownloader', () => {
 
             // notes/test.md -> attachments/photo.png = ../attachments/photo.png
             expect(result.localPath).toBe('../attachments/photo.png');
-        });
-    });
-
-    describe('功能说明和使用场景', () => {
-        it('下载模式说明', () => {
-            /*
-             * NetworkImageDownloader 支持三种下载模式：
-             * 
-             * 1. download-only (仅下载)：
-             *    - 下载图片到本地
-             *    - 不修改笔记中的链接
-             *    - 适用于：备份网络图片
-             * 
-             * 2. download-and-replace (下载并替换)：
-             *    - 下载图片到本地
-             *    - 替换笔记中的网络链接为本地路径
-             *    - 适用于：网络图片本地化
-             * 
-             * 3. replace-only (仅替换)：
-             *    - 不下载图片
-             *    - 查找本地已存在的文件并替换链接
-             *    - 适用于：修复链接、重新关联本地文件
-             */
-            expect(true).toBe(true);
+            expect(result.vaultPath).toBe('attachments/photo.png');
         });
 
-        it('安全验证机制', () => {
-            /*
-             * URL 安全验证规则：
-             * 
-             * 1. 协议白名单：
-             *    - 允许：http, https
-             *    - 拒绝：ftp, file, data, javascript 等
-             * 
-             * 2. 内网地址黑名单：
-             *    - 拒绝 localhost / 127.0.0.1
-             *    - 拒绝 192.168.x.x (C 类私有网络)
-             *    - 拒绝 10.x.x.x (A 类私有网络)
-             *    - 拒绝 172.16-31.x.x (B 类私有网络)
-             *    - 拒绝 169.254.x.x (链路本地地址)
-             * 
-             * 3. 防护目的：
-             *    - 防止 SSRF 攻击
-             *    - 防止访问内网资源
-             *    - 防止恶意协议利用
-             */
-            expect(true).toBe(true);
-        });
+        it('Given batch download succeeds, When returning output, Then includes vaultPath for later replacement and undo', async () => {
+            const pngBuffer = new Uint8Array([137, 80, 78, 71]);
+            (requestUrl as any).mockResolvedValue({
+                status: 200,
+                arrayBuffer: pngBuffer.buffer,
+            });
 
-        it('文件查找策略', () => {
-            /*
-             * findLocalFile() 查找策略（按优先级）：
-             * 
-             * 1. 直接匹配：attachments/image.png
-             * 2. 扩展名匹配：
-             *    - attachments/image.jpg
-             *    - attachments/image.jpeg
-             *    - attachments/image.webp
-             *    - ... 共 8 种扩展名
-             * 3. 序号匹配（1-10）：
-             *    - attachments/image_1.png
-             *    - attachments/image_2.jpg
-             *    - ...
-             * 
-             * 设计理由：
-             * - 图片格式可能变化（PNG 转 JPEG）
-             * - 文件名可能有序号后缀
-             * - 最大化找到匹配文件的概率
-             */
-            expect(true).toBe(true);
-        });
-
-        it('图片类型检测', () => {
-            /*
-             * 使用 image-type 库进行魔数检测：
-             * 
-             * 优势：
-             * - 不依赖文件扩展名
-             * - 检测实际文件格式
-             * - 防止恶意文件伪装
-             * 
-             * 流程：
-             * 1. 下载图片为 ArrayBuffer
-             * 2. 读取文件头魔数（magic bytes）
-             * 3. 识别真实格式并生成正确扩展名
-             * 
-             * 示例：
-             * - URL: https://example.com/photo.jpg
-             * - 实际格式：PNG
-             * - 保存为：photo.png （而非 photo.jpg）
-             */
-            expect(true).toBe(true);
-        });
-
-        it('域名黑名单功能', () => {
-            /*
-             * 域名黑名单配置：
-             * 
-             * 配置格式（换行分隔）：
-             * example.com
-             * bad-site.net
-             * cdn.untrusted.io
-             * 
-             * 匹配规则：
-             * - 部分匹配（包含即过滤）
-             * - 例如："example" 会匹配 "sub.example.com"
-             * 
-             * 使用场景：
-             * - 过滤特定图床（如即将失效的免费图床）
-             * - 过滤不可靠的 CDN
-             * - 过滤广告图片域名
-             */
-            expect(true).toBe(true);
-        });
-    });
-
-    describe('边界情况和错误处理', () => {
-        it('Given 无活动笔记, When 调用 downloadAllNetworkImages, Then 显示提示', async () => {
-            (mockApp.workspace.getActiveFile as any).mockReturnValue(null);
-
-            await downloader.downloadAllNetworkImages();
-
-            // 由于 Notice 被 mock，只验证流程不抛出错误
-            expect(mockApp.workspace.getActiveFile).toHaveBeenCalled();
-        });
-
-        it('Given 笔记无网络图片, When 下载, Then 提前返回', async () => {
-            (mockApp.workspace.getActiveFile as any).mockReturnValue(mockActiveFile);
-            (mockUploadHelper.getAllImageLinks as any).mockReturnValue([
-                { path: 'local/image.png', source: '![](local/image.png)' },
+            const result = await downloader.batchDownload([
+                {
+                    url: 'https://example.com/photo.png',
+                    targetFolder: 'attachments',
+                    suggestedName: 'photo.png',
+                    activeFile: mockActiveFile,
+                },
             ]);
 
-            await downloader.downloadAllNetworkImages();
-
-            expect(mockApp.vault.adapter.writeBinary).not.toHaveBeenCalled();
+            expect(result.successful).toHaveLength(1);
+            expect((result.successful[0].output as any).vaultPath).toBe('attachments/photo.png');
+            expect((result.successful[0].output as any).localPath).toBe('../attachments/photo.png');
         });
 
-        it('Given 所有图片在黑名单中, When 下载, Then 提前返回', async () => {
-            (mockApp.workspace.getActiveFile as any).mockReturnValue(mockActiveFile);
-            (mockUploadHelper.getAllImageLinks as any).mockReturnValue([
-                { path: 'https://bad-site.com/image.png', source: '![](https://bad-site.com/image.png)' },
+        it('preserves a non-Error rejection message from a queued download', async () => {
+            vi.spyOn(downloader, 'downloadSingleImageInternal').mockRejectedValue('network worker unavailable');
+
+            const result = await downloader.batchDownload([
+                {
+                    url: 'https://example.com/photo.png',
+                    targetFolder: 'attachments',
+                    suggestedName: 'photo.png',
+                    activeFile: mockActiveFile,
+                },
             ]);
 
-            mockPlugin.settings.pasteHandling.cloud.newWorkBlackDomains = 'bad-site.com';
-
-            await downloader.downloadAllNetworkImages();
-
-            expect(mockApp.vault.adapter.writeBinary).not.toHaveBeenCalled();
+            expect(result.failed).toHaveLength(1);
+            expect(result.failed[0].error).toBe('network worker unavailable');
         });
 
-        it('Given 根目录笔记, When 计算相对路径, Then 正确处理', () => {
-            mockActiveFile.parent = null;
+        it('classifies fulfilled skipped and failed downloads separately', async () => {
+            vi.spyOn(downloader, 'downloadSingleImageInternal')
+                .mockResolvedValueOnce({
+                    success: false,
+                    skipped: true,
+                    url: 'https://example.com/skipped.png',
+                    error: 'Destination exists'
+                })
+                .mockResolvedValueOnce({
+                    success: false,
+                    url: 'https://example.com/failed.png',
+                    error: 'HTTP 503'
+                });
 
-            const result = (downloader as any).getRelativePath('', 'attachments/image.png');
+            const result = await downloader.batchDownload([
+                {
+                    url: 'https://example.com/skipped.png', targetFolder: 'attachments',
+                    suggestedName: 'skipped.png', activeFile: mockActiveFile
+                },
+                {
+                    url: 'https://example.com/failed.png', targetFolder: 'attachments',
+                    suggestedName: 'failed.png', activeFile: mockActiveFile
+                }
+            ]);
 
-            expect(result).toBe('attachments/image.png');
+            expect(result.skipped).toEqual([expect.objectContaining({
+                item: 'https://example.com/skipped.png', error: 'Destination exists'
+            })]);
+            expect(result.failed).toEqual([expect.objectContaining({
+                item: 'https://example.com/failed.png', error: 'HTTP 503'
+            })]);
+        });
+
+        it('undo deletes a newly created download', async () => {
+            const file = Object.assign(new (TFile as any)(), { path: 'attachments/photo.png', name: 'photo.png' });
+            const pngBuffer = new Uint8Array([137, 80, 78, 71]);
+            (requestUrl as any).mockResolvedValue({ status: 200, arrayBuffer: pngBuffer.buffer });
+            (mockFolderManager.createUniqueBinaryDetailed as any).mockResolvedValue({ file, disposition: 'created' });
+            (mockApp.vault.getAbstractFileByPath as any).mockReturnValue(file);
+
+            const result = await downloader.downloadSingleImageInternal(
+                'https://example.com/photo.png', 'attachments', 'photo.png', mockActiveFile
+            );
+            await downloader.undoDownload(result);
+
+            expect(mockApp.vault.trash).toHaveBeenCalledWith(file, true);
+            expect(mockApp.vault.modifyBinary).not.toHaveBeenCalled();
+        });
+
+        it('undo restores bytes replaced by overwrite', async () => {
+            const file = Object.assign(new (TFile as any)(), { path: 'attachments/photo.png', name: 'photo.png' });
+            const previousData = new Uint8Array([1, 2, 3]).buffer;
+            const pngBuffer = new Uint8Array([137, 80, 78, 71]);
+            (requestUrl as any).mockResolvedValue({ status: 200, arrayBuffer: pngBuffer.buffer });
+            (mockFolderManager.createUniqueBinaryDetailed as any).mockResolvedValue({
+                file,
+                disposition: 'overwritten',
+                previousData
+            });
+            (mockApp.vault.getAbstractFileByPath as any).mockReturnValue(file);
+
+            const result = await downloader.downloadSingleImageInternal(
+                'https://example.com/photo.png', 'attachments', 'photo.png', mockActiveFile
+            );
+            await downloader.undoDownload(result);
+
+            expect(mockApp.vault.modifyBinary).toHaveBeenCalledWith(file, previousData);
+            expect(mockApp.vault.trash).not.toHaveBeenCalled();
+        });
+
+        it('undo keeps a created download when a reference appeared after download', async () => {
+            const file = Object.assign(new (TFile as any)(), { path: 'attachments/photo.png', name: 'photo.png' });
+            const pngBuffer = new Uint8Array([137, 80, 78, 71]).buffer;
+            (requestUrl as any).mockResolvedValue({ status: 200, arrayBuffer: pngBuffer });
+            (mockFolderManager.createUniqueBinaryDetailed as any).mockResolvedValue({ file, disposition: 'created' });
+            (mockApp.vault.getAbstractFileByPath as any).mockReturnValue(file);
+            (mockApp.vault.readBinary as any).mockResolvedValue(pngBuffer);
+            (mockPlugin.vaultReferenceManager.scanReferencesDetailed as any).mockResolvedValue({
+                locations: [{ file: mockActiveFile, start: 0, end: 1, original: '![[attachments/photo.png]]', link: file.path, line: 0 }],
+                complete: true,
+                uncertainFiles: []
+            });
+
+            const result = await downloader.downloadSingleImageInternal(
+                'https://example.com/photo.png', 'attachments', 'photo.png', mockActiveFile
+            );
+
+            await expect(downloader.undoDownload(result)).resolves.toBe(false);
+            expect(mockApp.vault.trash).not.toHaveBeenCalled();
+
+            (mockPlugin.vaultReferenceManager.scanReferencesDetailed as any).mockResolvedValue({
+                locations: [], complete: true, uncertainFiles: []
+            });
+            await expect(downloader.undoDownload(result)).resolves.toBe(true);
+            expect(mockApp.vault.trash).toHaveBeenCalledWith(file, true);
+        });
+
+        it('undo keeps a downloaded file whose bytes changed after download', async () => {
+            const file = Object.assign(new (TFile as any)(), { path: 'attachments/photo.png', name: 'photo.png' });
+            const pngBuffer = new Uint8Array([137, 80, 78, 71]).buffer;
+            (requestUrl as any).mockResolvedValue({ status: 200, arrayBuffer: pngBuffer });
+            (mockFolderManager.createUniqueBinaryDetailed as any).mockResolvedValue({ file, disposition: 'created' });
+            (mockApp.vault.getAbstractFileByPath as any).mockReturnValue(file);
+
+            const result = await downloader.downloadSingleImageInternal(
+                'https://example.com/photo.png', 'attachments', 'photo.png', mockActiveFile
+            );
+            (mockApp.vault.readBinary as any).mockResolvedValue(new Uint8Array([137, 80, 78, 72]).buffer);
+
+            await expect(downloader.undoDownload(result)).resolves.toBe(false);
+            expect(mockApp.vault.trash).not.toHaveBeenCalled();
+        });
+
+        it('undo leaves reused files untouched', async () => {
+            const file = Object.assign(new (TFile as any)(), { path: 'attachments/photo.png', name: 'photo.png' });
+            const pngBuffer = new Uint8Array([137, 80, 78, 71]);
+            (requestUrl as any).mockResolvedValue({ status: 200, arrayBuffer: pngBuffer.buffer });
+            (mockFolderManager.createUniqueBinaryDetailed as any).mockResolvedValue({ file, disposition: 'reused' });
+
+            const result = await downloader.downloadSingleImageInternal(
+                'https://example.com/photo.png', 'attachments', 'photo.png', mockActiveFile
+            );
+            const undone = await downloader.undoDownload(result);
+
+            expect(result.undoToken).toBeUndefined();
+            expect(undone).toBe(true);
+            expect(mockApp.vault.modifyBinary).not.toHaveBeenCalled();
+            expect(mockApp.vault.trash).not.toHaveBeenCalled();
+        });
+
+        it('undo treats a skipped download as a successful no-op', async () => {
+            await expect(downloader.undoDownload({
+                success: false,
+                skipped: true,
+                url: 'https://example.com/photo.png',
+                disposition: 'skipped'
+            })).resolves.toBe(true);
+
+            expect(mockApp.vault.modifyBinary).not.toHaveBeenCalled();
+            expect(mockApp.vault.trash).not.toHaveBeenCalled();
+        });
+
+        it('Given a downloaded vault path, When replacing the current note link, Then delegates path-only replacement to the reference manager', async () => {
+            const downloadedFile = Object.assign(new (TFile as any)(), {
+                path: 'attachments/photo.png',
+                name: 'photo.png'
+            });
+            (mockApp.vault.getAbstractFileByPath as any).mockImplementation(
+                (path: string) => path === downloadedFile.path ? downloadedFile : null
+            );
+            (mockApp.vault.getFiles as any).mockReturnValue([downloadedFile]);
+            (mockApp.metadataCache.fileToLinktext as any).mockReturnValue('attachments/photo.png');
+            (mockPlugin.vaultReferenceManager.updateReferencesInFile as any).mockImplementation(
+                async (_file: TFile, _url: string, replacement: any) => replacement({
+                    original: '![alt](https://example.com/photo.png)',
+                    file: mockActiveFile,
+                    start: 0,
+                    end: 37,
+                    link: 'https://example.com/photo.png',
+                    line: 0,
+                }) ? 1 : 0
+            );
+
+            await (downloader as any).replaceImageLinkInCurrentNote(
+                mockActiveFile,
+                'https://example.com/photo.png',
+                'attachments/photo.png'
+            );
+
+            const replacement = (mockPlugin.vaultReferenceManager.updateReferencesInFile as any).mock.calls[0][2];
+            expect(replacement({
+                original: '![alt](https://example.com/photo.png)',
+                file: mockActiveFile,
+                start: 0,
+                end: 37,
+                link: 'https://example.com/photo.png',
+                line: 0,
+            })).toBe('![[attachments/photo.png|alt]]');
+        });
+
+        it('replaces the current note link even when the context menu was opened in reading view without an editor', async () => {
+            const result = {
+                success: true,
+                url: 'https://example.com/photo.png',
+                vaultPath: 'attachments/photo.png',
+                localPath: '../attachments/photo.png',
+                undoToken: 'single-download-token'
+            };
+            vi.spyOn(downloader, 'downloadSingleImageInternal').mockResolvedValue(result);
+            const replace = vi.spyOn(downloader as any, 'replaceImageLinkInCurrentNote').mockResolvedValue(1);
+            const discard = vi.spyOn(downloader, 'discardDownloadUndo');
+
+            const success = await downloader.downloadSingleImage(
+                'https://example.com/photo.png',
+                mockActiveFile,
+                undefined
+            );
+
+            expect(success).toBe(true);
+            expect(replace).toHaveBeenCalledWith(
+                mockActiveFile,
+                'https://example.com/photo.png',
+                'attachments/photo.png'
+            );
+            expect(mockFolderManager.getDefaultAttachmentFolderPath).toHaveBeenCalledWith(mockActiveFile);
+            expect(mockApp.fileManager.getAvailablePathForAttachment).not.toHaveBeenCalled();
+            expect(discard).toHaveBeenCalledWith(expect.objectContaining({
+                ...result,
+                replaced: 1
+            }));
+        });
+
+        it('reports single-image download failure when the link is no longer present to replace', async () => {
+            const result = {
+                success: true,
+                url: 'https://example.com/photo.png',
+                vaultPath: 'attachments/photo.png',
+                localPath: '../attachments/photo.png',
+                undoToken: 'failed-replacement-token'
+            };
+            vi.spyOn(downloader, 'downloadSingleImageInternal').mockResolvedValue(result);
+            vi.spyOn(downloader as any, 'replaceImageLinkInCurrentNote').mockResolvedValue(0);
+            const discard = vi.spyOn(downloader, 'discardDownloadUndo');
+
+            await expect(downloader.downloadSingleImage(
+                'https://example.com/photo.png', mockActiveFile, undefined
+            )).resolves.toBe(false);
+            expect(discard).toHaveBeenCalledWith(expect.objectContaining({
+                success: false,
+                vaultPath: result.vaultPath,
+                replaced: 0,
+                error: expect.stringContaining('no matching image reference')
+            }));
+        });
+
+        it('returns partial-success details when a downloaded link can no longer be replaced', async () => {
+            const result = {
+                success: true,
+                url: 'https://example.com/photo.png',
+                vaultPath: 'attachments/photo.png',
+                localPath: '../attachments/photo.png',
+                disposition: 'created' as const,
+                undoToken: 'partial-result-token'
+            };
+            vi.spyOn(downloader, 'downloadSingleImageInternal').mockResolvedValue(result);
+            vi.spyOn(downloader as any, 'replaceImageLinkInCurrentNote').mockResolvedValue(0);
+            const discard = vi.spyOn(downloader, 'discardDownloadUndo');
+
+            const detailed = await downloader.downloadSingleImageDetailed(
+                'https://example.com/photo.png', mockActiveFile
+            );
+
+            expect(detailed).toMatchObject({
+                success: false,
+                vaultPath: 'attachments/photo.png',
+                disposition: 'created',
+                replaced: 0
+            });
+            expect(detailed.error).toContain('Downloaded to attachments/photo.png');
+            expect(discard).not.toHaveBeenCalled();
         });
     });
+
 });

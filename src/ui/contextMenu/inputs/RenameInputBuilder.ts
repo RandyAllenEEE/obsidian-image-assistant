@@ -12,7 +12,7 @@ export interface RenameInputs {
     captionInput: HTMLInputElement;
     widthInput: HTMLInputElement;
     heightInput: HTMLInputElement;
-    confirmButton: HTMLDivElement;
+    confirmButton: HTMLButtonElement;
     fileNameWithoutExt: string;
     directoryPath: string;
     fileExtension: string;
@@ -281,8 +281,11 @@ export class RenameInputBuilder extends Component {
         inputContainer.appendChild(alignmentGroup); // Add alignment group
 
         // Add single confirm button
-        const confirmButton = ownerDocument.createElement('div');
+        const confirmButton = ownerDocument.createElement('button');
+        confirmButton.type = 'button';
         confirmButton.className = 'image-converter-contextmenu-button image-converter-contextmenu-confirm';
+        confirmButton.title = t("BUTTON_APPLY");
+        confirmButton.setAttribute('aria-label', t("BUTTON_APPLY"));
         setIcon(confirmButton, 'check');
         inputContainer.appendChild(confirmButton);
 

@@ -1,25 +1,57 @@
 
-import { App, MarkdownView, TFile, Notice } from 'obsidian';
+import { App, debounce, editorLivePreviewField, MarkdownView } from 'obsidian';
 import ImageConverterPlugin from '../main';
-import { ImageAlignment, ImagePositionData } from './ImageAlignment';
+import { ImageAlignment } from './ImageAlignment';
 import { ImageResizer } from './ImageResizer';
 import { ImageCaption } from './ImageCaption';
 import { pipeSyntaxParser, AlignType, PipeSyntaxData } from '../utils/PipeSyntaxParser';
-import { RefinedImageUtils } from '../utils/RefinedImageUtils';
-import { debounce } from 'obsidian';
+import type { ReadingImageContext } from './caption/types';
+import { isElementNode, isHtmlImageElement } from './caption/CaptionDomUtils';
+import { ImageViewContextResolver } from './contextMenu/utils/ImageViewContextResolver';
+import { resolveImageLayout } from './ImageLayoutResolver';
+import {
+    IMAGE_SOURCE_KEY_ATTRIBUTE,
+    type ImageSourceIndex
+} from '../utils/RefinedImageUtils';
+import {
+    clearLivePreviewCaptionGeometry,
+    syncLivePreviewCaptionGeometry
+} from './caption/LivePreviewCaptionGeometry';
+import { collectUsableMarkdownViews, getMarkdownViewMode } from './MarkdownViewRegistry';
+import {
+    LivePreviewImageLayoutCoordinator,
+    type LivePreviewLayoutScope
+} from './caption/LivePreviewImageLayoutCoordinator';
 
 
 export interface ImageState {
     align: 'left' | 'center' | 'right' | 'left-wrap' | 'right-wrap' | 'none';
     wrap: boolean;
+    pipeAlignment?: AlignType;
+    standalone?: boolean;
+    sourceKey?: string;
+    layoutScope?: LivePreviewLayoutScope;
     width?: number | null;
     height?: number | null;
     caption?: string;
 }
 
+type WorkspaceWithLayoutState = App['workspace'] & {
+    layoutReady?: boolean;
+};
+
 export class ImageStateManager {
-    private observer: MutationObserver | null = null;
-    private refinedImageUtils: RefinedImageUtils;
+    private readonly observers = new Map<MarkdownView, MutationObserver>();
+    private readonly layoutCoordinators = new Map<MarkdownView, LivePreviewImageLayoutCoordinator>();
+    private readonly pendingImages = new Map<MarkdownView, Set<HTMLImageElement>>();
+    private readonly scheduledViews = new Set<MarkdownView>();
+    private viewContextResolver: ImageViewContextResolver;
+    private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+    private unloaded = false;
+    private initialized = false;
+    private started = false;
+    private readingLinkTexts = new WeakMap<HTMLImageElement, string>();
+    private readingContexts = new WeakMap<HTMLImageElement, ReadingImageContext>();
 
     // Delegates
     public alignment: ImageAlignment;
@@ -30,108 +62,250 @@ export class ImageStateManager {
         private app: App,
         private plugin: ImageConverterPlugin,
     ) {
-        this.refinedImageUtils = new RefinedImageUtils(this.app);
+        this.viewContextResolver = new ImageViewContextResolver(this.app);
 
         // Initialize delegates
         // Dependencies are injected via initialize() to avoid circular references during plugin load.
     }
 
     public initialize(alignment: ImageAlignment, resizer: ImageResizer | null, caption: ImageCaption) {
+        this.unloaded = false;
         this.alignment = alignment;
         this.resizer = resizer;
         this.caption = caption;
+        this.initialized = true;
+    }
 
+    public start() {
+        if (!this.initialized || this.started || this.unloaded) return;
+        this.started = true;
         this.setupObserver();
     }
 
     private processingImages = new Set<HTMLImageElement>();
 
     private setupObserver() {
-        if (this.observer) this.observer.disconnect();
+        this.syncObservers();
 
-        this.observer = new MutationObserver((mutations) => {
-            // Check if we are already processing this specific image to prevent loops
-            // Global lock is removed to allow parallel processing of different images
-
-            mutations.forEach((mutation) => {
-                if (mutation.type === 'childList') {
-                    mutation.addedNodes.forEach((node) => {
-                        if (node instanceof HTMLImageElement) {
-                            this.processImage(node);
-                        } else if (node instanceof Element) {
-                            node.findAll('img').forEach((img) =>
-                                this.processImage(img as HTMLImageElement)
-                            );
-                        }
-                    });
-                } else if (mutation.type === 'attributes' && mutation.target instanceof HTMLImageElement) {
-                    const img = mutation.target as HTMLImageElement;
-                    if (!this.processingImages.has(img) && !img.hasClass('is-resizing')) {
-                        this.processImage(img);
-                    }
-                }
-            });
-        });
-
-        // Observe active view
-        this.startObserving();
-
-        // Handle view switching
         this.plugin.registerEvent(
             this.app.workspace.on('active-leaf-change', () => {
-                // Determine if we need a longer delay on startup
-                // @ts-ignore
-                if (!this.app.workspace.layoutReady) return;
+                const workspace = this.app.workspace as WorkspaceWithLayoutState;
+                if (!workspace.layoutReady) return;
 
-                // Add a small delay to allow other plugins/Obsidian to settle state
-                setTimeout(() => {
-                    this.startObserving();
+                this.schedule(() => {
+                    this.syncObservers();
                     this.refreshAllImages();
                 }, 200);
             })
         );
+        this.plugin.registerEvent(
+            this.app.workspace.on('layout-change', () => {
+                this.syncObservers();
+                this.scheduleAllLayouts(2);
+            })
+        );
+        this.plugin.registerEvent(
+            this.app.workspace.on('window-open' as never, () => {
+                this.syncObservers();
+                this.scheduleAllLayouts(2);
+            })
+        );
+        this.plugin.registerEvent(
+            this.app.workspace.on('window-close' as never, () => {
+                this.syncObservers();
+                this.scheduleAllLayouts(2);
+            })
+        );
     }
 
-    private startObserving() {
-        const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!markdownView || !this.observer) return;
+    private syncObservers(): void {
+        if (this.unloaded) return;
 
-        // Disconnect first to avoid duplicates
-        this.observer.disconnect();
+        const views = collectUsableMarkdownViews(this.app);
+        const currentViews = new Set(views);
 
-        this.observer.observe(markdownView.contentEl, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['src', 'class', 'alt'] // Watch specific attributes
+        for (const [view, observer] of this.observers) {
+            if (!currentViews.has(view) || !this.isLivePreview(view)) {
+                observer.disconnect();
+                this.observers.delete(view);
+                this.layoutCoordinators.get(view)?.destroy();
+                this.layoutCoordinators.delete(view);
+                this.pendingImages.delete(view);
+                this.scheduledViews.delete(view);
+                if (getMarkdownViewMode(view) !== 'preview') {
+                    this.alignment?.cleanup(view.contentEl);
+                    view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
+                        .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
+                }
+            }
+        }
+
+        for (const view of views) {
+            if (!this.isLivePreview(view)) {
+                if (getMarkdownViewMode(view) !== 'preview') {
+                    this.alignment?.cleanup(view.contentEl);
+                    view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
+                        .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
+                }
+                continue;
+            }
+            if (!this.observers.has(view)) {
+                const Observer = view.contentEl.ownerDocument.defaultView?.MutationObserver
+                    ?? MutationObserver;
+                const observer = new Observer(mutations => this.collectMutatedImages(view, mutations));
+                observer.observe(view.contentEl, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['src', 'alt']
+                });
+                this.observers.set(view, observer);
+
+                // The editor can finish rendering before the manager starts or a
+                // newly opened leaf is observed. Process that first DOM snapshot
+                // through the same batched path used for later mutations.
+                this.queueImages(
+                    view,
+                    Array.from(view.contentEl.querySelectorAll('img')).filter(isHtmlImageElement)
+                );
+            }
+            if (!this.layoutCoordinators.has(view)) {
+                this.layoutCoordinators.set(
+                    view,
+                    new LivePreviewImageLayoutCoordinator(view.contentEl)
+                );
+            }
+        }
+    }
+
+    private collectMutatedImages(view: MarkdownView, mutations: MutationRecord[]): void {
+        if (!this.isLivePreview(view)) return;
+        const images = new Set<HTMLImageElement>();
+
+        const addImage = (img: HTMLImageElement): void => {
+            if (!this.processingImages.has(img) && !img.hasClass('is-resizing')) images.add(img);
+        };
+
+        for (const mutation of mutations) {
+            if (isElementNode(mutation.target)
+                && mutation.target.closest('[data-image-assistant-caption-renderer]')) {
+                continue;
+            }
+            if (mutation.type === 'attributes' && isHtmlImageElement(mutation.target)) {
+                addImage(mutation.target);
+                continue;
+            }
+            if (mutation.type !== 'childList') continue;
+
+            mutation.addedNodes.forEach(node => {
+                if (isHtmlImageElement(node)) {
+                    addImage(node);
+                } else if (isElementNode(node)
+                    && !node.hasAttribute('data-image-assistant-caption-renderer')) {
+                    node.querySelectorAll('img').forEach(img => {
+                        if (isHtmlImageElement(img)) addImage(img);
+                    });
+                }
+            });
+            mutation.removedNodes.forEach(node => {
+                if (isHtmlImageElement(node)) {
+                    this.layoutCoordinators.get(view)?.unregisterImage(node);
+                } else if (isElementNode(node)) {
+                    node.querySelectorAll('img').forEach(image => {
+                        if (isHtmlImageElement(image)) {
+                            this.layoutCoordinators.get(view)?.unregisterImage(image);
+                        }
+                    });
+                }
+            });
+        }
+
+        this.queueImages(view, images);
+    }
+
+    private queueImages(view: MarkdownView, candidates: Iterable<HTMLImageElement>): void {
+        if (!this.isLivePreview(view) || this.unloaded) return;
+
+        let images = this.pendingImages.get(view);
+        if (!images) {
+            images = new Set<HTMLImageElement>();
+            this.pendingImages.set(view, images);
+        }
+        for (const image of candidates) {
+            if (view.contentEl.contains(image)
+                && !this.processingImages.has(image)
+                && !image.hasClass('is-resizing')) {
+                images.add(image);
+            }
+        }
+
+        if (images.size === 0) {
+            this.pendingImages.delete(view);
+            return;
+        }
+        if (this.scheduledViews.has(view)) return;
+        this.scheduledViews.add(view);
+        queueMicrotask(() => {
+            this.scheduledViews.delete(view);
+            const queued = this.pendingImages.get(view);
+            this.pendingImages.delete(view);
+            if (!queued || !this.isLivePreview(view) || this.unloaded) return;
+            const sourceIndex = this.viewContextResolver.prepareEditor(view.editor);
+            queued.forEach(img => {
+                if (view.contentEl.contains(img)) this.processImage(img, sourceIndex);
+            });
         });
+    }
+
+    private isLivePreview(view: MarkdownView): boolean {
+        if (getMarkdownViewMode(view) !== 'source') return false;
+        const editorView = (view.editor as unknown as {
+            cm?: { state?: { field(field: unknown, require?: boolean): unknown } };
+        })?.cm;
+        try {
+            return editorView?.state?.field(editorLivePreviewField, false) === true;
+        } catch {
+            return false;
+        }
     }
 
     public refreshAllImages = debounce(() => {
-        console.log('[ImageStateManager] refreshAllImages called');
-        const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!markdownView) {
-            console.log('[ImageStateManager] No markdown view found');
-            return;
-        }
-
         // Extra safety check for layout readiness
-        // @ts-ignore
-        if (this.app.workspace.layoutReady === false) return;
+        const workspace = this.app.workspace as WorkspaceWithLayoutState;
+        if (workspace.layoutReady === false) return;
 
-        const images = markdownView.contentEl.findAll('img');
-        console.log('[ImageStateManager] Found', images.length, 'images to process');
-        images.forEach((img) => {
-            if (img instanceof HTMLImageElement) {
-                this.processImage(img);
-            }
-        });
+        const views = collectUsableMarkdownViews(this.app);
+
+        for (const markdownView of views) {
+            const mode = getMarkdownViewMode(markdownView);
+            if (!mode) continue;
+            const sourceIndex = mode !== 'preview' && this.isLivePreview(markdownView)
+                ? this.viewContextResolver.prepareEditor(markdownView.editor)
+                : undefined;
+            const images = markdownView.contentEl?.findAll?.('img')
+                ?? Array.from(markdownView.contentEl?.querySelectorAll?.('img') ?? []);
+            images.forEach((img) => {
+                if (isHtmlImageElement(img)) {
+                    if (mode === 'preview') {
+                        this.processReadingModeImage(img);
+                    } else if (this.isLivePreview(markdownView)) {
+                        this.processImage(img, sourceIndex);
+                    } else {
+                        this.alignment.clearImage(img);
+                        img.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
+                        this.caption.removeImage?.(img);
+                    }
+                }
+            });
+        }
+        this.syncObservers();
     }, 300, true);
 
     /**
      * Coordinator method: Gets state from markdown and calls delegates to apply it.
      */
-    public processImage(img: HTMLImageElement) {
+    public processImage(img: HTMLImageElement, sourceIndex?: ImageSourceIndex) {
+        if (!this.initialized) return;
         if (this.processingImages.has(img)) return;
 
         // 1. Check for conflicts
@@ -141,48 +315,49 @@ export class ImageStateManager {
             this.processingImages.add(img);
 
             // 2. Get State
-            const state = this.getImageState(img);
-            if (!state) return;
-
-            // 2.5 Clean alt text immediately for all images
-            if (state.caption) {
-                const currentAlt = img.getAttribute('alt') || '';
-                if (currentAlt !== state.caption && currentAlt.includes('|')) {
-                    img.setAttribute('alt', state.caption);
-                }
+            const state = this.getImageState(img, sourceIndex);
+            if (!state) {
+                this.clearCaptionGeometryForImage(img);
+                this.unregisterLivePreviewLayout(img);
+                this.alignment.clearImage(img);
+                img.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
+                this.caption.removeImage?.(img);
+                return;
             }
 
-            // 3. Delegate: Alignment
-            // Extract base position and wrap from combined align value (e.g., 'left-wrap' -> 'left' + wrap=true)
-            let alignPosition = state.align === 'none' ? this.plugin.settings.alignment.default : state.align;
-            let wrap = state.wrap;
-
-            // Handle combined values like 'left-wrap', 'right-wrap'
-            if (alignPosition.includes('-wrap')) {
-                alignPosition = alignPosition.replace('-wrap', '') as typeof alignPosition;
-                wrap = true;
-            }
-
-            const positionData: any = {
-                position: alignPosition,
-                wrap: wrap,
+            const layout = resolveImageLayout(
+                state.pipeAlignment ?? this.toPipeAlignment(state.align),
+                this.plugin.settings.alignment,
+                state.standalone ?? true
+            );
+            this.alignment.applyLayout(img, layout, {
                 width: state.width?.toString(),
                 height: state.height?.toString()
-            };
-            this.alignment.applyAlignmentToImage(img, positionData);
+            });
 
             // 4. Delegate: Size
             if ((state.width || state.height) && this.resizer) {
                 this.resizer.applySize(img, state.width ?? undefined, state.height ?? undefined);
             }
 
-            if (state.caption) {
-                this.caption.applyCaption(img, state.caption);
+            if (state.sourceKey) {
+                const owner = this.viewContextResolver.resolveOwner(img);
+                if (owner) {
+                    syncLivePreviewCaptionGeometry(owner.view.contentEl, img, state.sourceKey);
+                    this.layoutCoordinators.get(owner.view)?.registerImage(img, state.sourceKey, {
+                        standalone: state.standalone ?? true,
+                        scope: state.layoutScope ?? 'root'
+                    });
+                }
             }
+
+            // Live Preview captions are owned by the CodeMirror StateField.
+            // Never write caption DOM into an editor managed by CodeMirror.
+            this.caption.removeImage?.(img);
         } finally {
             // Short timeout to allow DOM updates to settle before re-enabling observer
             // This prevents immediate re-trigger by the very changes we just made
-            setTimeout(() => {
+            this.schedule(() => {
                 this.processingImages.delete(img);
             }, 0);
         }
@@ -192,68 +367,73 @@ export class ImageStateManager {
      * Specialized processor for Reading Mode (MarkdownPostProcessor).
      * Reads directly from parsed DOM attributes (alt text) instead of Editor lookup.
      */
-    public processReadingModeImage(img: HTMLImageElement) {
+    public processReadingModeImage(
+        img: HTMLImageElement,
+        context: ReadingImageContext = {}
+    ) {
+        if (!this.initialized) return;
         // 1. Check for conflicts
         if (img.hasClass('is-resizing')) return;
 
-        // 2. Parse State from Alt Text (Source of Truth in Reading Mode)
-        const altText = img.getAttribute('alt') || '';
+        const hasLinkText = Object.prototype.hasOwnProperty.call(context, 'linkText');
+        const hasDescriptor = Object.prototype.hasOwnProperty.call(context, 'descriptor');
+        if (hasLinkText) {
+            if (context.linkText) this.readingLinkTexts.set(img, context.linkText);
+            else this.readingLinkTexts.delete(img);
+        }
+        if (hasLinkText || hasDescriptor) {
+            this.readingContexts.set(img, context);
+        }
+        const retainedContext = this.readingContexts.get(img) ?? {};
+        const linkText = hasLinkText
+            ? context.linkText ?? null
+            : retainedContext.linkText ?? this.readingLinkTexts.get(img) ?? null;
+        const descriptor = hasDescriptor
+            ? context.descriptor ?? null
+            : retainedContext.descriptor ?? null;
 
-        // Obsidian's Reading Mode 'alt' attribute varies based on link type:
-        // Wiki: ![[img.png|left|100]] -> alt="100" (Wait, actually it depends on the LAST attribute that is not a size/align?)
-        // Markdown: ![alt|left|100](img.png) -> alt="alt|left|100"
-
-        // Robust strategy: Try parsing as Markdown style first (common for external/local md links).
-        // If it looks like Wiki style (path is actually an attribute), the parser handles it.
-        // We use 'true' for firstPartIsAlt because Obsidian's DOM 'alt' usually strips the path and starts with attributes.
-        const parsed = pipeSyntaxParser.parsePipeAttributes(altText, true);
-
-        // 3. Map to State
-        const state = this.mapPipeDataToState(parsed as any);
-
-        // 3.5 Immediately clean the alt attribute to prevent raw pipe text from showing
-        if (state.caption && state.caption !== altText) {
-            img.setAttribute('alt', state.caption);
-        } else if (!state.caption && altText.includes('|')) {
-            // If no caption but altText contains pipes, clear it (it's all attributes)
-            img.setAttribute('alt', '');
+        // Reading Mode DOM attributes can lose Wiki pipe fields. Prefer the
+        // exact source link supplied by CaptionRenderCoordinator, then retain
+        // the old alt-based fallback for raw HTML and transclusions.
+        const parsed = descriptor?.pipeData ?? (linkText
+            ? pipeSyntaxParser.parsePipeSyntax(linkText, { attributeMode: 'display' })
+            : null)
+            ?? pipeSyntaxParser.parsePipeAttributes(img.getAttribute('alt') || '', true, 'display');
+        if (!parsed) {
+            this.alignment.clearImage(img);
+            this.caption.removeImage?.(img);
+            return;
         }
 
-        // 4. Delegate: Alignment & Layout Fix
-        // For Reading Mode, we MUST ensure the image has correct layout (inline-block) 
-        // to allow side-by-side positioning when aligned.
-        let alignPosition = state.align === 'none' ? this.plugin.settings.alignment.default : state.align;
-        let wrap = state.wrap;
-
-        // Handle combined values like 'left-wrap', 'right-wrap'
-        if (alignPosition.includes('-wrap')) {
-            alignPosition = alignPosition.replace('-wrap', '') as typeof alignPosition;
-            wrap = true;
-        }
-
-        const positionData = {
-            position: alignPosition,
-            wrap: wrap,
+        const standalone = descriptor?.standalone ?? this.isStandaloneDomImage(img);
+        const state = this.mapPipeDataToState(parsed, standalone);
+        const layout = resolveImageLayout(
+            state.pipeAlignment,
+            this.plugin.settings.alignment,
+            standalone
+        );
+        this.alignment.applyLayout(img, layout, {
             width: state.width?.toString(),
             height: state.height?.toString()
-        };
-        this.alignment.applyAlignmentToImage(img, positionData as any);
-        this.alignment.ensureReadingModeLayout(img, alignPosition);
+        });
 
         // 5. Delegate: Size
         if ((state.width || state.height) && this.resizer) {
             this.resizer.applySize(img, state.width ?? undefined, state.height ?? undefined);
         }
 
-        if (state.caption) {
-            this.caption.applyCaption(img, state.caption);
-        }
+        this.caption.renderImage(img, linkText
+            ? { linkText, ...(descriptor ? { descriptor } : {}) }
+            : { captionText: state.caption ?? '', ...(descriptor ? { descriptor } : {}) });
     }
 
     /**
      * Helper to map raw PipeSyntaxData to ImageState
      */
-    private mapPipeDataToState(parsed: PipeSyntaxData): ImageState {
+    private mapPipeDataToState(
+        parsed: Pick<PipeSyntaxData, 'align' | 'size' | 'alt'>,
+        standalone = true
+    ): ImageState {
         let align: ImageState['align'] = 'none';
         let wrap = false;
 
@@ -276,6 +456,8 @@ export class ImageStateManager {
         return {
             align,
             wrap,
+            pipeAlignment: parsed.align ?? null,
+            standalone,
             width: parsed.size?.width,
             height: parsed.size?.height,
             caption: parsed.alt ? parsed.alt.replace(/\\\|/g, '|') : undefined
@@ -285,29 +467,33 @@ export class ImageStateManager {
     /**
      * Reads the current state of the image from the Markdown source.
      */
-    public getImageState(img: HTMLImageElement): ImageState | null {
-        const file = this.app.workspace.getActiveFile();
-        if (!file) return null;
+    public getImageState(img: HTMLImageElement, sourceIndex?: ImageSourceIndex): ImageState | null {
+        const context = this.viewContextResolver.resolve(img, sourceIndex);
+        const linkText = context?.match.linkText;
+        if (!linkText) return null;
 
-        const linkText = this.refinedImageUtils.getImageLinkText(img, file);
-        if (!linkText) return null; // Can't resolve link
-
-        const parsed = pipeSyntaxParser.parsePipeSyntax(linkText);
+        const parsed = context.match.descriptor.pipeData
+            ?? pipeSyntaxParser.parsePipeSyntax(linkText, { attributeMode: 'display' });
         if (!parsed) return null;
 
-        return this.mapPipeDataToState(parsed);
+        if (img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE) !== context.match.sourceKey) {
+            img.setAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE, context.match.sourceKey);
+        }
+        return {
+            ...this.mapPipeDataToState(parsed, context.match.descriptor.standalone),
+            sourceKey: context.match.sourceKey,
+            layoutScope: context.match.descriptor.layoutScope
+        };
     }
 
     /**
      * The Central Writer. Updates the markdown file with new state.
      */
     public async updateState(img: HTMLImageElement, changes: Partial<ImageState>) {
-        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!activeView) return;
-        const editor = activeView.editor;
-
-        const linkText = this.refinedImageUtils.getImageLinkTextFromEditor(img, editor);
-        if (!linkText) return;
+        const context = this.viewContextResolver.resolve(img);
+        if (!context) return;
+        const { view, editor, match: linkMatch } = context;
+        const linkText = linkMatch.linkText;
 
         const parsed = pipeSyntaxParser.parsePipeSyntax(linkText);
         if (!parsed) return;
@@ -332,15 +518,22 @@ export class ImageStateManager {
 
         // 2. Size
         if (changes.width !== undefined || changes.height !== undefined) {
-            if (!parsed.size) parsed.size = { width: undefined, height: undefined, format: 'W' };
+            const width = changes.width !== undefined
+                ? (changes.width === null ? undefined : changes.width)
+                : parsed.size?.width;
+            const height = changes.height !== undefined
+                ? (changes.height === null ? undefined : changes.height)
+                : parsed.size?.height;
 
-            if (changes.width !== undefined) parsed.size.width = changes.width === null ? undefined : changes.width;
-            if (changes.height !== undefined) parsed.size.height = changes.height === null ? undefined : changes.height;
-
-            // Update format logic
-            if (parsed.size.width && parsed.size.height) parsed.size.format = 'WxH';
-            else if (parsed.size.width) parsed.size.format = 'W';
-            else if (parsed.size.height) parsed.size.format = 'xH';
+            if (width || height) {
+                parsed.size = {
+                    width,
+                    height,
+                    format: width && height ? 'WxH' : width ? 'W' : 'xH'
+                };
+            } else {
+                parsed.size = undefined;
+            }
         }
 
         // 3. Caption
@@ -353,33 +546,94 @@ export class ImageStateManager {
         // Rebuild and Write
         const newLinkText = pipeSyntaxParser.buildPipeSyntax(parsed);
 
-        // Use findLinkRange for surgical replacement to avoid "Eating Next Line" issues
-        // and ensure we only touch the exact characters of the link.
-        const range = this.refinedImageUtils.findLinkRange(editor, linkText);
+        // Check if content actually changed to avoid unnecessary writes
+        if (linkText !== newLinkText) {
+            this.app.workspace.onLayoutReady(() => {
+                if (this.unloaded) return;
+                if (view.contentEl && !view.contentEl.contains(img)) return;
+                if (linkMatch.line < 0 || linkMatch.line >= editor.lineCount()) return;
 
-        if (range) {
-            // Check if content actually changed to avoid unnecessary writes
-            if (linkText !== newLinkText) {
-                this.app.workspace.onLayoutReady(() => {
-                    editor.replaceRange(
-                        newLinkText,
-                        { line: range.line, ch: range.start },
-                        { line: range.line, ch: range.end }
-                    );
-                });
-            }
+                const currentLine = editor.getLine(linkMatch.line);
+                if (linkMatch.start < 0 || linkMatch.end > currentLine.length || linkMatch.start > linkMatch.end) return;
+                if (currentLine.slice(linkMatch.start, linkMatch.end) !== linkText) return;
 
-            // Mark as processed to help observer ignore strict echoes if needed
-            img.setAttribute('data-state-processed', 'true');
-        } else {
-            new Notice("Could not find image link in editor to update.");
+                editor.replaceRange(
+                    newLinkText,
+                    { line: linkMatch.line, ch: linkMatch.start },
+                    { line: linkMatch.line, ch: linkMatch.end }
+                );
+            });
         }
+
     }
 
     public onunload() {
-        if (this.observer) {
-            this.observer.disconnect();
-            this.observer = null;
+        this.unloaded = true;
+        this.initialized = false;
+        this.started = false;
+        for (const [view, observer] of this.observers) {
+            observer.disconnect();
+            this.alignment?.cleanup(view.contentEl);
+            view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
+                .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
         }
+        for (const leaf of this.app.workspace?.getLeavesOfType?.('markdown') ?? []) {
+            const contentEl = (leaf.view as MarkdownView)?.contentEl;
+            if (!contentEl) continue;
+            this.alignment?.cleanup(contentEl);
+            contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
+                .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
+        }
+        this.observers.clear();
+        this.layoutCoordinators.forEach(coordinator => coordinator.destroy());
+        this.layoutCoordinators.clear();
+        this.pendingImages.clear();
+        this.scheduledViews.clear();
+        for (const timer of this.pendingTimers) clearTimeout(timer);
+        this.pendingTimers.clear();
+        this.processingImages.clear();
+        this.readingLinkTexts = new WeakMap<HTMLImageElement, string>();
+        this.readingContexts = new WeakMap<HTMLImageElement, ReadingImageContext>();
+        (this.refreshAllImages as typeof this.refreshAllImages & { cancel?: () => void }).cancel?.();
+    }
+
+    private toPipeAlignment(align: ImageState['align']): AlignType {
+        return align === 'none' ? null : align;
+    }
+
+    private isStandaloneDomImage(img: HTMLImageElement): boolean {
+        const host = img.closest('.image-wrapper, .image-embed, .external-embed') ?? img;
+        const parent = host.parentElement;
+        if (!parent) return true;
+        return Array.from(parent.childNodes).every(node =>
+            node === host
+            || node.nodeType === 3 && !node.textContent?.trim()
+            || isElementNode(node)
+                && node.getAttribute('data-image-assistant-caption-renderer') === 'dom'
+        );
+    }
+
+    private clearCaptionGeometryForImage(img: HTMLImageElement): void {
+        const sourceKey = img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
+        if (!sourceKey) return;
+        const owner = this.viewContextResolver.resolveOwner(img);
+        if (owner) clearLivePreviewCaptionGeometry(owner.view.contentEl, sourceKey);
+    }
+
+    private unregisterLivePreviewLayout(img: HTMLImageElement): void {
+        const owner = this.viewContextResolver.resolveOwner(img);
+        if (owner) this.layoutCoordinators.get(owner.view)?.unregisterImage(img);
+    }
+
+    private scheduleAllLayouts(settleFrames: number): void {
+        this.layoutCoordinators.forEach(coordinator => coordinator.schedule(settleFrames));
+    }
+
+    private schedule(callback: () => void, delay: number): void {
+        const timer = setTimeout(() => {
+            this.pendingTimers.delete(timer);
+            callback();
+        }, delay);
+        this.pendingTimers.add(timer);
     }
 }

@@ -1,7 +1,8 @@
-import { App, Modal, Setting, Notice, TFile, ButtonComponent, setIcon } from "obsidian";
+import { App, Modal, Setting, Notice, ButtonComponent } from "obsidian";
 import ImageConverterPlugin from '../main';
 import { t } from '../lang/helpers';
 import { UnusedFileCleaner, CleanupResult, FileReferenceInfo, ReferenceLocation } from "./UnusedFileCleaner";
+import { getErrorMessage } from "./ErrorUtils";
 
 /**
  * 无用文件清理面板
@@ -21,6 +22,7 @@ export class UnusedFileCleanerModal extends Modal {
     // 扫描结果
     private cleanupResult: CleanupResult | null = null;
     private isScanning: boolean = false;
+    private isDeleting = false;
 
     constructor(app: App, plugin: ImageConverterPlugin) {
         super(app);
@@ -84,7 +86,7 @@ export class UnusedFileCleanerModal extends Modal {
 
         // 开始扫描按钮
         const buttonContainer = selectionContainer.createDiv({ cls: "button-container" });
-        const scanButton = new ButtonComponent(buttonContainer)
+        new ButtonComponent(buttonContainer)
             .setButtonText(t("CLEANER_BTN_START_SCAN"))
             .setCta()
             .onClick(() => this.startScan());
@@ -144,12 +146,13 @@ export class UnusedFileCleanerModal extends Modal {
             this.showResults();
         } catch (error) {
             console.error("Scan error:", error);
-            new Notice(t("CLEANER_SCAN_ERROR", [error.message]));
+            const message = getErrorMessage(error);
+            new Notice(t("CLEANER_SCAN_ERROR", [message]));
 
             if (this.statusEl) {
                 this.statusEl.empty();
                 this.statusEl.createEl("p", {
-                    text: t("CLEANER_SCAN_ERROR", [error.message]),
+                    text: t("CLEANER_SCAN_ERROR", [message]),
                     cls: "status-error"
                 });
             }
@@ -188,6 +191,8 @@ export class UnusedFileCleanerModal extends Modal {
         this.resultEl.show();
 
         const { scannedFiles, unreferencedFiles, referencedFiles } = this.cleanupResult;
+        const unknownFiles = this.cleanupResult.unknownFiles ?? [];
+        const scanComplete = this.cleanupResult.scanComplete ?? true;
 
         // 汇总信息
         const summaryEl = this.resultEl.createDiv({ cls: "result-summary" });
@@ -200,6 +205,10 @@ export class UnusedFileCleanerModal extends Modal {
         summaryEl.createEl("p", {
             text: t("CLEANER_RESULT_REF", [referencedFiles.length.toString()]),
             cls: "referenced-count"
+        });
+        summaryEl.createEl("p", {
+            text: t("CLEANER_RESULT_UNKNOWN", [unknownFiles.length.toString()]),
+            cls: "unknown-count"
         });
 
         // 未引用文件列表
@@ -231,12 +240,22 @@ export class UnusedFileCleanerModal extends Modal {
             );
         }
 
+        if (unknownFiles.length > 0) {
+            this.renderFileList(
+                this.resultEl,
+                t("CLEANER_LIST_TITLE_UNKNOWN"),
+                unknownFiles,
+                "unknown-files",
+                true
+            );
+        }
+
         // 更新状态
         if (this.statusEl) {
             this.statusEl.empty();
             this.statusEl.createEl("p", {
-                text: t("CLEANER_STATUS_COMPLETE"),
-                cls: "status-success"
+                text: t(scanComplete ? "CLEANER_STATUS_COMPLETE" : "CLEANER_STATUS_INCOMPLETE"),
+                cls: scanComplete ? "status-success" : "status-warning"
             });
         }
     }
@@ -412,7 +431,8 @@ export class UnusedFileCleanerModal extends Modal {
      * 确认删除
      */
     private async confirmDelete() {
-        if (!this.cleanupResult) return;
+        if (!this.cleanupResult || this.isDeleting) return;
+        this.isDeleting = true;
 
         const filesToDelete = this.cleanupResult.unreferencedFiles.map(info => info.file);
         const trashMode = this.plugin.settings.cleanerSettings.trashMode;
@@ -458,15 +478,18 @@ export class UnusedFileCleanerModal extends Modal {
             }
         } catch (error) {
             console.error("Delete error:", error);
-            new Notice(t("CLEANER_DELETE_ERROR", [error.message]));
+            const message = getErrorMessage(error);
+            new Notice(t("CLEANER_DELETE_ERROR", [message]));
 
             if (this.statusEl) {
                 this.statusEl.empty();
                 this.statusEl.createEl("p", {
-                    text: t("CLEANER_STATUS_DELETE_ERROR", [error.message]),
+                    text: t("CLEANER_STATUS_DELETE_ERROR", [message]),
                     cls: "status-error"
                 });
             }
+        } finally {
+            this.isDeleting = false;
         }
     }
 

@@ -4,6 +4,24 @@ import ImageConverterPlugin from "../main";
 import { t } from "../lang/helpers";
 import { SettingsUIState } from "./types";
 
+interface SecretInputComponent {
+    setValue(value: string): void;
+    onChange(callback: (value: string) => void | Promise<void>): void;
+}
+
+type SecretInputComponentConstructor = new (
+    app: obsidian.App,
+    containerEl: HTMLElement
+) => SecretInputComponent;
+
+type ObsidianWithSecrets = typeof obsidian & {
+    SecretComponent?: SecretInputComponentConstructor;
+};
+
+type AppWithSecretStorage = obsidian.App & {
+    secretStorage?: unknown;
+};
+
 /**
  * 渲染 OCR & LaTeX 设置区域
  * @param containerEl 容器元素
@@ -22,8 +40,8 @@ export function renderOCRSettingsSection(
 
     const settingsContentWrapper = ocrSection.createDiv("settings-section-content");
 
-    // @ts-ignore
-    const SecretComponent = (obsidian as any).SecretComponent;
+    const SecretComponent = (obsidian as ObsidianWithSecrets).SecretComponent;
+    const hasSecretStorage = Boolean((plugin.app as AppWithSecretStorage).secretStorage);
 
     // --- Collapsible Header ---
     const headerSetting = new Setting(ocrSection)
@@ -114,7 +132,7 @@ export function renderOCRSettingsSection(
         .setName(t("SETTING_OCR_APP_ID"))
         .setDesc(t("SETTING_OCR_APP_ID_DESC") + (appIdSecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + appIdSecretId + ")" : ""));
 
-    if ((plugin.app as any).secretStorage && SecretComponent) {
+    if (hasSecretStorage && SecretComponent) {
         try {
             const sc = new SecretComponent(plugin.app, appIdSetting.controlEl);
             sc.setValue(plugin.settings.ocrSettings.simpleTex.appIdSecretId || "");
@@ -125,7 +143,7 @@ export function renderOCRSettingsSection(
         } catch (e) {
             console.error("Failed to initialize SecretComponent for App ID", e);
         }
-    } else if ((plugin.app as any).secretStorage) {
+    } else if (hasSecretStorage) {
         // Fallback to password text if SecretComponent is missing (e.g. older Obsidian)
         // But still use SecretStorage to avoid data.json leakage
         appIdSetting.addText(text => {
@@ -144,7 +162,7 @@ export function renderOCRSettingsSection(
         .setName(t("SETTING_OCR_APP_SECRET"))
         .setDesc(t("SETTING_OCR_APP_SECRET_DESC") + (appSecretSecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + appSecretSecretId + ")" : ""));
 
-    if ((plugin.app as any).secretStorage && SecretComponent) {
+    if (hasSecretStorage && SecretComponent) {
         try {
             const sc = new SecretComponent(plugin.app, appSecretSetting.controlEl);
             sc.setValue(plugin.settings.ocrSettings.simpleTex.appSecretSecretId || "");
@@ -155,7 +173,7 @@ export function renderOCRSettingsSection(
         } catch (e) {
             console.error("Failed to initialize SecretComponent for App Secret", e);
         }
-    } else if ((plugin.app as any).secretStorage) {
+    } else if (hasSecretStorage) {
         appSecretSetting.addText(text => {
             text.setPlaceholder(t("SETTING_OCR_APP_SECRET"))
                 .setValue(plugin.settings.ocrSettings.simpleTex.appSecretSecretId || "")
@@ -172,7 +190,7 @@ export function renderOCRSettingsSection(
         .setName(t("SETTING_OCR_TOKEN"))
         .setDesc(t("SETTING_OCR_TOKEN_DESC") + (tokenSecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + tokenSecretId + ")" : ""));
 
-    if ((plugin.app as any).secretStorage && SecretComponent) {
+    if (hasSecretStorage && SecretComponent) {
         try {
             const sc = new SecretComponent(plugin.app, tokenSetting.controlEl);
             sc.setValue(plugin.settings.ocrSettings.simpleTex.tokenSecretId || "");
@@ -183,7 +201,7 @@ export function renderOCRSettingsSection(
         } catch (e) {
             console.error("Failed to initialize SecretComponent for Token", e);
         }
-    } else if ((plugin.app as any).secretStorage) {
+    } else if (hasSecretStorage) {
         tokenSetting.addText(text => {
             text.setPlaceholder(t("SETTING_OCR_TOKEN"))
                 .setValue(plugin.settings.ocrSettings.simpleTex.tokenSecretId || "")
@@ -206,6 +224,27 @@ export function renderOCRSettingsSection(
             .setValue(plugin.settings.ocrSettings.pix2tex.url)
             .onChange(async v => { plugin.settings.ocrSettings.pix2tex.url = v; await plugin.saveSettings(); })
         );
+    new Setting(settingsContentWrapper)
+        .setName(t("SETTING_OCR_USERNAME"))
+        .setDesc(t("SETTING_OCR_USERNAME_DESC"))
+        .addText(text => text
+            .setValue(plugin.settings.ocrSettings.pix2tex.username)
+            .onChange(async value => {
+                plugin.settings.ocrSettings.pix2tex.username = value;
+                await plugin.saveSettings();
+            })
+        );
+    const pix2texPasswordSetting = new Setting(settingsContentWrapper)
+        .setName(t("SETTING_OCR_PASSWORD"))
+        .setDesc(t("SETTING_OCR_PASSWORD_DESC"));
+    if (hasSecretStorage && SecretComponent) {
+        const component = new SecretComponent(plugin.app, pix2texPasswordSetting.controlEl);
+        component.setValue(plugin.settings.ocrSettings.pix2tex.passwordSecretId || "");
+        component.onChange(async (id: string) => {
+            plugin.settings.ocrSettings.pix2tex.passwordSecretId = id;
+            await plugin.saveSettings();
+        });
+    }
 
     // --- Texify Config ---
     settingsContentWrapper.createEl("div", { text: t("SETTING_OCR_TEXIFY_SETTINGS"), cls: "setting-item-heading" });
@@ -217,6 +256,27 @@ export function renderOCRSettingsSection(
             .setValue(plugin.settings.ocrSettings.texify.url)
             .onChange(async v => { plugin.settings.ocrSettings.texify.url = v; await plugin.saveSettings(); })
         );
+    new Setting(settingsContentWrapper)
+        .setName(t("SETTING_OCR_USERNAME"))
+        .setDesc(t("SETTING_OCR_USERNAME_DESC"))
+        .addText(text => text
+            .setValue(plugin.settings.ocrSettings.texify.username)
+            .onChange(async value => {
+                plugin.settings.ocrSettings.texify.username = value;
+                await plugin.saveSettings();
+            })
+        );
+    const texifyPasswordSetting = new Setting(settingsContentWrapper)
+        .setName(t("SETTING_OCR_PASSWORD"))
+        .setDesc(t("SETTING_OCR_PASSWORD_DESC"));
+    if (hasSecretStorage && SecretComponent) {
+        const component = new SecretComponent(plugin.app, texifyPasswordSetting.controlEl);
+        component.setValue(plugin.settings.ocrSettings.texify.passwordSecretId || "");
+        component.onChange(async (id: string) => {
+            plugin.settings.ocrSettings.texify.passwordSecretId = id;
+            await plugin.saveSettings();
+        });
+    }
 
 
     // --- LLM Config ---
@@ -265,7 +325,7 @@ export function renderOCRSettingsSection(
         .setName(t("SETTING_OCR_LLM_KEY"))
         .setDesc(t("SETTING_OCR_LLM_KEY_DESC") + (apiKeySecretId ? " (" + t("SETTING_OCR_LINKED_ID") + ": " + apiKeySecretId + ")" : "") + (isOllama ? t("SETTING_OCR_LLM_KEY_OPTIONAL") : ""));
 
-    if ((plugin.app as any).secretStorage && SecretComponent) {
+    if (hasSecretStorage && SecretComponent) {
         try {
             const sc = new SecretComponent(plugin.app, matchSetting.controlEl);
             sc.setValue(plugin.settings.ocrSettings.aiModel.apiKeySecretId || "");
@@ -276,7 +336,7 @@ export function renderOCRSettingsSection(
         } catch (e) {
             console.error("Failed to initialize SecretComponent for LLM Key", e);
         }
-    } else if ((plugin.app as any).secretStorage) {
+    } else if (hasSecretStorage) {
         matchSetting.addText(text => {
             text.setPlaceholder(t("SETTING_OCR_LLM_KEY"))
                 .setValue(plugin.settings.ocrSettings.aiModel.apiKeySecretId || "")

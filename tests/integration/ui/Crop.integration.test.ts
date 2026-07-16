@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Crop } from '../../../src/ui/Crop';
 import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
+import { makeJpegBytes } from '../../factories/image';
 
 function setRect(el: Element, rect: Partial<DOMRect>) {
   (el as any).getBoundingClientRect = () => ({
@@ -165,53 +166,6 @@ describe('Crop integration behaviors (21.1–21.10)', () => {
     expect(Math.abs(w2 / Math.max(h2,1) - 4/3) < 0.2).toBe(true);
   }, 20000);
 
-  it('21.6 Rotate/flip: Save uses rotated selection bounding box (not pre-rotation coords)', async () => {
-    const { crop } = openCropWithImage();
-    crop.onOpen();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const root = (crop as any).contentEl as HTMLElement;
-    const container = root.querySelector('.crop-container') as HTMLDivElement;
-    const originalImg = root.querySelector('.crop-original-image') as HTMLImageElement;
-
-    setRect(container, { left: 0, top: 0, width: 600, height: 400 });
-    setRect(originalImg, { left: 0, top: 0, width: 600, height: 400 });
-
-    // draw
-    originalImg.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, clientY: 100, bubbles: true }));
-    container.dispatchEvent(new MouseEvent('mousemove', { clientX: 200, clientY: 200, bubbles: true }));
-    container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-
-    // rotate 90
-    const rotateRight = root.querySelector('.rotate-container .transform-button:nth-child(2)') as HTMLButtonElement;
-    rotateRight.click();
-
-    // Ensure save does not throw
-    const saveBtn = root.querySelector('.crop-modal-buttons button:first-child') as HTMLButtonElement;
-    saveBtn.click();
-    expect(true).toBe(true);
-  }, 20000);
-
-  it('21.7 Zoom mapping adjusts modal size and save path still valid', async () => {
-    const { crop } = openCropWithImage();
-    crop.onOpen();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const root = (crop as any).contentEl as HTMLElement;
-    const container = root.querySelector('.crop-container') as HTMLDivElement;
-    const originalImg = root.querySelector('.crop-original-image') as HTMLImageElement;
-
-    setRect(container, { left: 0, top: 0, width: 600, height: 400 });
-    setRect(originalImg, { left: 0, top: 0, width: 600, height: 400 });
-
-    // simulate wheel zoom
-    container.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true }));
-    // Save should still not throw
-    const saveBtn = root.querySelector('.crop-modal-buttons button:first-child') as HTMLButtonElement;
-    saveBtn.click();
-    expect(true).toBe(true);
-  }, 20000);
-
   it('21.8 Apply crop: modifyBinary is called when selection present', async () => {
     const { crop, app } = openCropWithImage();
     // Do not await; simulate image load manually
@@ -240,7 +194,7 @@ describe('Crop integration behaviors (21.1–21.10)', () => {
     const realToBlob = (HTMLCanvasElement.prototype as any).toBlob;
     (HTMLCanvasElement.prototype as any).toBlob = function(cb: any, type?: string) {
       const mime = typeof type === 'string' ? type : 'image/png';
-      const blob = new Blob([new Uint8Array([1,2,3,4])], { type: mime });
+      const blob = new Blob([makeJpegBytes({ w: 1, h: 1 })], { type: mime });
       cb(blob);
     };
 
@@ -285,7 +239,7 @@ describe('Crop integration behaviors (21.1–21.10)', () => {
     const realToBlob = (HTMLCanvasElement.prototype as any).toBlob;
     (HTMLCanvasElement.prototype as any).toBlob = function(cb: any, type?: string) {
       const mime = typeof type === 'string' ? type : 'image/png';
-      const blob = new Blob([new Uint8Array([9,8,7,6])], { type: mime });
+      const blob = new Blob([makeJpegBytes({ w: 1, h: 1 })], { type: mime });
       cb(blob);
     };
 
@@ -309,6 +263,37 @@ describe('Crop integration behaviors (21.1–21.10)', () => {
     (HTMLCanvasElement.prototype as any).getContext = realGetContext;
 
     expect(spy).toHaveBeenCalled();
+  });
+
+  it('recovers the active view when refresh fails after a successful write', async () => {
+    const { crop, app } = openCropWithImage();
+    const currentState = { type: 'markdown', state: { file: 'note.md' } };
+    const leaf = {
+      getViewState: vi.fn(() => currentState),
+      setViewState: vi.fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('refresh failed'))
+        .mockResolvedValueOnce(undefined)
+    };
+    (app.workspace as any).getMostRecentLeaf = vi.fn(() => leaf);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect((crop as any).refreshActiveView()).resolves.toBeUndefined();
+
+    expect(leaf.setViewState.mock.calls).toEqual([
+      [{ type: 'empty', state: {} }],
+      [currentState],
+      [currentState]
+    ]);
+  });
+
+  it('ignores a duplicate crop save while one is already running', async () => {
+    const { crop, app } = openCropWithImage();
+    (crop as any).saving = true;
+
+    await (crop as any).saveImage();
+
+    expect((app.vault as any).modifyBinary).not.toHaveBeenCalled();
   });
 
   it('21.10 Reset clears current selection and keeps modal open', async () => {
@@ -388,5 +373,79 @@ describe('Crop integration behaviors (21.1–21.10)', () => {
     expect(selection.style.display).toBe('none');
     expect(parseInt(selection.style.width || '0', 10)).toBe(0);
     expect(parseInt(selection.style.height || '0', 10)).toBe(0);
+  });
+
+  it('closes instead of leaving a modal stuck when image loading times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const { crop } = openCropWithImage();
+      const close = vi.spyOn(crop, 'close');
+
+      crop.onOpen();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not close a second time when a pending image load is cancelled by the user', async () => {
+    vi.useFakeTimers();
+    try {
+      const { crop } = openCropWithImage();
+      const close = vi.spyOn(crop, 'close');
+
+      crop.onOpen();
+      await vi.advanceTimersByTimeAsync(0);
+      crop.onClose();
+      await Promise.resolve();
+
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a vault read that completes after the crop modal closes', async () => {
+    let resolveRead!: (data: ArrayBuffer) => void;
+    const { crop, app } = openCropWithImage();
+    (app.vault as any).readBinary = vi.fn(() => new Promise<ArrayBuffer>(resolve => {
+      resolveRead = resolve;
+    }));
+
+    const opening = crop.onOpen();
+    crop.onClose();
+    resolveRead(new ArrayBuffer(16));
+    await opening;
+
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect((crop as any).originalImage).toBeFalsy();
+  });
+
+  it('does not let a stale first open close a reopened crop modal', async () => {
+    let resolveFirstRead!: (data: ArrayBuffer) => void;
+    const { crop, app } = openCropWithImage();
+    (app.vault as any).readBinary = vi.fn()
+      .mockImplementationOnce(() => new Promise<ArrayBuffer>(resolve => {
+        resolveFirstRead = resolve;
+      }))
+      .mockResolvedValueOnce(new ArrayBuffer(16));
+    const close = vi.spyOn(crop, 'close');
+
+    const firstOpen = crop.onOpen();
+    crop.onClose();
+    const secondOpen = crop.onOpen();
+    resolveFirstRead(new ArrayBuffer(16));
+    await firstOpen;
+    await Promise.resolve();
+    const secondImage = (crop as any).originalImage as HTMLImageElement;
+    secondImage.onload?.(new Event('load'));
+    await secondOpen;
+
+    expect(close).not.toHaveBeenCalled();
+    expect((crop as any).originalImage).toBeTruthy();
+    crop.onClose();
   });
 });

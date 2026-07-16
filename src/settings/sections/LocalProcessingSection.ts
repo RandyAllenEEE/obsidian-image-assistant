@@ -204,6 +204,18 @@ function renderConversion(container: HTMLElement, context: RenderContext): void 
             });
     }
 
+    if (["PNGQUANT", "AVIF"].includes(conversion.outputFormat)) {
+        new Setting(container)
+            .setName(t("SETTING_USE_DIRECT_VAULT_PATH"))
+            .setDesc(t("SETTING_USE_DIRECT_VAULT_PATH_DESC"))
+            .addToggle(toggle => toggle
+                .setValue(tools.useSystemPathForBinary)
+                .onChange(async value => {
+                    tools.useSystemPathForBinary = value;
+                    await context.plugin.saveSettings();
+                }));
+    }
+
     if (conversion.outputFormat === "PNGQUANT") {
         new Setting(container)
             .setName(t("MODAL_PNGQUANT_PATH"))
@@ -431,22 +443,19 @@ function renderLink(container: HTMLElement, context: RenderContext): void {
                 .onChange(async value => {
                     link.pathFormat = value as any;
                     await context.plugin.saveSettings();
+                    context.refreshDisplay();
                 });
         });
 
-    new Setting(container)
-        .setName(t("LABEL_PREPEND_CURRENT_DIR"))
-        .addToggle(toggle => toggle.setValue(link.prependCurrentDir).onChange(async value => {
-            link.prependCurrentDir = value;
-            await context.plugin.saveSettings();
-        }));
-
-    new Setting(container)
-        .setName(t("LABEL_HIDE_FOLDERS"))
-        .addToggle(toggle => toggle.setValue(link.hideFolders).onChange(async value => {
-            link.hideFolders = value;
-            await context.plugin.saveSettings();
-        }));
+    if (link.pathFormat === "relative") {
+        new Setting(container)
+            .setName(t("LABEL_PREPEND_CURRENT_DIR"))
+            .setDesc(t("LABEL_PREPEND_CURRENT_DIR_DESC"))
+            .addToggle(toggle => toggle.setValue(link.prependCurrentDir).onChange(async value => {
+                link.prependCurrentDir = value;
+                await context.plugin.saveSettings();
+            }));
+    }
 }
 
 function renderEmbedResize(container: HTMLElement, context: RenderContext): void {
@@ -474,26 +483,32 @@ function renderEmbedResize(container: HTMLElement, context: RenderContext): void
         });
 
     if (["width", "both"].includes(resize.resizeDimension)) {
-        addNumberSetting(container, t("LABEL_WIDTH"), resize.width || 0, async value => {
+        addNumberSetting(container, t("LABEL_WIDTH"), resize.width, async value => {
             resize.width = value;
             await context.plugin.saveSettings();
         });
     }
     if (["height", "both"].includes(resize.resizeDimension)) {
-        addNumberSetting(container, t("LABEL_HEIGHT"), resize.height || 0, async value => {
+        addNumberSetting(container, t("LABEL_HEIGHT"), resize.height, async value => {
             resize.height = value;
             await context.plugin.saveSettings();
         });
     }
     if (resize.resizeDimension === "longest-edge") {
-        addNumberSetting(container, t("MODAL_DESIRED_LONG"), resize.longestEdge || 0, async value => {
+        addNumberSetting(container, t("MODAL_DESIRED_LONG"), resize.longestEdge, async value => {
             resize.longestEdge = value;
             await context.plugin.saveSettings();
         });
     }
     if (resize.resizeDimension === "shortest-edge") {
-        addNumberSetting(container, t("MODAL_DESIRED_SHORT"), resize.shortestEdge || 0, async value => {
+        addNumberSetting(container, t("MODAL_DESIRED_SHORT"), resize.shortestEdge, async value => {
             resize.shortestEdge = value;
+            await context.plugin.saveSettings();
+        });
+    }
+    if (resize.resizeDimension === "editor-max-width") {
+        addNumberSetting(container, t("SETTING_EDITOR_MAX_WIDTH_VALUE"), resize.editorMaxWidthValue, async value => {
+            resize.editorMaxWidthValue = value;
             await context.plugin.saveSettings();
         });
     }
@@ -531,6 +546,18 @@ function renderEmbedResize(container: HTMLElement, context: RenderContext): void
             resize.maintainAspectRatio = value;
             await context.plugin.saveSettings();
         }));
+
+    if (resize.resizeDimension !== "none") {
+        new Setting(container)
+            .setName(t("SETTING_RESPECT_EDITOR_MAX_WIDTH"))
+            .setDesc(t("SETTING_RESPECT_EDITOR_MAX_WIDTH_DESC"))
+            .addToggle(toggle => toggle
+                .setValue(resize.respectEditorMaxWidth)
+                .onChange(async value => {
+                    resize.respectEditorMaxWidth = value;
+                    await context.plugin.saveSettings();
+                }));
+    }
 }
 
 function getActiveAvifEncoder(tools: LocalExternalToolSettings): AvifEncoder | undefined {
@@ -570,11 +597,11 @@ function getAvifPresetOptions(encoder?: AvifEncoder, currentPreset: string = "")
         : options;
 }
 
-function addNumberSetting(container: HTMLElement, name: string, value: number, onChange: (value: number) => Promise<void>): void {
+function addNumberSetting(container: HTMLElement, name: string, value: number | undefined, onChange: (value: number) => Promise<void>): void {
     new Setting(container)
         .setName(name)
         .addText(text => {
-            text.setValue(String(value))
+            text.setValue(value === undefined ? "" : String(value))
                 .onChange(async rawValue => {
                     await onChange(parseInt(rawValue, 10) || 0);
                 });

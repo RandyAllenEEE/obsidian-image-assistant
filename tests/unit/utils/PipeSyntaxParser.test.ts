@@ -153,5 +153,68 @@ describe('PipeSyntaxParser Exhaustive Tests', () => {
             expect(res.align).toBe('right');
             expect(res.size).toEqual({ width: 300, format: 'W' });
         });
+
+        it('should support display-mode Markdown attributes in any order', () => {
+            const res = parser.parsePipeAttributes('right|300|Caption', true, 'display');
+            expect(res.alt).toBe('Caption');
+            expect(res.align).toBe('right');
+            expect(res.size).toEqual({ width: 300, format: 'W' });
+        });
+
+        it('should preserve plain one-part Markdown alt text in display mode', () => {
+            const res = parser.parsePipeAttributes('left', true, 'display');
+            expect(res.alt).toBe('left');
+            expect(res.align).toBeNull();
+        });
+
+        it('should treat one-part Wiki align text as an attribute in display mode', () => {
+            const res = parser.parsePipeAttributes('left', false, 'display');
+            expect(res.alt).toBe(' ');
+            expect(res.align).toBe('left');
+        });
+
+        it('should unescape pipes when extracting display captions', () => {
+            const res = parser.parsePipeAttributes('Caption\\|with pipe|300', true, 'display');
+            expect(res.alt).toBe('Caption|with pipe');
+            expect(res.size).toEqual({ width: 300, format: 'W' });
+        });
+    });
+
+    describe('5. Markdown destinations', () => {
+        it('should parse angle-bracketed paths with spaces', () => {
+            const res = parser.parsePipeSyntax('![Caption](<images/my photo.png>)');
+            expect(res?.path).toBe('images/my photo.png');
+            expect(parser.buildPipeSyntax(res!)).toBe('![Caption](<images/my photo.png>)');
+        });
+
+        it('should parse and preserve Markdown titles', () => {
+            const res = parser.parsePipeSyntax('![Caption|right|300](https://example.com/a.png "A title")');
+            expect(res?.path).toBe('https://example.com/a.png');
+            expect(res?.title).toBe('A title');
+            expect(parser.buildPipeSyntax(res!)).toBe('![Caption|right|300](https://example.com/a.png "A title")');
+        });
+
+        it('should parse Markdown display links with size, align, and caption in any order', () => {
+            const res = parser.parsePipeSyntax(`![${align}|${sizeStr}|${alt}](${onlineUrl})`, {
+                attributeMode: 'display'
+            });
+            expect(res?.path).toBe(onlineUrl);
+            expect(res?.alt).toBe(alt);
+            expect(res?.align).toBe(align);
+            expect(res?.size).toEqual(sizeObj);
+        });
+    });
+
+    describe('6. Link extraction positions', () => {
+        it('should keep distinct indexes for repeated identical links on one line', () => {
+            const text = '![[a.png]] text ![[a.png]]';
+            const links = parser.extractAllLinks(text);
+
+            expect(links).toHaveLength(2);
+            expect(links.map(link => link.index)).toEqual([
+                0,
+                text.lastIndexOf('![[a.png]]')
+            ]);
+        });
     });
 });

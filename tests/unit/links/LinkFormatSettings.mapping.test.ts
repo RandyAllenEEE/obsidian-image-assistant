@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { LinkFormatter } from '../../../src/utils/LinkFormatter';
-import { type LinkFormatPreset, type PathFormat } from '../../../src/settings/LinkFormatSettings';
+import { type LinkFormatOptions, type PathFormat } from '../../../src/settings/LinkFormatSettings';
 import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
+
+type LinkFormatPreset = LinkFormatOptions & { name: string };
 
 function makeAppWithFile(path: string) {
   const file = fakeTFile({ path });
@@ -18,8 +20,7 @@ describe('LinkFormatSettings → LinkFormatter mapping', () => {
       name: 'Wikilink Shortest',
       linkFormat: 'wikilink',
       pathFormat: 'shortest',
-      prependCurrentDir: false,
-      hideFolders: false
+      prependCurrentDir: false
     };
     const out = await formatter.formatLink(file.path, wikilinkPreset.linkFormat, wikilinkPreset.pathFormat as PathFormat, null, null);
     expect(out).toBe('![[pic.png]]');
@@ -32,8 +33,7 @@ describe('LinkFormatSettings → LinkFormatter mapping', () => {
       name: 'Markdown Absolute',
       linkFormat: 'markdown',
       pathFormat: 'absolute',
-      prependCurrentDir: false,
-      hideFolders: false
+      prependCurrentDir: false
     };
     const out = await formatter.formatLink(file.path, preset.linkFormat, preset.pathFormat as PathFormat, null, null);
     expect(out).toBe('![](/img/pic.png)');
@@ -62,13 +62,13 @@ describe('LinkFormatSettings → LinkFormatter mapping', () => {
     ).rejects.toThrow('Cannot format relative path without an active file.');
   });
 
-  it('19.4 Markdown encoding: spaces encoded, others unchanged', async () => {
+  it('19.4 Markdown encoding: reserved path characters are encoded', async () => {
     const { app } = makeAppWithFile('a/My File(1)#v2.png');
     const formatter = new LinkFormatter(app);
     // Adjust filename in vault to include spaces/special chars
     (app.vault.getAbstractFileByPath as any) = vi.fn(() => fakeTFile({ path: 'a/My File(1)#v2.png' }));
     const out = await formatter.formatLink('a/My File(1)#v2.png', 'markdown', 'absolute', null, null);
-    expect(out).toBe('![](/a/My%20File(1)#v2.png)');
+    expect(out).toBe('![](/a/My%20File%281%29%23v2.png)');
   });
 
   it('19.5 No extra HTML attributes are added; alt only carries resize when provided', async () => {

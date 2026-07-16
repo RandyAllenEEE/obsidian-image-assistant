@@ -1,5 +1,5 @@
-import { Setting, setIcon } from "obsidian";
-import { BatchTask } from "../../../../types/BatchTypes";
+import { Setting } from "obsidian";
+import { BatchDiscoveryDiagnostics, BatchTask } from "../../../../types/BatchTypes";
 import { t } from "../../../../lang/helpers";
 
 export class TaskRenderer {
@@ -7,8 +7,26 @@ export class TaskRenderer {
 
     constructor() { }
 
-    public render(container: HTMLElement, tasks: BatchTask[]): void {
+    public render(
+        container: HTMLElement,
+        tasks: BatchTask[],
+        discovery?: BatchDiscoveryDiagnostics
+    ): void {
         container.empty();
+
+        if (discovery && !discovery.complete) {
+            const warning = container.createDiv("batch-discovery-warning");
+            warning.createEl("strong", { text: t("BATCH_DISCOVERY_INCOMPLETE") });
+            const details = warning.createEl("details");
+            details.createEl("summary", {
+                text: t("BATCH_DISCOVERY_ISSUE_COUNT", [
+                    (discovery.failedFiles.length + discovery.uncertainFiles.length).toString()
+                ])
+            });
+            const list = details.createEl("ul");
+            [...new Set([...discovery.failedFiles, ...discovery.uncertainFiles])]
+                .forEach(message => list.createEl("li", { text: message }));
+        }
 
         if (tasks.length === 0) {
             container.createDiv({ cls: "batch-empty", text: t("BATCH_NO_ITEMS") });

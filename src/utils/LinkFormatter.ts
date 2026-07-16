@@ -2,18 +2,24 @@ import { App, TFile, Notice, MarkdownView } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { LinkFormat, PathFormat } from "../settings/LinkFormatSettings";
 import { EmbedResizeSettings, ResizeScaleMode, ResizeUnits } from "../settings/NonDestructiveResizeSettings";
+import { loadImage } from "./ImageLoadUtils";
+import { LocalImageReferenceSerializer } from "./LocalImageReferenceSerializer";
 
 
 export class LinkFormatter {
+    private readonly referenceSerializer: LocalImageReferenceSerializer;
 
-    constructor(private app: App) { }
+    constructor(private app: App) {
+        this.referenceSerializer = new LocalImageReferenceSerializer(app);
+    }
 
     async formatLink(
         linkPath: string,
         linkFormat: LinkFormat,
         pathFormat: PathFormat,
         activeFile: TFile | null,
-        embedResize?: EmbedResizeSettings | null
+        embedResize?: EmbedResizeSettings | null,
+        prependCurrentDir = true
     ): Promise<string> {
         if (!linkPath) {
             throw new Error("Link path cannot be empty.");
@@ -27,12 +33,9 @@ export class LinkFormatter {
             throw new Error(`No file found at path: ${linkPath}`);
         }
 
-        const formattedPath = this.formatPath(
-            file,
-            linkFormat,
-            pathFormat,
-            activeFile
-        );
+        if (pathFormat === "relative" && !activeFile) {
+            throw new Error("Cannot format relative path without an active file.");
+        }
 
         let resizeParams = "";
         if (embedResize) {
@@ -42,88 +45,12 @@ export class LinkFormatter {
             );
         }
 
-        return linkFormat === "wikilink"
-            ? `![[${formattedPath}${resizeParams}]]`
-            : `![${resizeParams}](${this.encodeMarkdownPath(formattedPath)})`;
-    }
-
-    private encodeMarkdownPath(path: string): string {
-        return path.replace(/\s/g, '%20');
-    }
-
-    private formatPath(
-        file: TFile,
-        linkFormat: LinkFormat,
-        pathFormat: PathFormat,
-        activeFile: TFile | null
-    ): string {
-        switch (pathFormat) {
-            case "shortest":
-                return file.name
-            case "absolute":
-                return this.formatAbsolutePath(file);
-            case "relative":
-                return this.formatRelativePath(file, activeFile);
-            default:
-                throw new Error(`Invalid path format: ${pathFormat}`);
-        }
-    }
-
-
-    private formatAbsolutePath(file: TFile): string {
-        return `/${file.path}`; // Add the leading slash back
-    }
-
-    private formatRelativePath(file: TFile, activeFile: TFile | null): string {
-        if (!activeFile) {
-            throw new Error("Cannot format relative path without an active file.");
-        }
-
-        if (!activeFile.parent) {
-            throw new Error("Active file does not have a parent directory.");
-        }
-
-        const relativePath = this.getRelativePath(activeFile.path, file.path);
-
-        // Always ensure we have either ./ or ../ prefix
-        if (!relativePath.startsWith('../') && !relativePath.startsWith('./')) {
-            return `./${relativePath}`;
-        }
-
-        return relativePath;
-    }
-
-    // Helper function to calculate relative path (can be made static)
-    private getRelativePath(fromPath: string, toPath: string): string {
-        const fromParts = fromPath.split("/").slice(0, -1); // Remove filename
-        const toParts = toPath.split("/");
-
-        // Find common path segments
-        let commonCounter = 0;
-        while (commonCounter < fromParts.length && commonCounter < toParts.length) {
-            if (fromParts[commonCounter] !== toParts[commonCounter]) {
-                break;
-            }
-            commonCounter++;
-        }
-
-        // Build the relative path
-        let relativePath = "";
-
-        // Add "../" for each level we need to go up
-        for (let i = commonCounter; i < fromParts.length; i++) {
-            relativePath += "../";
-        }
-
-        // Add the remaining path to the target
-        relativePath += toParts.slice(commonCounter).join("/");
-
-        // If we're in the same directory, prefix with "./"
-        if (relativePath === toParts[toParts.length - 1]) {
-            relativePath = `./${relativePath}`;
-        }
-
-        return relativePath;
+        return this.referenceSerializer.serialize({
+            target: file,
+            sourceFile: activeFile ?? file,
+            settings: { linkFormat, pathFormat, prependCurrentDir },
+            attributes: linkFormat === "wikilink" ? resizeParams.replace(/^\|/, "") : resizeParams
+        });
     }
 
 
@@ -183,7 +110,18 @@ export class LinkFormatter {
                 }
                 break;
             case "both":
-                if (embedResize.customValue) {
+                if (embedResize.width !== undefined || embedResize.height !== undefined) {
+                    width = this.getDimensionValue(
+                        embedResize.width,
+                        originalDimensions.width,
+                        embedResize.resizeUnits
+                    );
+                    height = this.getDimensionValue(
+                        embedResize.height,
+                        originalDimensions.height,
+                        embedResize.resizeUnits
+                    );
+                } else if (embedResize.customValue) {
                     const dimensions = this.parseCustomDimensions(
                         embedResize.customValue,
                         originalDimensions,
@@ -272,6 +210,12 @@ export class LinkFormatter {
                 ({ width, height } = originalDimensions);
                 height = embedResize.maintainAspectRatio
                     ? height
+                    : undefined;
+                break;
+            case "original-height":
+                ({ width, height } = originalDimensions);
+                width = embedResize.maintainAspectRatio
+                    ? width
                     : undefined;
                 break;
             case "editor-max-width": {
@@ -481,7 +425,6 @@ export class LinkFormatter {
 
         // If no active leaf or view is found, return the default width.
         if (!activeLeaf || !activeLeaf.view) {
-            console.log("Active leaf or view not found, using default 800");
             return 800;
         }
 
@@ -490,9 +433,6 @@ export class LinkFormatter {
             !(activeLeaf.view instanceof MarkdownView) ||
             !activeLeaf.view.editor
         ) {
-            console.log(
-                "Active view is not a MarkdownView or has no editor, using default 800"
-            );
             return 800;
         }
 
@@ -531,23 +471,13 @@ export class LinkFormatter {
     private async getImageDimensions(
         file: TFile
     ): Promise<{ width: number; height: number } | null> {
-        return new Promise((resolve) => {
-            const img = new Image();
-
-            img.onload = () => {
-                // console.log(`Loaded dimensions for ${file.name}:`, { width: img.width, height: img.height });
-                resolve({ width: img.width, height: img.height });
-            };
-
-            img.onerror = (error) => {
-                // console.error(`Failed to load image ${file.name}:`, error);
-                new Notice(`Failed to load image dimensions for ${file.name}`);
-                resolve(null);
-            };
-
-            const resourcePath = this.app.vault.getResourcePath(file);
-            // console.log(`Loading image from path: ${resourcePath}`);
-            img.src = resourcePath;
-        });
+        const img = new Image();
+        try {
+            await loadImage(img, this.app.vault.getResourcePath(file));
+            return { width: img.width, height: img.height };
+        } catch {
+            new Notice(`Failed to load image dimensions for ${file.name}`);
+            return null;
+        }
     }
 }

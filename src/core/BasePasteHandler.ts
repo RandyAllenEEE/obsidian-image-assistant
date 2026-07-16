@@ -1,5 +1,5 @@
 
-import { App, Editor } from "obsidian";
+import { App, Editor, MarkdownView } from "obsidian";
 import ImageConverterPlugin from "../main";
 
 export interface ClipboardItemData {
@@ -24,8 +24,11 @@ export abstract class BasePasteHandler {
 
         const items = this.collectClipboardData(evt);
         const supportedFiles = this.filterSupportedFiles(items);
+        const fileItemCount = items.filter(item => item.kind === "file").length;
 
         if (supportedFiles.length > 0) {
+            if (supportedFiles.length !== fileItemCount) return;
+            if (!this.canProcessFiles()) return;
             evt.preventDefault();
             await this.processFiles(supportedFiles, editor);
         } else {
@@ -66,6 +69,15 @@ export abstract class BasePasteHandler {
                 !this.plugin.folderAndFilenameManagement.matchesPatterns(data.file.name, this.plugin.settings.pasteHandling.neverProcessFilenames))
             .map(data => data.file!)
             .filter((file): file is File => file !== null);
+    }
+
+    /**
+     * Only consume native editor input when we have the same writable Markdown
+     * context that processFiles requires. Otherwise Obsidian remains in charge.
+     */
+    public canProcessFiles(): boolean {
+        return !!this.app.workspace.getActiveFile()
+            && !!this.app.workspace.getActiveViewOfType(MarkdownView);
     }
 
     /**

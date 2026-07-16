@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Notice, TFile, Modal } from 'obsidian';
+import { App, Notice, TFile } from 'obsidian';
 import { t } from '../../../lang/helpers';
 import ImageConverterPlugin from '../../../main';
 import { FolderAndFilenameManagement } from '../../../local/FolderAndFilenameManagement';
@@ -7,313 +7,349 @@ import { ImageMatchFinder } from '../utils/ImageMatchFinder';
 import { EditorLinkRemover } from '../utils/EditorLinkRemover';
 import { ConfirmDialog } from '../../../settings/SettingsModals';
 import { ImageMatch } from '../types';
+import { ReferenceSafetyReport, ReferenceSafetyService } from '../../../utils/ReferenceSafetyService';
+import { isHttpUrl } from '../../../utils/NetworkPolicy';
+import { ImageViewContext, ImageViewContextResolver } from '../utils/ImageViewContextResolver';
+import {
+    inferLocalReferenceSyntax,
+    LocalImageTargetResolver
+} from '../../../utils/LocalImageTargetResolver';
+import { getAllImageLinks } from '../../../utils/RegexPatterns';
 
-/**
- * Handles image deletion operations (both local and cloud)
- */
+/** Handles local and remote image deletion with exact-occurrence targeting. */
 export class DeleteHandler {
+    private readonly viewContextResolver: ImageViewContextResolver;
+    private readonly localTargetResolver: LocalImageTargetResolver;
+
     constructor(
         private app: App,
         private plugin: ImageConverterPlugin,
-        private folderManagement: FolderAndFilenameManagement,
+        _folderManagement: FolderAndFilenameManagement,
         private imageMatchFinder: ImageMatchFinder,
         private linkRemover: EditorLinkRemover,
-        private cloudDeleter: CloudImageDeleter
-    ) { }
+        private cloudDeleter: CloudImageDeleter,
+        viewContextResolver?: ImageViewContextResolver
+    ) {
+        this.viewContextResolver = viewContextResolver ?? new ImageViewContextResolver(app);
+        this.localTargetResolver = new LocalImageTargetResolver(app);
+    }
 
-    /**
-     * Deletes both the image file and its link from the note.
-     * Auto-detects whether it's a local or cloud image and handles accordingly.
-     * - Local images: Deletes text link and local file
-     * - Cloud images: Deletes text link and cloud image (PicList only)
-     * @param event - The MouseEvent object.
-     */
-    async deleteImageAndLink(event: MouseEvent) {
-        const img = event.target as HTMLImageElement;
-        const src = img.getAttribute('src');
-        if (!src) return;
+    async deleteImageAndLink(event: MouseEvent, targetImage?: HTMLImageElement): Promise<void> {
+        await this.deleteImageLinks(event, targetImage, false);
+    }
 
-        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!activeView) {
-            new Notice(t("MSG_NO_ACTIVE_VIEW"));
-            return;
-        }
+    async deleteAllMatchingImageLinks(event: MouseEvent, targetImage?: HTMLImageElement): Promise<void> {
+        await this.deleteImageLinks(event, targetImage, true);
+    }
+
+    private async deleteImageLinks(
+        event: MouseEvent,
+        targetImage: HTMLImageElement | undefined,
+        allInCurrentNote: boolean
+    ): Promise<void> {
+        const img = targetImage ?? (event.target as HTMLImageElement | null);
+        const src = img?.getAttribute?.('src');
+        if (!img || !src) return;
 
         try {
-            const { editor } = activeView;
-
-            // Handle Base64 images
             if (src.startsWith('data:image/')) {
-                const found = await this.imageMatchFinder.processBase64Image(editor, src, async (editor, lineNumber, line, fullMatch) => {
-                    await this.linkRemover.removeImageLink(editor, lineNumber, line, fullMatch, false);
-                });
-                if (!found) {
-                    new Notice(t("MSG_FAIL_FIND_BASE64"));
-                }
+                await this.deleteBase64Link(img, src, allInCurrentNote);
                 return;
             }
 
-            // Check if it's a cloud image
-            const isCloudImage = this.cloudDeleter.isCloudImage(src);
-
-            if (isCloudImage) {
-                // Handle cloud image deletion
-                await this.deleteCloudImageAndLink(editor, src);
+            const context = this.viewContextResolver.resolve(img);
+            if (!context) {
+                new Notice(t('MSG_IMAGE_CONTEXT_UNRESOLVED'));
                 return;
             }
 
-            // Handle local image deletion
-            const imagePath = this.folderManagement.getImagePath(img);
-            const isExternal = !imagePath;
-            const matches = await this.imageMatchFinder.findImageMatches(editor, imagePath, isExternal);
-
+            const matches = await this.resolveSelectedMatches(context, src, allInCurrentNote);
             if (matches.length === 0) {
-                new Notice(t("MSG_FAIL_FIND_IMAGE"));
+                new Notice(t('MSG_FAIL_FIND_IMAGE'));
+                return;
+            }
+            if (allInCurrentNote && matches.length < 2) {
+                new Notice(t('MSG_NO_DUPLICATE_IMAGE_LINKS'));
                 return;
             }
 
-            // Identify unique matches based on line number, line content, and full match
-            const uniqueMatchesMap: Map<string, ImageMatch> = new Map();
-            for (const match of matches) {
-                const key = `${match.lineNumber}-${match.line}-${match.fullMatch}`; // Create a unique key
-                if (!uniqueMatchesMap.has(key)) {
-                    uniqueMatchesMap.set(key, match); // Add to map if not already present
-                }
-            }
-            const uniqueMatches: ImageMatch[] = Array.from(uniqueMatchesMap.values());
-
-
-            if (uniqueMatches.length === 0) {
-                new Notice(t("MSG_FAIL_FIND_UNIQUE")); // Should not happen ideally as 'matches.length > 0' check is before, but good to have.
+            if (this.cloudDeleter.isCloudImage(src)) {
+                await this.deleteCloudImageAndLinks(context, src, matches, allInCurrentNote);
                 return;
             }
 
-
-            const handleConfirmation = async () => {
-                // Sort matches by line number in descending order to handle deletions from bottom to top
-                // This prevents line number shifting from affecting subsequent deletions
-                const sortedMatches = uniqueMatches.sort((matchA, matchB) => matchB.lineNumber - matchA.lineNumber);
-
-                for (const match of sortedMatches) {
-                    await this.linkRemover.removeImageLink(editor, match.lineNumber, match.line, match.fullMatch, false);
-                }
-
-                new Notice(t("MSG_REMOVED_LINKS"));
-
-                // Delete the actual local image file if it exists in the vault
-                if (imagePath) {
-                    const imageFile = this.app.vault.getAbstractFileByPath(imagePath);
-                    if (imageFile instanceof TFile) {
-                        await this.app.vault.trash(imageFile, true);
-                        new Notice(t("MSG_TRASHED_FILE"));
-                    }
-                }
-            };
-
-            // Show info in confirmation MODAL if more than 1 UNIQUE image were found
-            if (uniqueMatches.length > 1) {
-                // Create a DocumentFragment for the details
-                const detailsFragment = document.createDocumentFragment();
-
-                // Create a container div for the message within the fragment
-                const messageContainer = document.createElement('div');
-                detailsFragment.appendChild(messageContainer);
-
-                // Add introductory text
-                const introText = document.createElement('p');
-                introText.textContent = t("MSG_FOUND_IMAGE_REFS", [uniqueMatches.length.toString()]); // Updated message
-                messageContainer.appendChild(introText);
-
-                // Add details to the message container
-                uniqueMatches.forEach((match, index) => { // Iterate over uniqueMatches
-                    const lineNumber = match.lineNumber + 1;
-                    const lineContent = match.line.trim();
-                    const detailDiv = document.createElement('div');
-                    detailDiv.style.marginBottom = '5px'; // Add some spacing between lines
-                    detailDiv.textContent = `  ${index + 1}. Line ${lineNumber}: ${lineContent}`;
-                    messageContainer.appendChild(detailDiv); // Append to messageContainer
-                });
-
-                new ConfirmDialog(
-                    this.app,
-                    t("DIALOG_DELETE_TITLE"),
-                    detailsFragment, // Pass the fragment
-                    t("BUTTON_DELETE"),
-                    handleConfirmation
-                ).open();
-            } else if (uniqueMatches.length === 1) { // if only 1 unique match, proceed directly without confirmation for multiple
-                await handleConfirmation();
-            } else {
-                // This case should not happen because of the initial check `if (uniqueMatches.length === 0)` but for completeness.
-                new Notice(t("MSG_NO_UNIQUE_LINKS"));
-            }
-
-
+            await this.deleteLocalImageAndLinks(context, matches, allInCurrentNote);
         } catch (error) {
-            console.error('Error deleting image:', error);
-            new Notice(t("MSG_FAIL_DELETE"));
+            console.error('[Image Assistant] Failed to delete image:', error);
+            new Notice(t('MSG_FAIL_DELETE'));
         }
     }
 
-    /**
-     * Delete cloud image and its link from the note
-     * 删除云端图片及其在笔记中的链接
-     * - 单次引用：直接删除
-     * - 多次引用：弹出确认框，让用户选择只删除一个还是全部删除
-     * @param editor - The Editor instance
-     * @param cloudUrl - The cloud image URL
-     */
-    private async deleteCloudImageAndLink(editor: Editor, cloudUrl: string) {
-        try {
-            console.log('[Cloud Delete] Starting cloud image deletion for:', cloudUrl);
-
-            // Find all matches of this cloud image in the note
-            const matches = await this.imageMatchFinder.findImageMatches(editor, cloudUrl, true);
-
-            if (matches.length === 0) {
-                new Notice(t("MSG_FAIL_FIND_CLOUD"));
-                return;
-            }
-
-            // Remove duplicates
-            const uniqueMatchesMap: Map<string, ImageMatch> = new Map();
-            for (const match of matches) {
-                const key = `${match.lineNumber}-${match.line}-${match.fullMatch}`;
-                if (!uniqueMatchesMap.has(key)) {
-                    uniqueMatchesMap.set(key, match);
-                }
-            }
-            const uniqueMatches: ImageMatch[] = Array.from(uniqueMatchesMap.values());
-
-            if (uniqueMatches.length === 0) {
-                new Notice(t("MSG_FAIL_FIND_UNIQUE"));
-                return;
-            }
-
-            // 删除单个图片链接和云端文件的函数
-            const deleteSingleImage = async (match: ImageMatch) => {
-                await this.linkRemover.removeImageLink(editor, match.lineNumber, match.line, match.fullMatch, false);
-                new Notice(t("MSG_CLOUD_LINK_REMOVED"));
-
-                // Try to delete from cloud storage (PicList only)
-                const cloudDeleteResult = await this.cloudDeleter.deleteImageDetailed({ url: cloudUrl });
-
-                if (cloudDeleteResult.success) {
-                    new Notice(t("MSG_CLOUD_DELETE_SUCCESS"));
-                } else {
-                    new Notice(this.getCloudDeleteFailureNotice(cloudDeleteResult));
-                }
-            };
-
-            // 删除所有图片链接和云端文件的函数
-            const deleteAllImages = async () => {
-                // Sort matches by line number in descending order
-                const sortedMatches = uniqueMatches.sort((matchA, matchB) => matchB.lineNumber - matchA.lineNumber);
-
-                // Delete all text links from editor
-                for (const match of sortedMatches) {
-                    await this.linkRemover.removeImageLink(editor, match.lineNumber, match.line, match.fullMatch, false);
-                }
-
-                new Notice(t("MSG_REMOVED_CLOUD_LINKS", [uniqueMatches.length.toString()]));
-
-                // Try to delete from cloud storage (PicList only)
-                const cloudDeleteResult = await this.cloudDeleter.deleteImageDetailed({ url: cloudUrl });
-
-                if (cloudDeleteResult.success) {
-                    new Notice(t("MSG_CLOUD_DELETED"));
-                } else {
-                    new Notice(this.getCloudDeleteFailureNotice(cloudDeleteResult));
-                }
-            };
-
-            // 如果只有一次引用，直接删除
-            if (uniqueMatches.length === 1) {
-                await deleteSingleImage(uniqueMatches[0]);
-            } else {
-                // 多次引用，显示确认对话框
-                const detailsFragment = document.createDocumentFragment();
-                const messageContainer = document.createElement('div');
-                detailsFragment.appendChild(messageContainer);
-
-                const introText = document.createElement('p');
-                introText.textContent = t("MSG_FOUND_CLOUD_REFS", [uniqueMatches.length.toString()]);
-                messageContainer.appendChild(introText);
-
-                // 列出所有引用位置
-                const listTitle = document.createElement('p');
-                listTitle.style.fontWeight = 'bold';
-                listTitle.style.marginTop = '10px';
-                listTitle.textContent = t("LABEL_REFERENCES");
-                messageContainer.appendChild(listTitle);
-
-                uniqueMatches.forEach((match, index) => {
-                    const lineNumber = match.lineNumber + 1;
-                    const lineContent = match.line.trim();
-                    const detailDiv = document.createElement('div');
-                    detailDiv.style.marginBottom = '5px';
-                    detailDiv.style.fontSize = '0.9em';
-                    detailDiv.textContent = `  ${index + 1}. Line ${lineNumber}: ${lineContent.substring(0, 60)}${lineContent.length > 60 ? '...' : ''}`;
-                    messageContainer.appendChild(detailDiv);
-                });
-
-                // 创建自定义确认对话框，带有两个按钮
-                const modal = new Modal(this.app);
-                modal.titleEl.setText(t("DIALOG_DELETE_CLOUD_TITLE"));
-                modal.contentEl.empty();
-                modal.contentEl.appendChild(detailsFragment);
-
-                // 按钮容器
-                const buttonContainer = modal.contentEl.createDiv({ cls: 'modal-button-container' });
-                buttonContainer.style.display = 'flex';
-                buttonContainer.style.justifyContent = 'flex-end';
-                buttonContainer.style.gap = '10px';
-                buttonContainer.style.marginTop = '20px';
-
-                // "Delete Only This One" 按钮
-                const deleteOneBtn = buttonContainer.createEl('button', { text: t("BUTTON_DELETE_ONE") });
-                deleteOneBtn.addEventListener('click', async () => {
-                    modal.close();
-                    await deleteSingleImage(uniqueMatches[0]); // 删除第一个匹配（用户点击的）
-                });
-
-                // "Delete All" 按钮
-                const deleteAllBtn = buttonContainer.createEl('button', { text: t("BUTTON_DELETE_ALL", [uniqueMatches.length.toString()]), cls: 'mod-warning' });
-                deleteAllBtn.addEventListener('click', async () => {
-                    modal.close();
-                    await deleteAllImages();
-                });
-
-                // "Cancel" 按钮
-                const cancelBtn = buttonContainer.createEl('button', { text: t("BUTTON_CANCEL") });
-                cancelBtn.addEventListener('click', () => {
-                    modal.close();
-                });
-
-                modal.open();
-            }
-
-        } catch (error) {
-            console.error('[Cloud Delete] Error deleting cloud image:', error);
-            new Notice(t("MSG_FAIL_DELETE_CLOUD"));
+    private async resolveSelectedMatches(
+        context: ImageViewContext,
+        src: string,
+        allInCurrentNote: boolean
+    ): Promise<ImageMatch[]> {
+        if (!allInCurrentNote) {
+            return [{
+                lineNumber: context.match.line,
+                line: context.editor.getLine(context.match.line),
+                fullMatch: context.match.linkText,
+                index: context.match.start
+            }];
         }
+
+        const isNetwork = isHttpUrl(src);
+        const localResolution = isNetwork
+            ? null
+            : this.localTargetResolver.resolve(this.getContextTargetPath(context), context.file, {
+                syntax: inferLocalReferenceSyntax(context.match.linkText)
+            });
+        const imagePath = isNetwork ? src : localResolution?.file?.path ?? null;
+        const matches = await this.imageMatchFinder.findImageMatches(
+            context.editor,
+            imagePath,
+            isNetwork || !imagePath,
+            context.file
+        );
+        return uniqueMatches(matches);
+    }
+
+    private async deleteBase64Link(
+        img: HTMLImageElement,
+        src: string,
+        allInCurrentNote: boolean
+    ): Promise<void> {
+        if (allInCurrentNote) {
+            new Notice(t('MSG_BATCH_BASE64_UNSUPPORTED'));
+            return;
+        }
+        const owner = this.viewContextResolver.resolveOwner(img);
+        if (!owner) {
+            new Notice(t('MSG_IMAGE_CONTEXT_UNRESOLVED'));
+            return;
+        }
+        const found = await this.imageMatchFinder.processBase64Image(
+            owner.editor,
+            src,
+            async (editor, lineNumber, line, fullMatch) => {
+                await this.linkRemover.removeImageLink(editor, lineNumber, line, fullMatch, false);
+                await this.saveLinkRemoval(owner.view);
+            }
+        );
+        if (!found) new Notice(t('MSG_FAIL_FIND_BASE64'));
+    }
+
+    private async deleteLocalImageAndLinks(
+        context: ImageViewContext,
+        matches: ImageMatch[],
+        explicitBatch: boolean
+    ): Promise<void> {
+        const resolution = this.localTargetResolver.resolve(
+            this.getContextTargetPath(context),
+            context.file,
+            { syntax: inferLocalReferenceSyntax(context.match.linkText) }
+        );
+        const abstractFile = resolution.file;
+        if (resolution.status !== "resolved" || !(abstractFile instanceof TFile)) {
+            new Notice(t('MSG_IMAGE_CONTEXT_UNRESOLVED'));
+            return;
+        }
+
+        const safetyService = this.createSafetyService();
+        const preflight = await safetyService.inspectLocalFile(abstractFile);
+        const mayDeleteSource = this.canDeleteAfterRemoving(preflight, matches.length);
+
+        const action = async (deleteSource: boolean) => {
+            if (!await this.removeAndSave(context, matches)) return;
+            if (!deleteSource) {
+                new Notice(t('MSG_IMAGE_SOURCE_KEPT'));
+                return;
+            }
+
+            const revalidated = await safetyService.inspectLocalFile(abstractFile);
+            if (!revalidated.safeToDelete) {
+                new Notice(this.sourceKeptMessage(revalidated, 'MSG_IMAGE_FILE_KEPT_REFERENCED'));
+                return;
+            }
+            await this.app.vault.trash(abstractFile, true);
+            new Notice(t('MSG_TRASHED_FILE'));
+        };
+
+        if (!mayDeleteSource) {
+            this.openKeepSourceWarning(preflight, matches.length, () => action(false));
+            return;
+        }
+
+        if (explicitBatch) {
+            this.openBatchConfirmation(matches.length, () => action(true));
+            return;
+        }
+        await action(true);
+    }
+
+    private async deleteCloudImageAndLinks(
+        context: ImageViewContext,
+        cloudUrl: string,
+        matches: ImageMatch[],
+        explicitBatch: boolean
+    ): Promise<void> {
+        const owned = this.plugin.historyManager.isUrlUploaded(cloudUrl);
+        if (!owned) {
+            await this.confirmBatchIfNeeded(explicitBatch, matches.length, async () => {
+                if (await this.removeAndSave(context, matches)) {
+                    new Notice(t('MSG_REMOTE_NOT_OWNED_KEPT'));
+                }
+            });
+            return;
+        }
+
+        const safetyService = this.createSafetyService();
+        const preflight = await safetyService.inspectUrl(cloudUrl);
+        const mayDeleteSource = this.canDeleteAfterRemoving(preflight, matches.length);
+        const action = async (deleteSource: boolean) => {
+            if (!await this.removeAndSave(context, matches)) return;
+            if (!deleteSource) {
+                new Notice(t('MSG_REMOTE_SOURCE_KEPT'));
+                return;
+            }
+
+            const revalidated = await safetyService.inspectUrl(cloudUrl);
+            if (!revalidated.safeToDelete) {
+                new Notice(this.sourceKeptMessage(revalidated, 'MSG_REMOTE_FILE_KEPT_REFERENCED'));
+                return;
+            }
+            const result = await this.cloudDeleter.deleteImageDetailed({ url: cloudUrl });
+            new Notice(result.success ? t('MSG_CLOUD_DELETE_SUCCESS') : this.getCloudDeleteFailureNotice(result));
+        };
+
+        if (!mayDeleteSource) {
+            this.openKeepSourceWarning(preflight, matches.length, () => action(false));
+            return;
+        }
+        if (explicitBatch) {
+            this.openBatchConfirmation(matches.length, () => action(true));
+            return;
+        }
+        await action(true);
+    }
+
+    private canDeleteAfterRemoving(report: ReferenceSafetyReport, selectedCount: number): boolean {
+        return report.complete && report.referenceCount <= selectedCount;
+    }
+
+    private openKeepSourceWarning(
+        report: ReferenceSafetyReport,
+        selectedCount: number,
+        action: () => Promise<void>
+    ): void {
+        const remaining = Math.max(0, report.referenceCount - selectedCount);
+        const message = report.complete
+            ? t('DIALOG_DELETE_KEEP_SOURCE_REFERENCES', [remaining.toString()])
+            : t('DIALOG_DELETE_KEEP_SOURCE_UNCERTAIN', [report.uncertainFiles.join(', ')]);
+        new ConfirmDialog(
+            this.app,
+            t('DIALOG_DELETE_KEEP_SOURCE_TITLE'),
+            message,
+            t('BUTTON_REMOVE_LINKS_KEEP_SOURCE', [selectedCount.toString()]),
+            action
+        ).open();
+    }
+
+    private openBatchConfirmation(count: number, action: () => Promise<void>): void {
+        new ConfirmDialog(
+            this.app,
+            t('DIALOG_DELETE_ALL_TITLE'),
+            t('DIALOG_DELETE_ALL_MSG', [count.toString()]),
+            t('BUTTON_DELETE_ALL', [count.toString()]),
+            action
+        ).open();
+    }
+
+    private async confirmBatchIfNeeded(
+        explicitBatch: boolean,
+        count: number,
+        action: () => Promise<void>
+    ): Promise<void> {
+        if (explicitBatch) {
+            this.openBatchConfirmation(count, action);
+        } else {
+            await action();
+        }
+    }
+
+    private async removeAndSave(context: ImageViewContext, matches: ImageMatch[]): Promise<boolean> {
+        for (const match of [...matches].sort(compareMatchesForDeletion)) {
+            await this.linkRemover.removeImageLink(
+                context.editor,
+                match.lineNumber,
+                context.editor.getLine(match.lineNumber),
+                match.fullMatch,
+                false,
+                match.index
+            );
+        }
+        const saved = await this.saveLinkRemoval(context.view);
+        if (saved) new Notice(t('MSG_REMOVED_LINKS_COUNT', [matches.length.toString()]));
+        return saved;
+    }
+
+    private createSafetyService(): ReferenceSafetyService {
+        return new ReferenceSafetyService(this.app, this.plugin.vaultReferenceManager, {
+            includeFencedCode: this.plugin.settings?.global?.codeBlockImageLinkIndexing ?? true
+        });
+    }
+
+    private getContextTargetPath(context: ImageViewContext): string {
+        return context.match.descriptor?.path
+            ?? getAllImageLinks(context.match.linkText)[0]?.path
+            ?? "";
+    }
+
+    private async saveLinkRemoval(view: ImageViewContext['view']): Promise<boolean> {
+        try {
+            await view.save();
+            return true;
+        } catch (error) {
+            console.error('[Image Assistant] Failed to save note after removing an image link:', error);
+            new Notice(t('MSG_LINK_REMOVED_SAVE_FAILED_SOURCE_KEPT'));
+            return false;
+        }
+    }
+
+    private sourceKeptMessage(report: ReferenceSafetyReport, referencedKey: string): string {
+        return report.complete
+            ? t(referencedKey as any, [report.referenceCount.toString()])
+            : t('MSG_SOURCE_KEPT_SCAN_INCOMPLETE', [report.uncertainFiles.join(', ')]);
     }
 
     private getCloudDeleteFailureNotice(result: CloudDeleteResult): string {
         const uploader = result.uploader || this.plugin.settings.pasteHandling.cloud.uploader;
         switch (result.reason) {
             case 'unsupported-uploader':
-                return t("MSG_CLOUD_DELETE_UNSUPPORTED", [uploader]);
+                return t('MSG_CLOUD_DELETE_UNSUPPORTED', [uploader]);
             case 'missing-delete-server':
-                return t("MSG_CLOUD_DELETE_MISSING_SERVER");
+                return t('MSG_CLOUD_DELETE_MISSING_SERVER');
             case 'missing-history':
-                return t("MSG_CLOUD_DELETE_FAIL_HISTORY");
+                return t('MSG_CLOUD_DELETE_FAIL_HISTORY');
             case 'api-failed':
-                return t("MSG_CLOUD_DELETE_API_FAILED", [result.message || t("MSG_UNKNOWN_ERROR")]);
+                return t('MSG_CLOUD_DELETE_API_FAILED', [result.message || t('MSG_UNKNOWN_ERROR')]);
             case 'request-failed':
-                return t("MSG_CLOUD_DELETE_REQUEST_FAILED", [result.message || t("MSG_UNKNOWN_ERROR")]);
+                return t('MSG_CLOUD_DELETE_REQUEST_FAILED', [result.message || t('MSG_UNKNOWN_ERROR')]);
             default:
-                return t("MSG_CLOUD_DELETE_FAIL");
+                return t('MSG_CLOUD_DELETE_FAIL');
         }
     }
+}
+
+function uniqueMatches(matches: ImageMatch[]): ImageMatch[] {
+    const unique = new Map<string, ImageMatch>();
+    for (const match of matches) {
+        unique.set(`${match.lineNumber}:${match.index}:${match.fullMatch}`, match);
+    }
+    return [...unique.values()];
+}
+
+function compareMatchesForDeletion(a: ImageMatch, b: ImageMatch): number {
+    return b.lineNumber - a.lineNumber || b.index - a.index;
 }

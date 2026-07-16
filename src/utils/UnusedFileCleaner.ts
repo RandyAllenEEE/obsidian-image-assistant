@@ -1,6 +1,10 @@
 import { App, TFile, TFolder, normalizePath, Notice } from "obsidian";
 import ImageConverterPlugin from '../main';
 import { ReferenceLocation as VaultRefLocation } from './VaultReferenceManager';
+import { CanvasFileReference, getCanvasFileReferenceIndexDetailed, getCanvasFileReferences } from './CanvasReferenceUtils';
+import { ReferenceSafetyService } from './ReferenceSafetyService';
+import { getErrorMessage } from './ErrorUtils';
+import { normalizeVaultFolderPath } from './VaultPathUtils';
 
 /**
  * 文件引用信息接口
@@ -27,6 +31,9 @@ export interface CleanupResult {
     scannedFiles: number;       // 扫描的文件总数
     unreferencedFiles: FileReferenceInfo[]; // 未引用的文件
     referencedFiles: FileReferenceInfo[];   // 被引用的文件
+    unknownFiles: FileReferenceInfo[];
+    scanComplete: boolean;
+    uncertainFiles: string[];
 }
 
 /**
@@ -61,11 +68,31 @@ export class UnusedFileCleaner {
 
         // 收集所有符合条件的文件
         const filesToCheck: TFile[] = [];
-        await this.collectFiles(folder, fileExtensions, filesToCheck);
+        const configuredTrashPath = this.plugin.settings?.cleanerSettings?.trashMode === "custom"
+            ? normalizeVaultFolderPath(this.plugin.settings.cleanerSettings.customTrashPath)
+            : "";
+        const excludedFolder = configuredTrashPath && configuredTrashPath !== normalizedFolder
+            ? configuredTrashPath
+            : undefined;
+        await this.collectFiles(folder, fileExtensions, filesToCheck, excludedFolder);
 
         const total = filesToCheck.length;
         const unreferencedFiles: FileReferenceInfo[] = [];
         const referencedFiles: FileReferenceInfo[] = [];
+        const imagePaths = filesToCheck.map(file => file.path);
+        const markdownScan = typeof this.plugin.vaultReferenceManager.scanReferencesForTargetsDetailed === 'function'
+            ? await this.plugin.vaultReferenceManager.scanReferencesForTargetsDetailed(imagePaths)
+            : {
+                references: typeof this.plugin.vaultReferenceManager.getFilesReferencingImages === 'function'
+                    ? await this.plugin.vaultReferenceManager.getFilesReferencingImages(imagePaths)
+                    : new Map<string, VaultRefLocation[]>(),
+                complete: true,
+                uncertainFiles: []
+            };
+        const canvasScan = await getCanvasFileReferenceIndexDetailed(this.app, filesToCheck, this.getCanvasScanOptions());
+        const canvasReferenceIndex = canvasScan.references;
+        const noteContentCache = new Map<string, string[]>();
+        const unknownFiles: FileReferenceInfo[] = [];
 
         // 逐个检查文件引用
         for (let i = 0; i < filesToCheck.length; i++) {
@@ -77,10 +104,17 @@ export class UnusedFileCleaner {
             }
 
             // 检查文件引用
-            const referenceInfo = await this.checkFileReferences(file);
+            const referenceInfo = await this.checkFileReferences(
+                file,
+                markdownScan.references.get(file.path),
+                canvasReferenceIndex.get(file.path),
+                noteContentCache
+            );
 
             if (referenceInfo.isReferenced) {
                 referencedFiles.push(referenceInfo);
+            } else if (!markdownScan.complete || !canvasScan.complete) {
+                unknownFiles.push(referenceInfo);
             } else {
                 unreferencedFiles.push(referenceInfo);
             }
@@ -89,7 +123,13 @@ export class UnusedFileCleaner {
         return {
             scannedFiles: total,
             unreferencedFiles,
-            referencedFiles
+            referencedFiles,
+            unknownFiles,
+            scanComplete: markdownScan.complete && canvasScan.complete,
+            uncertainFiles: Array.from(new Set([
+                ...markdownScan.uncertainFiles,
+                ...canvasScan.uncertainFiles
+            ]))
         };
     }
 
@@ -99,7 +139,8 @@ export class UnusedFileCleaner {
     private async collectFiles(
         folder: TFolder,
         fileExtensions: string[],
-        result: TFile[]
+        result: TFile[],
+        excludedFolder?: string
     ): Promise<void> {
         for (const child of folder.children) {
             if (child instanceof TFile) {
@@ -109,8 +150,13 @@ export class UnusedFileCleaner {
                     result.push(child);
                 }
             } else if (child instanceof TFolder) {
+                if (excludedFolder && (
+                    child.path === excludedFolder || child.path.startsWith(`${excludedFolder}/`)
+                )) {
+                    continue;
+                }
                 // 递归处理子文件夹
-                await this.collectFiles(child, fileExtensions, result);
+                await this.collectFiles(child, fileExtensions, result, excludedFolder);
             }
         }
     }
@@ -120,11 +166,17 @@ export class UnusedFileCleaner {
      * @param file 要检查的文件
      * @returns 文件引用信息
      */
-    private async checkFileReferences(file: TFile): Promise<FileReferenceInfo> {
+    private async checkFileReferences(
+        file: TFile,
+        indexedVaultRefs?: VaultRefLocation[],
+        indexedCanvasRefs?: CanvasFileReference[],
+        noteContentCache: Map<string, string[]> = new Map()
+    ): Promise<FileReferenceInfo> {
         const references: ReferenceLocation[] = []; // Using local interface
 
         // Use VaultReferenceManager for O(1) lookup
-        const vaultRefs = await this.plugin.vaultReferenceManager.getFilesReferencingImage(file.path);
+        const vaultRefs = indexedVaultRefs
+            ?? await this.plugin.vaultReferenceManager.getFilesReferencingImage(file.path);
 
         if (vaultRefs.length > 0) {
             // Group by file to read efficienty
@@ -141,8 +193,11 @@ export class UnusedFileCleaner {
             // Read each referenced file once to get line content
             for (const [refFile, locs] of fileMap.entries()) {
                 try {
-                    const content = await this.app.vault.read(refFile);
-                    const lines = content.split('\n');
+                    let lines = noteContentCache.get(refFile.path);
+                    if (!lines) {
+                        lines = (await this.app.vault.read(refFile)).split('\n');
+                        noteContentCache.set(refFile.path, lines);
+                    }
 
                     for (const loc of locs) {
                         const lineContent = lines[loc.line] || "";
@@ -154,15 +209,40 @@ export class UnusedFileCleaner {
                     }
                 } catch (error) {
                     console.error(`Error reading file ${refFile.path}:`, error);
+                    for (const loc of locs) {
+                        references.push({
+                            notePath: refFile.path,
+                            lineNumber: loc.line + 1,
+                            lineContent: loc.original
+                        });
+                    }
                 }
             }
         }
+
+        const canvasReferences = indexedCanvasRefs
+            ? this.mapCanvasReferences(indexedCanvasRefs)
+            : await this.getCanvasReferences(file);
+        references.push(...canvasReferences);
 
         return {
             file,
             isReferenced: references.length > 0,
             references
         };
+    }
+
+    private async getCanvasReferences(file: TFile): Promise<ReferenceLocation[]> {
+        const canvasRefs = await getCanvasFileReferences(this.app, file, this.getCanvasScanOptions());
+        return this.mapCanvasReferences(canvasRefs);
+    }
+
+    private mapCanvasReferences(canvasRefs: CanvasFileReference[]): ReferenceLocation[] {
+        return canvasRefs.map((ref) => ({
+            notePath: ref.canvasFile.path,
+            lineNumber: ref.lineNumber,
+            lineContent: `Canvas file node: ${ref.nodeFile}`
+        }));
     }
 
     /**
@@ -178,9 +258,23 @@ export class UnusedFileCleaner {
         customTrashPath?: string
     ): Promise<number> {
         let successCount = 0;
+        const safetyService = new ReferenceSafetyService(
+            this.app,
+            this.plugin.vaultReferenceManager,
+            this.getCanvasScanOptions()
+        );
 
         for (const file of files) {
             try {
+                const safety = await safetyService.inspectLocalFile(file);
+                if (!safety.safeToDelete) {
+                    const reason = safety.complete
+                        ? `${safety.referenceCount} reference(s) remain`
+                        : `reference scan incomplete: ${safety.uncertainFiles.join(', ')}`;
+                    new Notice(`Skipped ${file.name}: ${reason}`);
+                    continue;
+                }
+
                 if (trashMode === 'system') {
                     // 移动到系统回收站
                     await this.app.vault.trash(file, true);
@@ -196,7 +290,7 @@ export class UnusedFileCleaner {
                 }
             } catch (error) {
                 console.error(`Error deleting file ${file.path}:`, error);
-                new Notice(`Failed to delete ${file.name}: ${error.message}`);
+                new Notice(`Failed to delete ${file.name}: ${getErrorMessage(error)}`);
             }
         }
 
@@ -207,13 +301,19 @@ export class UnusedFileCleaner {
      * 移动文件到自定义垃圾箱路径
      */
     private async moveToCustomTrash(file: TFile, customTrashPath: string): Promise<void> {
-        const normalizedTrashPath = normalizePath(customTrashPath);
+        const normalizedTrashPath = normalizeVaultFolderPath(customTrashPath);
+        if (!normalizedTrashPath || normalizedTrashPath === "/") {
+            throw new Error("Custom trash path must be a non-root vault folder");
+        }
+        if (file.parent?.path === normalizedTrashPath) {
+            throw new Error("File is already in the custom trash folder");
+        }
+        if (file.path.startsWith(`${normalizedTrashPath}/`)) {
+            throw new Error("File is already inside the custom trash folder");
+        }
 
         // 确保垃圾箱文件夹存在
-        const trashFolder = this.app.vault.getAbstractFileByPath(normalizedTrashPath);
-        if (!trashFolder) {
-            await this.app.vault.createFolder(normalizedTrashPath);
-        }
+        await this.ensureFolderPathExists(normalizedTrashPath);
 
         // 生成目标路径
         const targetPath = normalizePath(`${normalizedTrashPath}/${file.name}`);
@@ -232,15 +332,47 @@ export class UnusedFileCleaner {
         await this.app.fileManager.renameFile(file, finalPath);
     }
 
+    private async ensureFolderPathExists(folderPath: string): Promise<void> {
+        const normalizedPath = normalizeVaultFolderPath(folderPath);
+        if (!normalizedPath || normalizedPath === "/") return;
+
+        let currentPath = "";
+        for (const segment of normalizedPath.split('/').filter(Boolean)) {
+            currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+            const existing = this.app.vault.getAbstractFileByPath(currentPath);
+
+            if (existing) {
+                if (!(existing instanceof TFolder)) {
+                    throw new Error(`Trash path segment is not a folder: ${currentPath}`);
+                }
+                continue;
+            }
+
+            await this.app.vault.createFolder(currentPath);
+        }
+    }
+
+    private getCanvasScanOptions(): { includeFencedCode: boolean } {
+        return {
+            includeFencedCode: this.plugin.settings?.global?.codeBlockImageLinkIndexing ?? true
+        };
+    }
+
     /**
      * 解析文件类型字符串（逗号分隔）
      * @param fileTypesStr 文件类型字符串，如 "jpg,png,pdf"
      * @returns 文件扩展名数组
      */
     static parseFileTypes(fileTypesStr: string): string[] {
+        const seen = new Set<string>();
         return fileTypesStr
             .split(',')
-            .map(type => type.trim().toLowerCase())
-            .filter(type => type.length > 0);
+            .map(type => type.trim().toLowerCase().replace(/^\.+/, ''))
+            .filter(type => type.length > 0)
+            .filter(type => {
+                if (seen.has(type)) return false;
+                seen.add(type);
+                return true;
+            });
     }
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import ImageConverterPlugin from '../../../src/main';
 import { ImageResizer } from '../../../src/ui/ImageResizer';
+import { ImageAlignment } from '../../../src/ui/ImageAlignment';
 import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
 import { fakeApp, fakeTFile, fakeVault, fakeWorkspace, fakePluginManifest } from '../../factories/obsidian';
 import { setupFakeTimers } from '../../helpers/test-setup';
@@ -103,6 +104,7 @@ function makeResizer({ viewMode = 'source', overrides = {}, workspaceOverride }:
   plugin.manifest = { id: 'image-converter', dir: '/plugins/image-converter' } as any;
   plugin.supportedImageFormats = { isExcalidrawImage: () => false } as any;
   plugin.settings = makeResizeSettings(overrides) as any;
+  plugin.imageAlignment = new ImageAlignment(app as any, plugin);
   const resizer = new ImageResizer(plugin);
   const markdownView = {
     containerEl: document.body,
@@ -130,22 +132,25 @@ describe('ImageResizer interactions core (13.1–13.3)', () => {
     resizer = r;
   });
 
-  it('13.1 creates handles when hovering internal image and preserves alignment classes on cleanup', () => {
-    const { img } = setupViewWithImage();
+  it('13.1 transfers a single alignment owner while handles are active and restores it on cleanup', () => {
+    const { img, embed } = setupViewWithImage();
     img.classList.add('image-position-left', 'image-wrap', 'image-converter-aligned');
 
     (resizer as any).handleImageHover({ target: img } as any);
 
     const container = (img as any).matchParent?.('.image-resize-container') || (img as any).matchParent('.image-resize-container');
     expect(container).toBeTruthy();
+    expect(container?.getAttribute('data-image-assistant-layout-owner')).toBe('true');
+    expect(img.hasAttribute('data-image-assistant-layout-owner')).toBe(false);
+    expect(embed.hasAttribute('data-image-assistant-layout-owner')).toBe(false);
     const handles = container?.querySelectorAll('.image-resize-handle');
     expect(handles?.length).toBe(8);
 
-    // After cleanup, the original alignment classes are restored back to the image
     ;(resizer as any).cleanupHandles();
-    expect(img.classList.contains('image-position-left')).toBe(true);
-    expect(img.classList.contains('image-wrap')).toBe(true);
-    expect(img.classList.contains('image-converter-aligned')).toBe(true);
+    expect(embed.classList.contains('image-position-left')).toBe(true);
+    expect(embed.classList.contains('image-wrap')).toBe(true);
+    expect(embed.getAttribute('data-image-assistant-layout-owner')).toBe('true');
+    expect(img.classList.contains('image-converter-aligned')).toBe(false);
   });
 
   it('13.2 drag resize updates width/height and cleans up on mouseup', () => {
@@ -293,6 +298,7 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
     const editor = {
       getValue: () => lines.join('\n'),
       getCursor: () => ({ line: 0, ch: 0 }),
+      lineCount: () => lines.length,
       getLine: (i: number) => lines[i] || '',
       lastLine: () => lines.length - 1,
       transaction: vi.fn(),
@@ -501,6 +507,22 @@ describe('ImageResizer lifecycle and wheel behaviors (13.15–13.16, 13.17–13.
     expect(spyMove).not.toHaveBeenCalled();
   });
 
+  it('clears pending throttle timers on unload', () => {
+    vi.useFakeTimers();
+    const { resizer } = makeResizer();
+    const callback = vi.fn();
+    const throttled = (resizer as any).throttle(callback, 100);
+
+    throttled();
+    expect((resizer as any).throttleTimers.size).toBe(1);
+
+    resizer.onunload();
+    vi.runAllTimers();
+
+    expect((resizer as any).throttleTimers.size).toBe(0);
+    vi.useRealTimers();
+  });
+
   it('13.17 Cursor fallback validity: outside edges -> cursor="default" and values are valid', () => {
     const { resizer } = makeResizer();
     const { container } = setupView();
@@ -665,6 +687,31 @@ describe('ImageResizer throttle policy when alignment disabled (13.23 variant)',
   });
 });
 
+describe('ImageResizer view transitions', () => {
+  it('cancels delayed resize writes when detaching a view', () => {
+    vi.useFakeTimers();
+    try {
+      const { resizer } = makeResizer();
+      const cancel = vi.fn();
+      (resizer as any).debouncedSaveDimensions = Object.assign(vi.fn(), { cancel });
+      (resizer as any).resizeRetryTimers = { pending: window.setTimeout(vi.fn(), 1000) };
+      (resizer as any).resizeBuffer = { pending: { width: 320, height: 200 } };
+      (resizer as any).scrollTimeout = window.setTimeout(vi.fn(), 1000);
+      resizer.resizeState.isScrolling = true;
+
+      resizer.detachView();
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      expect((resizer as any).resizeRetryTimers).toEqual({});
+      expect((resizer as any).resizeBuffer).toEqual({});
+      expect(resizer.resizeState.isScrolling).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('ImageResizer upstream A1 lifecycle guards', () => {
   it('binds drag listeners to the attached view ownerDocument for popout windows', () => {
     const popoutDocument = document.implementation.createHTMLDocument('popout');
@@ -753,6 +800,7 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
       getValue: () => lines.join('\n'),
       getCursor: () => ({ line: 0, ch: 0 }),
       getLine: (i: number) => lines[i] || '',
+      lineCount: () => lines.length,
       lastLine: () => lines.length - 1,
       setCursor: (_pos: any) => {},
       transaction: ({ changes }: { changes: { from: { line: number; ch: number }; to: { line: number; ch: number }; text: string }[] }) => {
@@ -796,14 +844,21 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
     ];
     const editor: any = makeEditorWithHistory(doc);
 
-    const { resizer, markdownView } = makeResizer({ viewMode: 'source' });
+    const { resizer, markdownView, plugin } = makeResizer({ viewMode: 'source' });
+    (plugin as any).imageStateManager = null;
     (markdownView as any).editor = editor;
     (resizer as any).editor = editor;
 
     const { container } = setupView();
+    addInternalImage(container);
     const img = addInternalImage(container);
+    editor.cm = {
+      posAtDOM: vi.fn((node: Node) => node === img
+        ? doc.slice(0, 3).join('\n').length + 1
+        : 0)
+    };
 
-    // Act: perform a resize to trigger a single transaction that updates both links
+    // Act: perform a resize to trigger a single transaction that updates the matched link
     (resizer as any).handleImageHover({ target: img } as any);
     const wrapper = (img as any).matchParent('.image-resize-container')!;
     const se = wrapper.querySelector('.image-resize-handle-se') as HTMLElement;
@@ -812,7 +867,7 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
 
     const after = editor.getValue();
-    expect(after.includes('![|100x100](imgs/pic.jpg)')).toBe(false);
+    expect((after.match(/!\[\|100x100\]\(imgs\/pic\.jpg\)/g) || []).length).toBe(1);
     expect(after).toMatch(/!\[\|\d+\]\(imgs\/pic\.jpg\)/);
 
     // With live updates, more than one transaction may have occurred during drag.
@@ -831,6 +886,24 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
     editor.redo();
     const redone = editor.getValue();
     expect(redone).toMatch(/!\[\|\d+\]\(imgs\/pic\.jpg\)/);
-    expect(redone.includes('![|100x100](imgs/pic.jpg)')).toBe(false);
+    expect((redone.match(/!\[\|100x100\]\(imgs\/pic\.jpg\)/g) || []).length).toBe(1);
+  });
+
+  it('Given fallback markdown update, Then only the exact same-basename target is changed', async () => {
+    const doc = [
+      '![[other/pic.jpg|100]] and ![[imgs/pic.jpg|100]]'
+    ];
+    const editor: any = makeEditorWithHistory(doc);
+    const { resizer, markdownView, plugin } = makeResizer({ viewMode: 'source' });
+    (plugin as any).imageStateManager = null;
+    (markdownView as any).editor = editor;
+    (resizer as any).editor = editor;
+
+    const { container } = setupView();
+    const img = addInternalImage(container, 'app://vault/imgs/pic.jpg');
+
+    await (resizer as any).updateMarkdownLink(img, 320, 160, 'se');
+
+    expect(editor.getValue()).toBe('![[other/pic.jpg|100]] and ![[imgs/pic.jpg|320]]');
   });
 });

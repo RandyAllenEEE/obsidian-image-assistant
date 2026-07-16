@@ -11,21 +11,30 @@ export class EditorLinkRemover {
      * @param line - The line content.
      * @param fullMatch - The full matched text.
      * @param copyToClipboard - Whether to copy the text to clipboard before removing.
+     * @param matchIndex - Exact character index of the match in the line.
      */
     async removeImageLink(
         editor: Editor,
         lineNumber: number,
         line: string,
         fullMatch: string,
-        copyToClipboard: boolean
+        copyToClipboard: boolean,
+        matchIndex?: number
     ) {
         if (copyToClipboard) {
             await navigator.clipboard.writeText(fullMatch);
         }
 
+        const resolvedIndex = typeof matchIndex === 'number'
+            ? matchIndex
+            : line.indexOf(fullMatch);
+        if (resolvedIndex < 0) {
+            return;
+        }
+
         const startPos = {
             line: lineNumber,
-            ch: line.indexOf(fullMatch)
+            ch: resolvedIndex
         };
         const endPos = {
             line: lineNumber,

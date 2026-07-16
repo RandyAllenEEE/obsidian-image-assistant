@@ -9,8 +9,7 @@
       "@/*": ["./src/*"],
       "@mocks/*": ["./tests/__mocks__/*"],
       "@fixtures/*": ["./tests/fixtures/*"],
-      "@helpers/*": ["./tests/helpers/*"],
-      "obsidian": ["./tests/__mocks__/obsidian.ts"]
+      "@helpers/*": ["./tests/helpers/*"]
     }
   },
   "include": [

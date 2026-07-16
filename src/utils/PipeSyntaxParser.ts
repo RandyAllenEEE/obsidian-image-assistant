@@ -32,7 +32,14 @@ export interface PipeSyntaxData {
     alt?: string;                       // 题注文本（缺省时为空格 ' '）
     align?: AlignType;                  // 对齐方式
     size?: SizeData;                    // 尺寸信息
+    title?: string;                     // Markdown title, if present
     linkType: 'wiki' | 'markdown';      // 链接类型
+}
+
+export type PipeAttributeParseMode = 'storage' | 'display';
+
+export interface PipeSyntaxParseOptions {
+    attributeMode?: PipeAttributeParseMode;
 }
 
 /**
@@ -58,7 +65,7 @@ export class PipeSyntaxParser {
      * @param linkText 完整的图片链接字符串
      * @returns PipeSyntaxData 对象
      */
-    public parsePipeSyntax(linkText: string): PipeSyntaxData | null {
+    public parsePipeSyntax(linkText: string, options: PipeSyntaxParseOptions = {}): PipeSyntaxData | null {
         if (!linkText || linkText.trim() === '') {
             return null;
         }
@@ -67,9 +74,9 @@ export class PipeSyntaxParser {
 
         // 判断链接类型
         if (trimmedLink.startsWith('![[')) {
-            return this.parseWikiLink(trimmedLink);
+            return this.parseWikiLink(trimmedLink, options);
         } else if (trimmedLink.startsWith('![')) {
-            return this.parseMarkdownLink(trimmedLink);
+            return this.parseMarkdownLink(trimmedLink, options);
         }
 
         return null;
@@ -85,7 +92,7 @@ export class PipeSyntaxParser {
      * 分拆策略：遇到未被转义的 `|` 才分割。
      * "被转义" = 前面有奇数个反斜杠。
      */
-    private parseWikiLink(linkText: string): PipeSyntaxData | null {
+    private parseWikiLink(linkText: string, options: PipeSyntaxParseOptions): PipeSyntaxData | null {
         const match = linkText.match(PipeSyntaxParser.WIKI_LINK_PATTERN);
         if (!match) {
             return null;
@@ -102,7 +109,7 @@ export class PipeSyntaxParser {
         const path = this.unescapeWikiPath(parts[0].trim());
         const attrContent = parts.slice(1).join('|');
 
-        const { alt, align, size } = this.parsePipeAttributes(attrContent, false);
+        const { alt, align, size } = this.parsePipeAttributes(attrContent, false, options.attributeMode);
 
         return {
             path,
@@ -125,8 +132,7 @@ export class PipeSyntaxParser {
         while (i < text.length) {
             if (text[i] === "\\") {
                 // 跳过转义序列（\\ 或 \\\\| 或 \\\\ 等）
-                let bsCount = 0;
-                while (i < text.length && text[i] === "\\") { bsCount++; i++; }
+                while (i < text.length && text[i] === "\\") { i++; }
                 // 遇到 `\\|` 时，bsCount 是偶数 => 这里的 | 是字面管道；
                 // 遇到 `\|` 时，bsCount 是奇数 => 这里的 | 是转义管道，应作为内容而非分隔符。
                 // 直接继续即可，下次循环看下一个字符。
@@ -190,24 +196,60 @@ export class PipeSyntaxParser {
     /**
      * 解析 Markdown 格式链接：![alt|attr1|attr2](path)
      */
-    private parseMarkdownLink(linkText: string): PipeSyntaxData | null {
-        const match = linkText.match(PipeSyntaxParser.MARKDOWN_LINK_PATTERN);
+    private parseMarkdownLink(linkText: string, options: PipeSyntaxParseOptions): PipeSyntaxData | null {
+        const match = linkText.match(/^!\[([^\]]*)\]\((.*)\)$/);
         if (!match) {
             return null;
         }
 
         const bracketContent = match[1]; // alt|attr1|attr2
-        const path = match[2].trim();
+        const destination = this.parseMarkdownDestination(match[2].trim());
 
-        const { alt, align, size } = this.parsePipeAttributes(bracketContent, true);
+        const { alt, align, size } = this.parsePipeAttributes(bracketContent, true, options.attributeMode);
 
         return {
-            path,
+            path: destination.path,
             alt: alt || ' ',
             align,
             size,
+            title: destination.title,
             linkType: 'markdown'
         };
+    }
+
+    private parseMarkdownDestination(destination: string): { path: string; title?: string } {
+        if (!destination) {
+            return { path: '' };
+        }
+
+        if (destination.startsWith('<')) {
+            const closing = destination.indexOf('>');
+            if (closing !== -1) {
+                return {
+                    path: destination.slice(1, closing),
+                    title: this.parseMarkdownTitle(destination.slice(closing + 1).trim())
+                };
+            }
+        }
+
+        const titleMatch = destination.match(/^(\S+)\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\))$/);
+        if (titleMatch) {
+            return {
+                path: titleMatch[1],
+                title: titleMatch[2] ?? titleMatch[3] ?? titleMatch[4]
+            };
+        }
+
+        return { path: destination };
+    }
+
+    private parseMarkdownTitle(titleText: string): string | undefined {
+        if (!titleText) {
+            return undefined;
+        }
+
+        const match = titleText.match(/^(?:"([^"]*)"|'([^']*)'|\(([^)]*)\))$/);
+        return match ? match[1] ?? match[2] ?? match[3] : undefined;
     }
 
     /**
@@ -271,7 +313,9 @@ export class PipeSyntaxParser {
         }
 
         const bracketContent = parts.join('|');
-        return `![${bracketContent}](${data.path})`;
+        const path = /\s/.test(data.path) ? `<${data.path}>` : data.path;
+        const title = data.title ? ` "${data.title.replace(/"/g, '\\"')}"` : '';
+        return `![${bracketContent}](${path}${title})`;
     }
 
     /**
@@ -279,8 +323,8 @@ export class PipeSyntaxParser {
      * Effectively treats the input as the content inside ![...].
      * @param altText The raw alt text (e.g. "Title|100")
      */
-    public parseAltText(altText: string): PipeSyntaxData {
-        const { alt, align, size } = this.parsePipeAttributes(altText, true);
+    public parseAltText(altText: string, mode: PipeAttributeParseMode = 'storage'): PipeSyntaxData {
+        const { alt, align, size } = this.parsePipeAttributes(altText, true, mode);
 
         return {
             path: '',
@@ -296,7 +340,7 @@ export class PipeSyntaxParser {
      * @param content 管道符分隔的内容片段 (不含 ![[ ]] 或 ![ ]() 外壳)
      * @param firstPartIsAlt 是否强制首个片段为 alt (Markdown 风格)
      */
-    public parsePipeAttributes(content: string, firstPartIsAlt: boolean): {
+    public parsePipeAttributes(content: string, firstPartIsAlt: boolean, mode: PipeAttributeParseMode = 'storage'): {
         alt?: string;
         align?: AlignType;
         size?: SizeData;
@@ -305,12 +349,33 @@ export class PipeSyntaxParser {
             return { alt: ' ' };
         }
 
-        const parts = content.split(/(?<!\\)\|/);
+        const parts = this.splitByUnescapedPipe(content);
         let segments = [...parts];
 
         let alt: string | undefined;
         let size: SizeData | undefined;
         let align: AlignType = null;
+
+        if (mode === 'display') {
+            const containsPipe = parts.length > 1;
+            const remaining: string[] = [];
+
+            for (const segment of segments) {
+                const trimmed = segment.trim();
+                const canTreatAsAttribute = containsPipe || !firstPartIsAlt;
+
+                if (canTreatAsAttribute && this.isSizeAttribute(trimmed) && !size) {
+                    size = this.parseSizeAttribute(trimmed);
+                } else if (canTreatAsAttribute && this.isAlignAttribute(trimmed) && !align) {
+                    align = trimmed as AlignType;
+                } else {
+                    remaining.push(segment);
+                }
+            }
+
+            const caption = remaining.join('|').replace(/\\\|/g, '|').trim();
+            return { alt: caption || ' ', align, size };
+        }
 
         if (firstPartIsAlt) {
             // Markdown 风格：首位是 alt
@@ -361,6 +426,32 @@ export class PipeSyntaxParser {
         }
 
         return { alt, align, size };
+    }
+
+    private splitByUnescapedPipe(text: string): string[] {
+        const result: string[] = [];
+        let start = 0;
+
+        for (let i = 0; i < text.length; i++) {
+            if (text[i] !== '|') {
+                continue;
+            }
+
+            let slashCount = 0;
+            for (let j = i - 1; j >= 0 && text[j] === '\\'; j--) {
+                slashCount++;
+            }
+
+            if (slashCount % 2 !== 0) {
+                continue;
+            }
+
+            result.push(text.slice(start, i));
+            start = i + 1;
+        }
+
+        result.push(text.slice(start));
+        return result;
     }
 
     /**
@@ -472,7 +563,7 @@ export class PipeSyntaxParser {
             if (parsed) {
                 results.push({
                     fullMatch: link.source,
-                    index: text.indexOf(link.source),
+                    index: link.index,
                     data: parsed
                 });
             }

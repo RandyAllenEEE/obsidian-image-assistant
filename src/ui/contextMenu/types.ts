@@ -6,4 +6,5 @@ export interface ImageMatch {
 	lineNumber: number;
 	line: string;
 	fullMatch: string;
+	index: number;
 }

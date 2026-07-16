@@ -1,216 +1,269 @@
-import { App, Component, Menu, TFile, MarkdownView } from 'obsidian';
+import { App, Component } from 'obsidian';
 import ImageConverterPlugin from '../main';
-import { t } from '../lang/helpers';
-import { pipeSyntaxParser, AlignType } from '../utils/PipeSyntaxParser';
-import { RefinedImageUtils } from '../utils/RefinedImageUtils';
+import type { HorizontalImageAlignment, ResolvedImageLayout } from './ImageLayoutResolver';
+
+export const IMAGE_LAYOUT_OWNER_ATTRIBUTE = 'data-image-assistant-layout-owner';
+export const IMAGE_LAYOUT_ALIGN_ATTRIBUTE = 'data-image-assistant-align';
+export const IMAGE_LAYOUT_WRAP_ATTRIBUTE = 'data-image-assistant-wrap';
+
+const ALIGNMENT_CLASSES = [
+    'image-position-left',
+    'image-position-center',
+    'image-position-right',
+    'image-wrap',
+    'image-no-wrap',
+    'image-converter-aligned'
+] as const;
+
+const LAYOUT_OWNER_SELECTOR = [
+    '.image-resize-container',
+    '.image-wrapper',
+    '.internal-embed.image-embed',
+    '.external-embed',
+    '.cm-embed-block'
+].join(', ');
 
 export interface ImageAlignmentOptions {
-    align: 'left' | 'center' | 'right' | 'none';
+    align: HorizontalImageAlignment | 'none';
     wrap: boolean;
 }
 
 export interface ImagePositionData {
-    position: 'left' | 'center' | 'right' | 'none';
+    position: HorizontalImageAlignment | 'none';
     wrap: boolean;
     width?: string;
     height?: string;
 }
 
+/** Owns the DOM representation of resolved image layout. */
 export class ImageAlignment extends Component {
-    private refinedImageUtils: RefinedImageUtils;
-
-    constructor(
-        private app: App,
-        private plugin: ImageConverterPlugin,
-    ) {
+    constructor(_app: App, _plugin: ImageConverterPlugin) {
         super();
-        this.refinedImageUtils = new RefinedImageUtils(this.app);
     }
 
-    // Context menu registration moved to ContextMenu.ts
-
-    /**
-     * Applies alignment styles to an image based on parsed pipe syntax state.
-     * @param img - The target image element.
-     * @param positionData - The alignment state to apply.
-     */
-    public applyAlignmentToImage(img: HTMLImageElement, positionData: ImagePositionData) {
+    /** Compatibility wrapper used by existing callers and context-menu tests. */
+    applyAlignmentToImage(img: HTMLImageElement, positionData: ImagePositionData): void {
         if (!positionData) {
-            console.error("No position data provided for image:", img.src);
+            console.error('No position data provided for image:', img.src);
             return;
         }
 
-        // Always apply alignment, do not skip based on current alignment
-        // Parent embed handling
-        const parentEmbed = img.matchParent('.internal-embed.image-embed'); // Use matchParent
-        if (parentEmbed) {
-            // Remove each class token individually to match DOMTokenList semantics
-            parentEmbed.removeClass('image-position-left');
-            parentEmbed.removeClass('image-position-center');
-            parentEmbed.removeClass('image-position-right');
-            parentEmbed.removeClass('image-wrap');
-            parentEmbed.removeClass('image-no-wrap');
-            parentEmbed.removeClass('image-converter-aligned');
-
-            if (positionData.position !== 'none') {
-                parentEmbed.addClass(`image-position-${positionData.position}`);
-                parentEmbed.addClass('image-converter-aligned');
-                parentEmbed.addClass(positionData.wrap ? 'image-wrap' : 'image-no-wrap');
-            }
-        }
-
-        // Idempotency check: Check if image already has the correct classes
-        const currentAlignClass = Array.from(img.classList).find(c => c.startsWith('image-position-'));
-        const currentAlign = currentAlignClass ? currentAlignClass.replace('image-position-', '') : 'none';
-        const currentWrap = img.hasClass('image-wrap');
-        const hasAlignedClass = img.hasClass('image-converter-aligned');
-
-        // Check if width/height styles match (if provided)
-        const currentWidth = img.style.width;
-        const currentHeight = img.style.height;
-
-        // helper to normalize (strip px)
-        const normalize = (val: string | undefined | null) => val ? val.replace('px', '') : '';
-
-        const widthMatch = !positionData.width || normalize(currentWidth) === normalize(positionData.width);
-        const heightMatch = !positionData.height || normalize(currentHeight) === normalize(positionData.height);
-
-        if (currentAlign === positionData.position &&
-            currentWrap === positionData.wrap &&
-            hasAlignedClass === (positionData.position !== 'none') &&
-            widthMatch &&
-            heightMatch) {
-            return; // No changes needed
-        }
-
-        // Remove existing alignment classes first
-        img.removeClass('image-position-left');
-        img.removeClass('image-position-center');
-        img.removeClass('image-position-right');
-        img.removeClass('image-wrap');
-        img.removeClass('image-no-wrap');
-        img.removeClass('image-converter-aligned');
-
-        // Re-apply alignment unconditionally
-        if (positionData.position !== 'none') {
-            img.addClass('image-converter-aligned');
-            img.addClass(`image-position-${positionData.position}`);
-            img.addClass(positionData.wrap ? 'image-wrap' : 'image-no-wrap');
-
-            // Ensure width is applied
-            if (positionData.width) {
-                // Ensure we set with px if missing, or however browser prefers.
-                // Ideally StateManager sends numbers or string with unit.
-                // If string has no unit, browser might ignore it if we don't add px.
-                // Best practice: if it looks like a number, add px.
-                const w = positionData.width;
-                img.style.width = /^\d+$/.test(w) ? `${w}px` : w;
-            }
-            if (positionData.height) {
-                const h = positionData.height;
-                img.style.height = /^\d+$/.test(h) ? `${h}px` : h;
-            }
-
-            // console.log("Alignment applied. New classes:", img.className);
-        }
-
+        this.applyLayout(img, {
+            alignment: positionData.position === 'none' ? null : positionData.position,
+            wrap: positionData.position === 'none' ? false : positionData.wrap,
+            source: positionData.position === 'none' ? 'none' : 'pipe'
+        }, {
+            width: positionData.width,
+            height: positionData.height
+        });
     }
 
+    applyLayout(
+        img: HTMLImageElement,
+        layout: ResolvedImageLayout,
+        dimensions: { width?: string; height?: string } = {}
+    ): HTMLElement | null {
+        this.applyDimensions(img, dimensions);
 
+        const owner = layout.alignment ? this.findPreferredOwner(img) : null;
+        this.clearOtherOwners(img, owner);
+        if (!owner || !layout.alignment) {
+            this.clearPluginDisplay(img);
+            return null;
+        }
 
-    /**
-     * Ensures proper layout for Reading Mode images (specifically Local Markdown links).
-     * Prevents them from rendering as block elements if alignment is requested.
-     */
-    public ensureReadingModeLayout(img: HTMLImageElement, position: string) {
-        // Only target images that are NOT internal embeds (Obsidian handles those well)
-        if (img.closest('.internal-embed')) return;
+        this.applyOwnerState(owner, layout.alignment, layout.wrap);
+        return owner;
+    }
 
-        // If alignment is requested, force inline-block to allow side-by-side
-        if (position !== 'none') {
-            img.style.display = 'inline-block';
+    clearImage(img: HTMLImageElement): void {
+        this.clearOtherOwners(img, null);
+        this.clearPluginDisplay(img);
+    }
 
-            // Check parent: if it's a P or DIV with only this image, we might need to adjust it
-            // ensuring it doesn't force a break. But often inline-block on img is enough 
-            // if the parent P allows flow. 
-            // For now, minimal intervention: just fix the img.
+    cleanup(root: ParentNode = document): void {
+        const owned = this.collectElements(root, `[${IMAGE_LAYOUT_OWNER_ATTRIBUTE}]`);
+        owned.forEach(element => this.clearOwnerState(element));
+
+        const legacy = this.collectElements(root, '.image-converter-aligned');
+        legacy.forEach(element => this.clearOwnerState(element));
+
+        this.collectElements(root, '[data-image-assistant-inline-display="true"]')
+            .forEach(element => {
+                element.style.removeProperty('display');
+                element.removeAttribute('data-image-assistant-inline-display');
+            });
+    }
+
+    getLayoutOwner(img: HTMLImageElement): HTMLElement | null {
+        if (img.hasAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE)) return img;
+        const owner = img.closest(`[${IMAGE_LAYOUT_OWNER_ATTRIBUTE}]`);
+        return isHTMLElement(owner) ? owner : null;
+    }
+
+    getResolvedLayout(img: HTMLImageElement): ResolvedImageLayout {
+        const owner = this.getLayoutOwner(img) ?? img;
+        const dataAlignment = owner.getAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE);
+        const classAlignment = ALIGNMENT_CLASSES
+            .find(className => className.startsWith('image-position-') && owner.classList.contains(className))
+            ?.replace('image-position-', '');
+        const alignment = isHorizontalAlignment(dataAlignment)
+            ? dataAlignment
+            : isHorizontalAlignment(classAlignment) ? classAlignment : null;
+
+        return {
+            alignment,
+            wrap: alignment !== null && (
+                owner.getAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE) === 'true'
+                || owner.classList.contains('image-wrap')
+            ),
+            source: alignment ? 'pipe' : 'none'
+        };
+    }
+
+    /** Transfers ownership while Resize temporarily wraps an image. */
+    transferLayoutOwner(img: HTMLImageElement, target: HTMLElement): void {
+        const layout = this.getResolvedLayout(img);
+        this.clearOtherOwners(img, null);
+        if (layout.alignment) {
+            this.applyOwnerState(target, layout.alignment, layout.wrap);
         }
     }
 
-    // updateImageAlignment removed - handled by ImageStateManager
+    /** Kept for compatibility; layout is now handled exclusively by the owner CSS. */
+    ensureReadingModeLayout(img: HTMLImageElement, position: string): void {
+        if (position === 'none') this.clearPluginDisplay(img);
+    }
 
-    /**
-     * 应用对齐的视觉变化到 DOM
-     * @param img - The target image element.
-     * @param options - The alignment options.
-     */
-    private applyAlignmentVisualChanges(img: HTMLImageElement, options: ImageAlignmentOptions) {
-        // --- Apply Visual Changes to IMG ---
-        img.removeClass('image-position-left');
-        img.removeClass('image-position-center');
-        img.removeClass('image-position-right');
-        img.removeClass('image-wrap');
-        img.removeClass('image-no-wrap');
-        img.removeClass('image-converter-aligned');
-        if (options.align !== 'none') {
-            img.addClass(`image-position-${options.align}`);
-            img.addClass('image-converter-aligned');
-            img.addClass(options.wrap ? 'image-wrap' : 'image-no-wrap');
+    getCurrentImageAlignment(img: HTMLImageElement): ImageAlignmentOptions {
+        const layout = this.getResolvedLayout(img);
+        return {
+            align: layout.alignment ?? 'none',
+            wrap: layout.wrap
+        };
+    }
+
+    private findPreferredOwner(img: HTMLImageElement): HTMLElement {
+        const container = img.closest(LAYOUT_OWNER_SELECTOR);
+        if (isHTMLElement(container)) return container;
+
+        const paragraph = img.parentElement;
+        if (paragraph?.tagName === 'P' && Array.from(paragraph.childNodes).every(node =>
+            node === img
+            || node.nodeType === 3 && !node.textContent?.trim()
+            || isHTMLElement(node)
+                && node.getAttribute('data-image-assistant-caption-renderer') === 'dom'
+        )) {
+            return paragraph;
+        }
+        return img;
+    }
+
+    private clearOtherOwners(img: HTMLImageElement, retained: HTMLElement | null): void {
+        const candidates = new Set<HTMLElement>([img]);
+        let parent = img.parentElement;
+        while (parent) {
+            if (parent.hasAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE)
+                || parent.classList.contains('image-converter-aligned')) {
+                candidates.add(parent);
+            }
+            parent = parent.parentElement;
         }
 
-        // --- Apply Visual Changes to PARENT SPAN ---
-        const parentEmbed = img.matchParent('.internal-embed.image-embed');
-        if (parentEmbed) {
-            parentEmbed.removeClass('image-position-left');
-            parentEmbed.removeClass('image-position-center');
-            parentEmbed.removeClass('image-position-right');
-            parentEmbed.removeClass('image-wrap');
-            parentEmbed.removeClass('image-no-wrap');
-            parentEmbed.removeClass('image-converter-aligned');
-            if (options.align !== 'none') {
-                parentEmbed.addClass(`image-position-${options.align}`);
-                parentEmbed.addClass(options.wrap ? 'image-wrap' : 'image-no-wrap');
+        for (const candidate of candidates) {
+            if (candidate !== retained) this.clearOwnerState(candidate);
+        }
+    }
+
+    private applyOwnerState(
+        owner: HTMLElement,
+        alignment: HorizontalImageAlignment,
+        wrap: boolean
+    ): void {
+        setAttributeIfChanged(owner, IMAGE_LAYOUT_OWNER_ATTRIBUTE, 'true');
+        setAttributeIfChanged(owner, IMAGE_LAYOUT_ALIGN_ATTRIBUTE, alignment);
+        setAttributeIfChanged(owner, IMAGE_LAYOUT_WRAP_ATTRIBUTE, wrap ? 'true' : 'false');
+
+        toggleClassIfChanged(owner, 'image-converter-aligned', true);
+        for (const value of ['left', 'center', 'right'] as const) {
+            toggleClassIfChanged(owner, `image-position-${value}`, value === alignment);
+        }
+        toggleClassIfChanged(owner, 'image-wrap', wrap);
+        toggleClassIfChanged(owner, 'image-no-wrap', !wrap);
+    }
+
+    private clearOwnerState(owner: HTMLElement): void {
+        const pluginOwned = owner.hasAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE);
+        const legacyOwned = owner.classList.contains('image-converter-aligned');
+        const hasPluginState = pluginOwned
+            || owner.hasAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE)
+            || owner.hasAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE)
+            || ALIGNMENT_CLASSES.some(className => owner.classList.contains(className));
+        if (!hasPluginState) return;
+        owner.removeAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE);
+        owner.removeAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE);
+        owner.removeAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE);
+        owner.removeAttribute('data-image-assistant-layout-positioned');
+        owner.style.removeProperty('--image-assistant-layout-offset');
+        ALIGNMENT_CLASSES.forEach(className => owner.classList.remove(className));
+
+        if (pluginOwned || legacyOwned) {
+            owner.style.removeProperty('float');
+            owner.style.removeProperty('clear');
+            owner.style.removeProperty('margin-left');
+            owner.style.removeProperty('margin-right');
+            if (owner.tagName === 'IMG' && owner.style.display === 'inline-block') {
+                owner.style.removeProperty('display');
             }
         }
     }
 
-
-
-    /**
-     * Gets the current alignment of an image. 从 CSS 类检测对齐信息（不再使用缓存）
-     * @param img - The target image element.
-     * @returns The current alignment options.
-     */
-    public getCurrentImageAlignment(img: HTMLImageElement): ImageAlignmentOptions {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) return { align: 'none', wrap: false };
-
-        const src = img.getAttr('src'); // Use getAttr instead of getAttribute
-        if (!src) return { align: 'none', wrap: false };
-
-        // 注：由于我们不再使用缓存，直接从 CSS 类检测
-        /* 
-        // First, try to get alignment from cache
-        const cachedAlignment = this.imageAlignmentManager.getImageAlignment(
-            activeFile.path,
-            src
-        );
-    
-        if (cachedAlignment) {
-            return {
-                align: cachedAlignment.position,
-                wrap: cachedAlignment.wrap
-            };
+    private applyDimensions(
+        img: HTMLImageElement,
+        dimensions: { width?: string; height?: string }
+    ): void {
+        if (dimensions.width) {
+            const width = withDefaultUnit(dimensions.width);
+            if (img.style.width !== width) img.style.width = width;
         }
-        */
-
-        // Fallback to CSS class detection
-        const alignClass = Array.from(img.classList).find(className => className.startsWith('image-position-'));
-        const align = alignClass
-            ? (alignClass.replace('image-position-', '') as 'left' | 'center' | 'right')
-            : 'none';
-        const wrap = img.hasClass('image-wrap'); // Use hasClass instead of classList.contains
-        return { align, wrap };
+        if (dimensions.height) {
+            const height = withDefaultUnit(dimensions.height);
+            if (img.style.height !== height) img.style.height = height;
+        }
     }
 
+    private clearPluginDisplay(img: HTMLImageElement): void {
+        if (!img.hasAttribute('data-image-assistant-inline-display')) return;
+        img.style.removeProperty('display');
+        img.removeAttribute('data-image-assistant-inline-display');
+    }
+
+    private collectElements(root: ParentNode, selector: string): HTMLElement[] {
+        const elements = Array.from(root.querySelectorAll?.(selector) ?? [])
+            .filter(isHTMLElement);
+        if (isHTMLElement(root) && root.matches(selector)) elements.unshift(root);
+        return elements;
+    }
+}
+
+function isHorizontalAlignment(value: string | null | undefined): value is HorizontalImageAlignment {
+    return value === 'left' || value === 'center' || value === 'right';
+}
+
+function isHTMLElement(value: unknown): value is HTMLElement {
+    return !!value && typeof value === 'object' && (value as Node).nodeType === 1;
+}
+
+function withDefaultUnit(value: string): string {
+    return /^\d+(?:\.\d+)?$/.test(value) ? `${value}px` : value;
+}
+
+function setAttributeIfChanged(element: Element, name: string, value: string): void {
+    if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+}
+
+function toggleClassIfChanged(element: Element, className: string, enabled: boolean): void {
+    if (element.classList.contains(className) !== enabled) {
+        element.classList.toggle(className, enabled);
+    }
 }

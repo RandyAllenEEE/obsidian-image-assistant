@@ -56,7 +56,7 @@ describe('Local batch settings management', () => {
     app.metadataCache.getFirstLinkpathDest = vi.fn(() => image as TFile);
 
     const mode = new LocalProcessMode(app, plugin, note, 'note');
-    const tasks = await mode.loadTasks();
+    const { tasks } = await mode.loadTasks();
 
     expect(tasks).toHaveLength(1);
     expect(tasks[0].path).toBe('Images/a.png');

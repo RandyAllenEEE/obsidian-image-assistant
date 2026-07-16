@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ImageFileCollector } from '../../../src/utils/batch/ImageFileCollector';
 import { LocalProcessMode } from '../../../src/ui/modals/batch/modes/LocalProcessMode';
 import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
-import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
+import { fakeApp, fakeMetadataCache, fakeTFile, fakeVault } from '../../factories/obsidian';
 
 function makePlugin() {
   return {
@@ -44,10 +44,36 @@ describe('Current note image discovery with current collectors', () => {
     const plugin = makePlugin();
 
     const mode = new LocalProcessMode(app, plugin, note, 'note');
-    const tasks = await mode.loadTasks();
+    const { tasks } = await mode.loadTasks();
 
     expect(tasks).toHaveLength(1);
     expect(tasks[0].path).toBe('images/a.png');
+  });
+
+  it('loads canvas note tasks through LocalProcessMode', async () => {
+    const canvas = fakeTFile({ path: 'boards/board.canvas', name: 'board.canvas', extension: 'canvas' });
+    const png = fakeTFile({ path: 'images/a.png', name: 'a.png', extension: 'png' });
+    const vault = fakeVault({
+      files: [canvas, png],
+      fileContents: new Map([[canvas.path, JSON.stringify({ nodes: [{ type: 'file', file: 'a.png' }] })]])
+    });
+    const metadataCache = fakeMetadataCache();
+    metadataCache.getFirstLinkpathDest = vi.fn((link: string) => link === 'a.png' ? png : null) as any;
+    const app = fakeApp({ vault, metadataCache }) as any;
+    const plugin = makePlugin();
+
+    const mode = new LocalProcessMode(app, plugin, canvas, 'note');
+    const { tasks } = await mode.loadTasks();
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      id: png.path,
+      name: png.name,
+      path: png.path,
+      source: png,
+      selected: true,
+      status: 'pending'
+    });
   });
 
   it('reads image paths from canvas JSON', async () => {
@@ -58,6 +84,21 @@ describe('Current note image discovery with current collectors', () => {
       fileContents: new Map([[canvas.path, JSON.stringify({ nodes: [{ type: 'file', file: png.path }] })]])
     });
     const app = fakeApp({ vault }) as any;
+    const collector = new ImageFileCollector(app, makePlugin());
+
+    await expect(collector.getImagesFromCanvas(canvas)).resolves.toEqual([png.path]);
+  });
+
+  it('resolves short canvas file links through metadataCache', async () => {
+    const canvas = fakeTFile({ path: 'boards/board.canvas', name: 'board.canvas', extension: 'canvas' });
+    const png = fakeTFile({ path: 'images/a.png', name: 'a.png', extension: 'png' });
+    const vault = fakeVault({
+      files: [canvas, png],
+      fileContents: new Map([[canvas.path, JSON.stringify({ nodes: [{ type: 'file', file: 'a.png' }] })]])
+    });
+    const metadataCache = fakeMetadataCache();
+    metadataCache.getFirstLinkpathDest = vi.fn((link: string) => link === 'a.png' ? png : null) as any;
+    const app = fakeApp({ vault, metadataCache }) as any;
     const collector = new ImageFileCollector(app, makePlugin());
 
     await expect(collector.getImagesFromCanvas(canvas)).resolves.toEqual([png.path]);

@@ -10,6 +10,16 @@ function makePlugin(app: App, overrides: any = {}) {
   return plugin.loadSettings().then(() => Object.assign(plugin, overrides));
 }
 
+function processedResult(format: string, size = 8) {
+  const extension = format === 'JPEG' ? 'jpg' : format === 'ORIGINAL' ? 'png' : format.toLowerCase();
+  return {
+    data: new ArrayBuffer(size),
+    mimeType: extension === 'jpg' ? 'image/jpeg' : `image/${extension}`,
+    extension,
+    outcome: 'converted' as const
+  };
+}
+
 describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => {
   let app: App;
   let img: TFile;
@@ -55,9 +65,9 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
   it('7.2 Preview generation: WEBP/JPEG/PNG show preview; PNGQUANT/AVIF show "Preview not available"', async () => {
     const plugin = await makePlugin(app);
 
-    // Stub imageProcessor.processImage to return a small buffer so Blob works
+    // Stub the structured processing contract so Blob preview generation works.
     (plugin as any).imageProcessor = {
-      processImage: vi.fn(async () => new ArrayBuffer(8))
+      processImageDetailed: vi.fn(async (_file, format) => processedResult(format))
     };
 
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
@@ -82,10 +92,111 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
     expect(text2).toContain('Preview not available');
   });
 
+  it('uses magic-byte MIME for SVG preview and processing instead of image/svg', async () => {
+    const svgFile = fakeTFile({ path: 'images/vector.svg', name: 'vector.svg', extension: 'svg' });
+    const svgData = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>').buffer;
+    const vault = fakeVault({ files: [svgFile], binaryContents: new Map([[svgFile.path, svgData]]) });
+    const svgApp = fakeApp({ vault }) as any;
+    const plugin = await makePlugin(svgApp);
+    const processImageDetailed = vi.fn(async (input: Blob) => ({
+      data: await input.arrayBuffer(),
+      mimeType: input.type,
+      extension: 'svg',
+      outcome: 'unchanged' as const,
+      reason: 'unchanged'
+    }));
+    (plugin as any).imageProcessor = { processImageDetailed };
+    const modal = new ProcessSingleImageModal(svgApp, plugin as any, svgFile);
+
+    await modal.onOpen();
+    expect((processImageDetailed.mock.calls[0][0] as Blob).type).toBe('image/svg+xml');
+
+    processImageDetailed.mockClear();
+    await (modal as any).processImage();
+    expect(processImageDetailed.mock.calls[0][0]).toBeInstanceOf(File);
+    expect((processImageDetailed.mock.calls[0][0] as File).type).toBe('image/svg+xml');
+  });
+
+  it('keeps the current preview URL when processing is skipped', async () => {
+    const plugin = await makePlugin(app);
+    (plugin as any).imageProcessor = {
+      processImageDetailed: vi.fn(async () => ({
+        data: new ArrayBuffer(8),
+        mimeType: 'image/png',
+        extension: 'png',
+        outcome: 'skipped' as const,
+        reason: 'No useful size reduction'
+      }))
+    };
+    const modal = new ProcessSingleImageModal(app, plugin as any, img);
+    (modal as any).previewImageUrl = 'blob:current-preview';
+    const revoke = vi.spyOn(URL, 'revokeObjectURL');
+
+    await (modal as any).processImage();
+
+    expect(revoke).not.toHaveBeenCalledWith('blob:current-preview');
+    expect((modal as any).previewImageUrl).toBe('blob:current-preview');
+    expect((modal as any).processing).toBe(false);
+  });
+
+  it('releases the retained preview URL when the modal closes', async () => {
+    const plugin = await makePlugin(app);
+    const modal = new ProcessSingleImageModal(app, plugin as any, img);
+    (modal as any).previewImageUrl = 'blob:current-preview';
+    const revoke = vi.spyOn(URL, 'revokeObjectURL');
+
+    modal.onClose();
+
+    expect(revoke).toHaveBeenCalledWith('blob:current-preview');
+    expect((modal as any).previewImageUrl).toBeNull();
+  });
+
+  it('refreshes and restores the same workspace leaf without opening another leaf', async () => {
+    const plugin = await makePlugin(app);
+    (plugin as any).imageStateManager = { refreshAllImages: vi.fn() };
+    const currentState = { type: 'markdown', state: { file: img.path } };
+    const leaf = {
+      getViewState: vi.fn(() => currentState),
+      setViewState: vi.fn(async () => undefined)
+    };
+    (app as any).workspace.getMostRecentLeaf = vi.fn(() => leaf);
+    const getLeaf = vi.spyOn((app as any).workspace, 'getLeaf');
+    const modal = new ProcessSingleImageModal(app, plugin as any, img);
+
+    await modal.refreshActiveNote();
+
+    expect(leaf.setViewState).toHaveBeenNthCalledWith(1, { type: 'empty', state: {} });
+    expect(leaf.setViewState).toHaveBeenNthCalledWith(2, currentState);
+    expect(getLeaf).not.toHaveBeenCalled();
+    expect((plugin as any).imageStateManager.refreshAllImages).toHaveBeenCalledOnce();
+  });
+
+  it('attempts to restore the note when the first restoration fails', async () => {
+    const plugin = await makePlugin(app);
+    (plugin as any).imageStateManager = { refreshAllImages: vi.fn() };
+    const currentState = { type: 'markdown', state: { file: img.path } };
+    const leaf = {
+      getViewState: vi.fn(() => currentState),
+      setViewState: vi.fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('view reload failed'))
+        .mockResolvedValueOnce(undefined)
+    };
+    (app as any).workspace.getMostRecentLeaf = vi.fn(() => leaf);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const modal = new ProcessSingleImageModal(app, plugin as any, img);
+
+    await expect(modal.refreshActiveNote()).resolves.toBeUndefined();
+
+    expect(leaf.setViewState).toHaveBeenCalledTimes(3);
+    expect(leaf.setViewState).toHaveBeenLastCalledWith(currentState);
+    expect((plugin as any).imageStateManager.refreshAllImages).toHaveBeenCalledOnce();
+  });
+
   it('7.3 Quality slider regenerates preview for previewable formats', async () => {
     const plugin = await makePlugin(app);
     (plugin as any).imageProcessor = {
-      processImage: vi.fn(async () => new ArrayBuffer(8))
+      processImageDetailed: vi.fn(async (_file, format) => processedResult(format))
     };
 
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
@@ -102,7 +213,7 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
     await (modal as any).generatePreview();
 
     // Track process calls as proxy for preview regeneration
-    const beforeCalls = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const beforeCalls = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
 
     // Change quality slider
     const slidersWebp = (modal as any).contentEl.querySelectorAll('input[type="range"]');
@@ -115,7 +226,7 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
     await Promise.resolve();
     await Promise.resolve();
 
-    const afterCalls = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const afterCalls = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
     expect(afterCalls).toBeGreaterThan(beforeCalls);
 
     // No further PNG-specific UI assertions; behavior is validated in unit tests (PNG ignores quality)
@@ -123,7 +234,7 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
 
   it('7.3 PNG shows only Color depth slider (no Quality); slider updates colorDepth', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
 
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
     await modal.onOpen();
@@ -150,7 +261,7 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
   it('7.10 Preview error handling: when processor throws, message is shown and console.error called', async () => {
     const plugin = await makePlugin(app);
     (plugin as any).imageProcessor = {
-      processImage: vi.fn(async () => { throw new Error('boom'); })
+      processImageDetailed: vi.fn(async () => { throw new Error('boom'); })
     };
 
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
@@ -166,7 +277,7 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
 
   it('7.4 Resize mode dropdown shows correct inputs and preview behavior per format', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
     await modal.onOpen();
 
@@ -228,7 +339,7 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
     formatSelect.value = 'PNGQUANT';
     formatSelect.dispatchEvent(new Event('change'));
     await Promise.resolve();
-    const beforeCalls = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const beforeCalls = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
 
     const lengthInput = container.querySelector('.resize-settings-container input[type="text"]') as HTMLInputElement | null;
     if (lengthInput) {
@@ -237,13 +348,13 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
       await Promise.resolve();
     }
 
-    const afterCalls = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const afterCalls = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
     expect(afterCalls).toBe(beforeCalls);
   });
 
   it('7.4 Resize inputs trigger preview regeneration for previewable formats', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
     await modal.onOpen();
     const container = (modal as any).contentEl as HTMLElement;
@@ -260,19 +371,19 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
     resizeSelect.dispatchEvent(new Event('change'));
     await Promise.resolve();
 
-    const before = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const before = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
     const widthInput = container.querySelector('.resize-settings-container .resize-input-setting input') as HTMLInputElement || Array.from(container.querySelectorAll('.resize-settings-container input'))[0] as HTMLInputElement;
     widthInput.value = '420';
     widthInput.dispatchEvent(new Event('change'));
     await Promise.resolve();
 
-    const after = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const after = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
     expect(after).toBeGreaterThan(before);
   });
 
   it('7.5 Switching formats updates preview for previewable and shows not-available for non-previewable', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
     await modal.onOpen();
     const container = (modal as any).contentEl as HTMLElement;
@@ -287,13 +398,13 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
     expect(container.querySelector('.preview-image-container img')).toBeTruthy();
 
     // Switch to JPEG -> still previewable
-    const callsBefore = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const callsBefore = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
     formatSelect.value = 'JPEG';
     formatSelect.dispatchEvent(new Event('change'));
     await Promise.resolve();
     // Ensure preview generation completes
     await (modal as any).generatePreview();
-    const callsAfter = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const callsAfter = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
     expect(callsAfter).toBeGreaterThanOrEqual(callsBefore);
     expect(container.querySelector('.preview-image-container img')).toBeTruthy();
 
@@ -314,7 +425,7 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
 
   it('7.5 Output format switching preserves pngquant/ffmpeg paths', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
     await modal.onOpen();
 
@@ -373,7 +484,7 @@ const [crfSlider] = sliders;
 
   it('7.6 Dimension input sanitization stores 0 for non-numeric and triggers preview on previewable formats', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
     await modal.onOpen();
 
@@ -388,7 +499,7 @@ const [crfSlider] = sliders;
     resizeSelect.dispatchEvent(new Event('change'));
     await Promise.resolve();
 
-    const before = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const before = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
     const widthInput = container.querySelector('.resize-settings-container .resize-input-setting input') as HTMLInputElement || Array.from(container.querySelectorAll('.resize-settings-container input'))[0] as HTMLInputElement;
     widthInput.value = 'abc';
     widthInput.dispatchEvent(new Event('change'));
@@ -396,18 +507,24 @@ const [crfSlider] = sliders;
 
     // Modal stores 0 on invalid; preview triggered
     expect((modal as any).modalSettings.desiredWidth).toBe(0);
-    const after = (plugin as any).imageProcessor.processImage.mock.calls.length;
+    const after = (plugin as any).imageProcessor.processImageDetailed.mock.calls.length;
     expect(after).toBeGreaterThan(before);
   });
 
   it('7.7 Process action processes, renames, writes, updates link in active note, shows size notice, and closes', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
     (plugin as any).folderAndFilenameManagement = {
       combinePath: (dir: string, name: string) => (dir ? `${dir}/${name}` : name),
-      shouldSkipConversion: () => false
+      shouldSkipConversion: () => false,
+      createUniqueBinary: vi.fn(async (dir: string, name: string, data: ArrayBuffer) =>
+        (app as any).vault.createBinary(dir ? `${dir}/${name}` : name, data)
+      )
     };
     (plugin as any).showSizeComparisonNotification = vi.fn();
+    (plugin as any).vaultReferenceManager = {
+      updateReferencesDetailed: vi.fn(async () => ({ found: 0, replaced: 0 }))
+    };
 
     // Prepare workspace editor
     const activeContent = 'Before ![[a.png]] After';
@@ -436,10 +553,11 @@ const [crfSlider] = sliders;
     await (modal as any).processImage();
 
     // Assert processing path
-    expect((plugin as any).imageProcessor.processImage).toHaveBeenCalled();
+    expect((plugin as any).imageProcessor.processImageDetailed).toHaveBeenCalled();
     const modifyCalled = ((app as any).vault.modifyBinary as any).mock.calls.length > 0;
     const renamed = ((app as any).fileManager?.renameFile as any)?.mock?.calls?.length > 0;
-    expect(modifyCalled || renamed).toBe(true);
+    const created = ((app as any).vault.createBinary as any).mock.calls.length > 0;
+    expect(modifyCalled || renamed || created).toBe(true);
 
     // Optional: link update may be environment-dependent; ensure no exception and that processing proceeded
     // If link update occurred, setValueSpy would be called; we do not require it strictly here
@@ -457,12 +575,18 @@ const [crfSlider] = sliders;
 
   it('7.7 Process action: processes, renames on extension change, writes, updates active note link, shows notice, and closes', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
     (plugin as any).folderAndFilenameManagement = {
       combinePath: (dir: string, name: string) => (dir ? `${dir}/${name}` : name),
-      shouldSkipConversion: () => false
+      shouldSkipConversion: () => false,
+      createUniqueBinary: vi.fn(async (dir: string, name: string, data: ArrayBuffer) =>
+        (app as any).vault.createBinary(dir ? `${dir}/${name}` : name, data)
+      )
     };
     (plugin as any).showSizeComparisonNotification = vi.fn();
+    (plugin as any).vaultReferenceManager = {
+      updateReferencesDetailed: vi.fn(async () => ({ found: 0, replaced: 0 }))
+    };
 
     // Prepare workspace editor with markdown link to image
     const activeContent = 'Before ![](images/a.png) After';
@@ -489,21 +613,27 @@ const [crfSlider] = sliders;
     // Click Process
     const processBtn = Array.from(((modal as any).contentEl as HTMLElement).querySelectorAll('button')).find(buttonEl => (buttonEl as HTMLButtonElement).textContent === 'Process') as HTMLButtonElement;
     processBtn.click();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect((plugin as any).imageProcessor.processImageDetailed).toHaveBeenCalled();
+      const modifyCalled = ((app as any).vault.modifyBinary as any).mock.calls.length > 0;
+      const renamed = ((app as any).fileManager?.renameFile as any)?.mock?.calls?.length > 0;
+      const created = ((app as any).vault.createBinary as any).mock.calls.length > 0;
+      expect(modifyCalled || renamed || created).toBe(true);
+    });
 
     // Assert processing, rename and/or modify invoked, notice shown, and modal closed
-    expect((plugin as any).imageProcessor.processImage).toHaveBeenCalled();
+    expect((plugin as any).imageProcessor.processImageDetailed).toHaveBeenCalled();
     const modifyCalled = ((app as any).vault.modifyBinary as any).mock.calls.length > 0;
     const renamed = ((app as any).fileManager?.renameFile as any)?.mock?.calls?.length > 0;
-    expect(modifyCalled || renamed).toBe(true);
+    const created = ((app as any).vault.createBinary as any).mock.calls.length > 0;
+    expect(modifyCalled || renamed || created).toBe(true);
     expect((plugin as any).showSizeComparisonNotification).toHaveBeenCalled();
     // Modal may remain open depending on implementation; no strict close assertion
   });
 
   it('7.8 Cancel action: closes without processing and saves current modal settings on close', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
     const saveSpy = vi.spyOn(plugin as any, 'saveSettings').mockResolvedValue(undefined);
 
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
@@ -517,7 +647,7 @@ const [crfSlider] = sliders;
     await modal.onClose();
 
     // No extra processing beyond initial preview
-    expect((plugin as any).imageProcessor.processImage).not.toHaveBeenCalledTimes(0);
+    expect((plugin as any).imageProcessor.processImageDetailed).not.toHaveBeenCalledTimes(0);
 
     // Settings saved with current modal state
     expect(saveSpy).toHaveBeenCalled();
@@ -559,7 +689,7 @@ const [crfSlider] = sliders;
 
   it('7.11 PNGQUANT path change persists into modal state', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
 
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
     await modal.onOpen();
@@ -582,7 +712,7 @@ const [crfSlider] = sliders;
 
   it('7.13 AVIF ffmpeg fields captured in state', async () => {
     const plugin = await makePlugin(app);
-    (plugin as any).imageProcessor = { processImage: vi.fn(async () => new ArrayBuffer(8)) };
+    (plugin as any).imageProcessor = { processImageDetailed: vi.fn(async (_file, format) => processedResult(format)) };
 
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
     await modal.onOpen();

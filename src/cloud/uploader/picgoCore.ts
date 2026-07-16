@@ -1,12 +1,14 @@
 import { join } from "path-browserify";
+import crossSpawn from "cross-spawn";
 
-import { streamToString, getLastImage } from "../../utils";
+import { getLastImage } from "../../utils";
 import { normalizePath, FileSystemAdapter } from "obsidian";
 
 import type ImageConverterPlugin from "../../main";
-import type { Image } from "./types";
+import type { Image, Uploader } from "./types";
 import type { CloudUploadSettings } from "../../settings/types";
-import type { Uploader } from "./types";
+
+const PICGO_CORE_TIMEOUT_MS = 60_000;
 
 export default class PicGoCoreUploader implements Uploader {
   settings: CloudUploadSettings;
@@ -17,7 +19,15 @@ export default class PicGoCoreUploader implements Uploader {
     this.plugin = plugin;
   }
 
-  private async uploadFiles(fileList: Array<Image> | Array<string>) {
+  private async uploadFiles(fileList: Array<Image | string>) {
+    if (fileList.length === 0) {
+      return {
+        success: false,
+        msg: "No files were provided for upload",
+        result: [] as string[],
+      };
+    }
+
     const basePath = (
       this.plugin.app.vault.adapter as FileSystemAdapter
     ).getBasePath();
@@ -31,23 +41,15 @@ export default class PicGoCoreUploader implements Uploader {
     });
 
     const length = list.length;
-    let cli = this.settings.picgoCorePath || "picgo";
-    // Escape paths to prevent command injection - replace " with \" and wrap in quotes
-    const safeList = list.map(item => {
-      const escaped = item.replace(/"/g, '\\"');
-      return `"${escaped}"`;
-    });
-    let command = `${cli} upload ${safeList.join(" ")}`;
+    const executable = this.settings.picgoCorePath?.trim() || "picgo";
+    const res = await this.exec(executable, ["upload", ...list]);
+    const data = res
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => /^https?:\/\//i.test(line))
+      .slice(-length);
 
-    const res = await this.exec(command);
-    const splitList = res.split("\n");
-    const splitListLength = splitList.length;
-
-    const data = splitList.splice(splitListLength - 1 - length, length);
-
-    if (res.includes("PicGo ERROR")) {
-      console.log(command, res);
-
+    if (res.includes("PicGo ERROR") || data.length !== length) {
       return {
         success: false,
         msg: "失败",
@@ -74,8 +76,6 @@ export default class PicGoCoreUploader implements Uploader {
         result: [lastImage],
       };
     } else {
-      console.log(splitList);
-
       return {
         success: false,
         msg: `"Please check PicGo-Core config"\n${res}`,
@@ -86,53 +86,51 @@ export default class PicGoCoreUploader implements Uploader {
 
   // PicGo-Core的剪切上传反馈
   private async uploadByClip() {
-    let command;
-    if (this.settings.picgoCorePath) {
-      command = `${this.settings.picgoCorePath} upload`;
-    } else {
-      command = `picgo upload`;
-    }
-    const res = await this.exec(command);
-
-    return res;
+    const executable = this.settings.picgoCorePath?.trim() || "picgo";
+    return this.exec(executable, ["upload"]);
   }
 
-  private async exec(command: string) {
-    const { exec } = require("child_process");
-    let { stdout } = await exec(command);
-    const res = await streamToString(stdout);
-    return res;
-  }
+  private async exec(executable: string, args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = crossSpawn(executable, args, {
+        shell: false,
+        windowsHide: true,
+      });
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+      const finish = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback();
+      };
+      const timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch (error) {
+          console.warn("[PicGo-Core] Failed to terminate the timed-out process:", error);
+        } finally {
+          finish(() => reject(new Error(`PicGo-Core timed out after ${PICGO_CORE_TIMEOUT_MS / 1000} seconds`)));
+        }
+      }, PICGO_CORE_TIMEOUT_MS);
 
-  private async spawnChild() {
-    const { spawn } = require("child_process");
-    const child = spawn("picgo", ["upload"], {
-      shell: true,
+      child.stdout?.on("data", chunk => { stdout += chunk.toString(); });
+      child.stderr?.on("data", chunk => { stderr += chunk.toString(); });
+      child.once("error", error => finish(() => reject(error)));
+      child.once("close", code => {
+        finish(() => {
+          if (code === 0) resolve(stdout);
+          else reject(new Error(`PicGo-Core exited with code ${code}: ${stderr.trim()}`));
+        });
+      });
     });
-
-    let data = "";
-    for await (const chunk of child.stdout) {
-      data += chunk;
-    }
-    let error = "";
-    for await (const chunk of child.stderr) {
-      error += chunk;
-    }
-    const exitCode = await new Promise((resolve, reject) => {
-      child.on("close", resolve);
-    });
-
-    if (exitCode) {
-      throw new Error(`subprocess error exit ${exitCode}, ${error}`);
-    }
-    return data;
   }
 
-  async upload(fileList: Array<Image> | Array<string>) {
+  async upload(fileList: Array<Image | string>) {
     return this.uploadFiles(fileList);
   }
   async uploadByClipboard(fileList?: FileList) {
-    console.log("uploadByClipboard", fileList);
     return this.uploadFileByClipboard();
   }
 }

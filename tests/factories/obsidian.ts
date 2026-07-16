@@ -149,6 +149,12 @@ export function fakeVault(options: {
     modify: vi.fn(async (file: TFile, content: string) => {
       fileContents.set(file.path, content);
     }),
+
+    process: vi.fn(async (file: TFile, updater: (content: string) => string) => {
+      const updated = updater(fileContents.get(file.path) ?? '');
+      fileContents.set(file.path, updated);
+      return updated;
+    }),
     
     modifyBinary: vi.fn(async (file: TFile, content: ArrayBuffer) => {
       binaryContents.set(file.path, content);
@@ -405,7 +411,10 @@ export function fakeWorkspace(options: {
         getState: () => ({ mode: 'preview' })
       };
     }),
-    
+
+    getLeavesOfType: vi.fn(() => []),
+    iterateAllLeaves: vi.fn(),
+
     on: vi.fn(),
     off: vi.fn(),
     trigger: vi.fn(),

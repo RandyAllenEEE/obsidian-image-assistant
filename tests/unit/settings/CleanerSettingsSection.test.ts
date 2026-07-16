@@ -1,0 +1,64 @@
+import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
+import { renderCleanerSettingsSection } from '../../../src/settings/sections/CleanerSettingsSection';
+import type { SettingsUIState } from '../../../src/settings/types';
+
+function makeUIState(): SettingsUIState {
+  return {
+    pasteHandlingSectionCollapsed: false,
+    imageAlignmentSectionCollapsed: false,
+    imageDragResizeSectionCollapsed: false,
+    imageCaptionSectionCollapsed: false,
+    cleanerSectionCollapsed: false,
+    ocrSectionCollapsed: false,
+    otherSectionCollapsed: false
+  };
+}
+
+describe('CleanerSettingsSection', () => {
+  it('exposes file types and the custom trash path and saves changes', async () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.cleanerSettings.trashMode = 'custom';
+    const plugin = {
+      settings,
+      saveSettings: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const refreshDisplay = vi.fn();
+    const container = document.createElement('div');
+
+    renderCleanerSettingsSection(container, plugin, makeUIState(), refreshDisplay);
+
+    const inputs = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="text"]'));
+    const fileTypes = inputs.find(input => input.value === settings.cleanerSettings.fileTypes)!;
+    const customPath = inputs.find(input => input.value === settings.cleanerSettings.customTrashPath)!;
+    fileTypes.value = 'png,webp,avif';
+    fileTypes.dispatchEvent(new Event('change', { bubbles: true }));
+    customPath.value = 'Archive/Unused';
+    customPath.dispatchEvent(new Event('change', { bubbles: true }));
+    await Promise.resolve();
+
+    expect(settings.cleanerSettings.fileTypes).toBe('png,webp,avif');
+    expect(settings.cleanerSettings.customTrashPath).toBe('Archive/Unused');
+    expect(plugin.saveSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes after changing trash mode so the conditional path control updates', async () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const plugin = {
+      settings,
+      saveSettings: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const refreshDisplay = vi.fn();
+    const container = document.createElement('div');
+
+    renderCleanerSettingsSection(container, plugin, makeUIState(), refreshDisplay);
+    const mode = container.querySelector('select') as HTMLSelectElement;
+    mode.value = 'custom';
+    mode.dispatchEvent(new Event('change', { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(settings.cleanerSettings.trashMode).toBe('custom');
+    expect(refreshDisplay).toHaveBeenCalledOnce();
+  });
+});

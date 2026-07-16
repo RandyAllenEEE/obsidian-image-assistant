@@ -1,4 +1,4 @@
-import { Setting, setIcon, Notice } from "obsidian";
+import { Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
 import { SettingsUIState } from "../types";
@@ -24,7 +24,7 @@ export function renderInteractiveResizeSettingsSection(
             toggle
                 .setValue(plugin.settings.interactiveResize.enabled)
                 .onChange(async (value) => {
-                    plugin.settings.interactiveResize.enabled = value;
+                    plugin.setInteractiveResizeEnabled(value);
                     await plugin.saveSettings();
                     refreshDisplay();
 
@@ -141,6 +141,7 @@ export function renderInteractiveResizeSettingsSection(
                     .setValue(plugin.settings.interactiveResize.scrollModifier)
                     .onChange(async (value: "None" | "Shift" | "Control" | "Alt" | "Meta") => {
                         plugin.settings.interactiveResize.scrollModifier = value;
+                        plugin.updateInteractiveResizeSettings();
                         await plugin.saveSettings();
                     }));
 
@@ -153,6 +154,7 @@ export function renderInteractiveResizeSettingsSection(
                     .setDynamicTooltip()
                     .onChange(async (value) => {
                         plugin.settings.interactiveResize.sensitivity = value;
+                        plugin.updateInteractiveResizeSettings();
                         await plugin.saveSettings();
                     }));
         }

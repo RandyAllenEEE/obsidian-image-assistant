@@ -1,7 +1,9 @@
-import { App, Editor, normalizePath } from 'obsidian';
+import { App, Editor, normalizePath, TFile } from 'obsidian';
 import * as path from 'path';
 import { pipeSyntaxParser } from '../../../utils/PipeSyntaxParser';
 import { ImagePathUtils } from './ImagePathUtils';
+import { isHttpUrl } from '../../../utils/NetworkPolicy';
+import { getContextualImageLinks } from '../../../utils/MarkdownSourceContext';
 
 /**
  * Utility class for finding image matches in editor content
@@ -44,55 +46,81 @@ export class ImageMatchFinder {
     async findImageMatches(
         editor: Editor,
         imagePath: string | null,
-        isExternal: boolean
+        isExternal: boolean,
+        sourceFile: TFile | null = this.app.workspace.getActiveFile()
     ): Promise<{ lineNumber: number, line: string, fullMatch: string, index: number }[]> {
         const lineCount = editor.getDoc().lineCount();
-        const frontmatterEnd = this.findFrontmatterEnd(editor);
         const matches: { lineNumber: number, line: string, fullMatch: string, index: number }[] = [];
-        const activeFile = this.app.workspace.getActiveFile();
+        const activeFile = sourceFile;
 
         if (!activeFile) return matches;
 
-        for (let i = frontmatterEnd + 1; i < lineCount; i++) {
-            const line = editor.getLine(i);
-            const links = pipeSyntaxParser.extractAllLinks(line);
+        const lines = Array.from({ length: lineCount }, (_, index) => editor.getLine(index));
+        const content = lines.join('\n');
+        const lineStarts = getLineStarts(lines);
+        for (const sourceLink of getContextualImageLinks(content)) {
+            const parsed = pipeSyntaxParser.parsePipeSyntax(sourceLink.source);
+            if (!parsed) continue;
+            const linkPath = parsed.path;
+            const lineNumber = getLineForOffset(lineStarts, sourceLink.index);
+            const index = sourceLink.index - lineStarts[lineNumber];
+            const line = lines[lineNumber];
 
-            for (const link of links) {
-                const linkPath = link.data.path;
+            if (isExternal) {
+                if (imagePath && this.areExternalUrlsEquivalent(linkPath, imagePath)) {
+                    matches.push({ lineNumber, line, fullMatch: sourceLink.source, index });
+                }
+                continue;
+            }
 
-                if (isExternal) {
-                    // For external/network images, imagePath is effectively the URL
-                    // We compare the path in the link with the passed imagePath (URL)
-                    if (imagePath && linkPath === imagePath) {
-                        matches.push({ lineNumber: i, line, fullMatch: link.fullMatch, index: link.index });
+            if (imagePath && !isHttpUrl(linkPath)) {
+                const resolveRelativePath = (p: string, activeFilePath: string): string => {
+                    const activeFileDir = path.dirname(activeFilePath);
+                    if (p.startsWith('./') || p.startsWith('../')) {
+                        return normalizePath(path.join(activeFileDir, p));
                     }
-                } else {
-                    // For local images
-                    if (imagePath && !linkPath.startsWith('http')) {
-                        // Helper to resolve relative paths
-                        const resolveRelativePath = (p: string, activeFilePath: string): string => {
-                            const activeFileDir = path.dirname(activeFilePath);
-                            if (p.startsWith('./') || p.startsWith('../')) {
-                                return normalizePath(path.join(activeFileDir, p));
-                            }
-                            return normalizePath(p);
-                        };
+                    return normalizePath(p);
+                };
 
-                        const resolvedLinkPath = resolveRelativePath(linkPath, activeFile.path);
-                        const normalizedImagePath = ImagePathUtils.normalizeImagePath(imagePath);
-                        const normalizedResolvedPath = ImagePathUtils.normalizeImagePath(resolvedLinkPath);
-
-                        // Check for exact match or if the normalized image path ends with the resolved path
-                        if (normalizedImagePath === normalizedResolvedPath ||
-                            normalizedImagePath.endsWith(normalizedResolvedPath)) {
-                            matches.push({ lineNumber: i, line, fullMatch: link.fullMatch, index: link.index });
-                        }
+                const normalizedImagePath = ImagePathUtils.normalizeImagePath(imagePath);
+                const metadataDest = this.app.metadataCache.getFirstLinkpathDest(linkPath, activeFile.path);
+                if (metadataDest instanceof TFile) {
+                    if (ImagePathUtils.normalizeImagePath(metadataDest.path) === normalizedImagePath) {
+                        matches.push({ lineNumber, line, fullMatch: sourceLink.source, index });
                     }
+                    continue;
+                }
+
+                const resolvedLinkPath = resolveRelativePath(linkPath, activeFile.path);
+                const normalizedResolvedPath = ImagePathUtils.normalizeImagePath(resolvedLinkPath);
+                const normalizedResolvedSuffix = normalizedResolvedPath.replace(/^\/+/, '');
+
+                if (normalizedImagePath === normalizedResolvedPath ||
+                    normalizedImagePath.endsWith(`/${normalizedResolvedSuffix}`)) {
+                    matches.push({ lineNumber, line, fullMatch: sourceLink.source, index });
                 }
             }
         }
 
         return matches;
+    }
+
+    private areExternalUrlsEquivalent(linkPath: string, imagePath: string): boolean {
+        if (linkPath === imagePath) {
+            return true;
+        }
+
+        return this.normalizeExternalUrlForComparison(linkPath) ===
+            this.normalizeExternalUrlForComparison(imagePath);
+    }
+
+    private normalizeExternalUrlForComparison(url: string): string {
+        const trimmed = (url ?? '').trim();
+        try {
+            return decodeURI(trimmed);
+        } catch {
+            return trimmed;
+        }
     }
 
     /**
@@ -112,10 +140,10 @@ export class ImageMatchFinder {
         const lineCount = editor.getDoc().lineCount();
         for (let i = 0; i < lineCount; i++) {
             const line = editor.getLine(i);
-            const base64Matches = [...line.matchAll(/<img\s+src="data:image\/[^"]+"\s*\/?>/g)];
+            const base64Matches = [...line.matchAll(/<img\b[^>]*\bsrc\s*=\s*(["'])(data:image\/[^"']+)\1[^>]*>/gi)];
 
             for (const match of base64Matches) {
-                if (match[0].includes(src)) {
+                if (match[2] === src) {
                     await processor(editor, i, line, match[0]);
                     return true;
                 }
@@ -123,4 +151,28 @@ export class ImageMatchFinder {
         }
         return false;
     }
+}
+
+function getLineStarts(lines: string[]): number[] {
+    const starts: number[] = [];
+    let offset = 0;
+    for (const line of lines) {
+        starts.push(offset);
+        offset += line.length + 1;
+    }
+    return starts;
+}
+
+function getLineForOffset(lineStarts: number[], offset: number): number {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low <= high) {
+        const middle = (low + high) >>> 1;
+        const start = lineStarts[middle];
+        const next = lineStarts[middle + 1] ?? Number.POSITIVE_INFINITY;
+        if (offset < start) high = middle - 1;
+        else if (offset >= next) low = middle + 1;
+        else return middle;
+    }
+    return Math.max(0, lineStarts.length - 1);
 }

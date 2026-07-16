@@ -1,5 +1,4 @@
-import { OCRSettings } from "../OCRSettings";
-import { OCRProvider } from "../OCRSettings";
+import { OCRProvider, OCRSettings } from "../OCRSettings";
 
 // Provider imports
 import SimpleTex from "./simple-tex";
@@ -32,9 +31,9 @@ export function getLatexProvider(
         case "SimpleTex":
             return new SimpleTex(app, isMultiline, settings);
         case "Pix2Tex":
-            return new Pic2Tex(isMultiline, settings);
+            return new Pic2Tex(isMultiline, settings, app);
         case "Texify":
-            return new Texify(settings.texify);
+            return new Texify(settings.texify, app);
         case "LLM":
             return new AIModelConverter(app, isMultiline, settings, "latex");
         default:
@@ -51,7 +50,7 @@ export function getLatexProvider(
 export function getMarkdownProvider(app: App, settings: OCRSettings): OCRProvider {
     switch (settings.markdownProvider) {
         case "Texify":
-            return new Texify(settings.texify);
+            return new Texify(settings.texify, app);
         case "LLM":
             return new AIModelConverter(app, false, settings, "markdown");
         default:

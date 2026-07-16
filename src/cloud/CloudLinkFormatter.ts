@@ -1,4 +1,5 @@
 import type { CloudUploadSettings } from "../settings/types";
+import { ImageLinkPathReplacer } from "../utils/ImageLinkPathReplacer";
 
 /**
  * CloudLinkFormatter - 处理图床链接的格式化
@@ -74,7 +75,7 @@ export class CloudLinkFormatter {
             }
         } else {
             // Markdown format: ![alt](url)
-            return `![${finalAlt}](${rawUrl})`;
+            return `![${finalAlt}](${this.formatMarkdownDestination(rawUrl)})`;
         }
     }
 
@@ -83,16 +84,15 @@ export class CloudLinkFormatter {
      * 例如: "![alt](http://example.com/img.png)" -> "http://example.com/img.png"
      */
     private static extractUrlFromMarkdown(text: string): string {
-        // 匹配 Markdown 链接的 URL 部分
-        // 简单匹配 () 中的内容
-        const markdownRegex = /!\[.*?\]\((.*?)\)/;
-        const match = text.match(markdownRegex);
-        if (match && match[1]) {
-            // 递归清理，防止多重包裹
-            return this.extractUrlFromMarkdown(match[1].split(' ')[0]); // split(' ')[0] 去除可能的 title
+        return ImageLinkPathReplacer.extractPureUrlFromPossibleMarkdown(text);
+    }
+
+    private static formatMarkdownDestination(url: string): string {
+        if (!/[\s()]/.test(url)) {
+            return url;
         }
-        // 如果不是 Markdown 链接，假设也是纯 URL
-        return text;
+
+        return `<${url.replace(/>/g, "%3E")}>`;
     }
 
     /**
@@ -111,20 +111,12 @@ export class CloudLinkFormatter {
             }
 
             // 2. 处理 Wiki 链接: ![[path|alt]]
-            const wikiMatch = link.match(/!\[\[(.*?)\]\]/);
+            const wikiMatch = link.match(/^!\[\[(.*)\]\]$/);
             if (wikiMatch) {
                 const content = wikiMatch[1];
-                const parts = content.split('|');
-                // Wiki 链接第一部分是路径
-                if (parts.length > 1) {
-                    // 取最后一部分作为 potential size or alt
-                    // 这种简单的分割可能不够，通常 Wiki 链接是 path|alt text
-                    // 而 alt text 内部可能包含 |size
-                    // 让我们假设 | 分隔的最后一部分可能是尺寸，如果符合尺寸格式
-
-                    // 重新策略: 把 | 后的所有内容当作 Alt 处理
-                    const altPart = parts.slice(1).join('|');
-                    return this.parseAltText(altPart);
+                const firstPipe = this.findFirstUnescapedPipe(content);
+                if (firstPipe >= 0) {
+                    return this.parseAltText(content.slice(firstPipe + 1));
                 }
                 return { alt: "", size: null };
             }
@@ -134,6 +126,23 @@ export class CloudLinkFormatter {
             console.error("Error parsing original link:", error);
             return null;
         }
+    }
+
+    private static findFirstUnescapedPipe(text: string): number {
+        for (let i = 0; i < text.length; i++) {
+            if (text[i] !== "|") continue;
+
+            let slashCount = 0;
+            for (let j = i - 1; j >= 0 && text[j] === "\\"; j--) {
+                slashCount++;
+            }
+
+            if (slashCount % 2 === 0) {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     /**
@@ -162,12 +171,14 @@ export class CloudLinkFormatter {
      * @returns 尺寸参数字符串,如 "|300x200"、"|500"、"|x300" 或空字符串
      */
     private static generateSizeParameter(settings: CloudUploadSettings): string {
+        if (settings.imageSizeSource !== "settings") return "";
+
         const { imageSizeWidth, imageSizeHeight } = settings;
 
         // 检查是否有有效的宽度值
-        const hasWidth = imageSizeWidth !== undefined && imageSizeWidth !== null;
+        const hasWidth = Number.isFinite(imageSizeWidth) && (imageSizeWidth ?? 0) > 0;
         // 检查是否有有效的高度值
-        const hasHeight = imageSizeHeight !== undefined && imageSizeHeight !== null;
+        const hasHeight = Number.isFinite(imageSizeHeight) && (imageSizeHeight ?? 0) > 0;
 
         // 如果两者都没有配置,返回空字符串(不添加尺寸参数)
         if (!hasWidth && !hasHeight) {

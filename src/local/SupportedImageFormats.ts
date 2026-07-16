@@ -1,4 +1,5 @@
 import { TFile, CachedMetadata, App } from "obsidian";
+import { detectImageBinaryType } from "../utils/ImageBinaryType";
 
 export class SupportedImageFormats {
     // Use a Map for faster mime type lookups
@@ -11,6 +12,8 @@ export class SupportedImageFormats {
         ["image/avif", true],
         ["image/tiff", true],
         ["image/bmp", true],
+        ["image/x-icon", true],
+        ["image/vnd.microsoft.icon", true],
         ["image/svg+xml", true],
         ["image/gif", true],
         // ["video/quicktime", true] // .mov files
@@ -28,6 +31,7 @@ export class SupportedImageFormats {
         "tif",
         "tiff",
         "bmp",
+        "ico",
         "svg",
         "gif",
         // "mov"
@@ -45,6 +49,7 @@ export class SupportedImageFormats {
         ["tif", ["image/tiff"]],
         ["tiff", ["image/tiff"]],
         ["bmp", ["image/bmp"]],
+        ["ico", ["image/x-icon", "image/vnd.microsoft.icon"]],
         ["svg", ["image/svg+xml"]],
         ["gif", ["image/gif"]],
         // ["mov", ["video/quicktime"]]
@@ -107,9 +112,19 @@ export class SupportedImageFormats {
      * @returns True if the file is a supported image, false otherwise.
      */
     isSupported(mimeType?: string, filename?: string): boolean {
+        const normalizedMime = this.normalizeMimeType(mimeType);
+
         // 1. Mime Type Check (Preferred)
-        if (mimeType && this.supportedMimeTypes.has(mimeType)) {
+        if (normalizedMime && this.supportedMimeTypes.has(normalizedMime)) {
             return true;
+        }
+
+        // An explicit non-image MIME is stronger evidence than a misleading
+        // extension. Generic binary MIME values may still rely on the name.
+        if (normalizedMime.includes("/")
+            && normalizedMime !== "application/octet-stream"
+            && normalizedMime !== "binary/octet-stream") {
+            return false;
         }
 
         // 2. Extension Check (Fallback)
@@ -117,7 +132,7 @@ export class SupportedImageFormats {
             const extension = filename.split(".").pop()?.toLowerCase();
             if (extension && this.supportedExtensions.has(extension)) {
                 // For heic/heif, double check with header if mimeType is unreliable
-                if ((extension === 'heic' || extension === 'heif') && (!mimeType || !this.supportedMimeTypes.has(mimeType))) {
+                if ((extension === 'heic' || extension === 'heif') && !normalizedMime) {
                     return true; // Let header check in processImage decide for HEIC/HEIF
                 }
                 return true;
@@ -164,94 +179,56 @@ export class SupportedImageFormats {
      */
     async getMimeTypeFromFile(file: Blob): Promise<string> {
         try {
-            // Read a small slice of the blob directly to avoid relying on FileReader mocks
-            const slice = file.slice(0, 24);
-            const arrayBuffer = await slice.arrayBuffer();
-
-            const arr = new Uint8Array(arrayBuffer).subarray(0, 12); // Read up to 12 bytes
-            let headerHex = "";
-            for (let i = 0; i < arr.length; i++) {
-                const hex = arr[i].toString(16).padStart(2, '0'); // Ensure two digits
-                headerHex += hex;
+            // Raster signatures live near the start. SVG requires a complete XML
+            // document, so only read the full Blob when its prefix/name/type makes
+            // it a plausible SVG candidate.
+            const prefix = await file.slice(0, 4096).arrayBuffer();
+            let detected = await detectImageBinaryType(prefix);
+            if (!detected && file.size > prefix.byteLength && this.isPossibleSvg(file, prefix)) {
+                detected = await detectImageBinaryType(await file.arrayBuffer());
             }
-            headerHex = headerHex.toLowerCase(); // Use lowercase for comparison
-
-            // Basic mime type checking based on file header
-            if (headerHex.startsWith("89504e47")) { // PNG
-                return "image/png";
-            }
-            if (headerHex.startsWith("47494638")) { // GIF
-                return "image/gif";
-            }
-            if (headerHex.startsWith("ffd8ffe")) { // JPEG (starts with ffd8ffe and then can have 0, 1, 2, 3, or 8)
-                return "image/jpeg";
-            }
-            if (headerHex.startsWith('424d')) { // BMP
-                return 'image/bmp';
-            }
-            if (headerHex.startsWith('000000') && headerHex.substring(8, 16) === '66747970') {// HEIC/HEIF & AVIF - ftyp check
-                const ftyp = this.getFtyp(arrayBuffer);
-
-                if (ftyp !== null) {
-                    if (['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'].includes(ftyp)) {
-                        return 'image/heic'; // It's HEIC/HEIF
-                    }
-                    if (['avif', 'avis'].includes(ftyp)) {
-                        return 'image/avif'; // It's AVIF
-                    }
-                }
-            }
-            if (headerHex.startsWith('4949') || headerHex.startsWith('4d4d')) { // TIFF (II or MM)
-                return 'image/tiff';
-            }
-            if (headerHex.startsWith('52494646')) { // 'RIFF'
-                // Check bytes 8..11 for 'WEBP' signature (each byte = 2 hex chars => positions 16..24)
-                const webpSig = headerHex.substring(16, 24);
-                if (webpSig === '57454250') { // 'WEBP'
-                    return 'image/webp';
-                }
-            }
+            if (detected) return detected.mime;
 
             // Unrecognized header -> fall back to Blob.type if available
             if (file.type && file.type.length > 0) {
-                return file.type;
+                return this.normalizeMimeType(file.type) || file.type;
             }
             return "unknown";
         } catch (error) {
             console.error("Error reading file:", error);
             // On error, fall back to Blob.type if available
             if (file.type && file.type.length > 0) {
-                return file.type;
+                return this.normalizeMimeType(file.type) || file.type;
             }
             return "unknown";
         }
     }
 
-    // Helper function to extract ftyp from HEIF/AVIF header (ISO Base Media File Format)
-    private getFtyp(buffer: ArrayBuffer): string | null {
-        const view = new DataView(buffer);
-        // ftyp box is typically at offset 4, after size (4 bytes) and type (4 bytes 'ftyp')
-        const majorBrandOffset = 8;
-    
-        // console.log("getFtyp - buffer.byteLength:", buffer.byteLength, ", majorBrandOffset:", majorBrandOffset); 
-    
-        if (buffer.byteLength < majorBrandOffset + 4) {
-            // console.log("getFtyp - Buffer too short");
-            return null; // Check buffer length
+    private normalizeMimeType(mimeType?: string): string {
+        const normalized = mimeType?.split(";")[0].trim().toLowerCase() ?? "";
+        switch (normalized) {
+            case "image/jpg":
+            case "image/pjpeg": return "image/jpeg";
+            case "image/x-png": return "image/png";
+            case "image/vnd.microsoft.icon": return "image/x-icon";
+            default: return normalized;
         }
-    
-        const majorBrandCode = view.getUint32(majorBrandOffset, false);
-        const brandChars = String.fromCharCode(
-            (majorBrandCode >> 24) & 0xFF,
-            (majorBrandCode >> 16) & 0xFF,
-            (majorBrandCode >> 8) & 0xFF,
-            majorBrandCode & 0xFF
-        );
-    
-        // console.log("getFtyp - majorBrandCode (hex):", majorBrandCode.toString(16)); 
-        // console.log("getFtyp - brandChars:", brandChars);
-    
-        return brandChars.trim(); // Return ftyp brand
+    }
+
+    private isPossibleSvg(file: Blob, prefix: ArrayBuffer): boolean {
+        if (this.normalizeMimeType(file.type) === "image/svg+xml") return true;
+        if (file instanceof File && /\.svg$/i.test(file.name)) return true;
+
+        const bytes = new Uint8Array(prefix);
+        if ((bytes[0] === 0xFF && bytes[1] === 0xFE)
+            || (bytes[0] === 0xFE && bytes[1] === 0xFF)) {
+            return true;
+        }
+        try {
+            return new TextDecoder("utf-8", { fatal: true }).decode(bytes).trimStart().startsWith("<");
+        } catch {
+            return false;
+        }
     }
 
 }

@@ -4,6 +4,8 @@ import TexWrapper from "./tex-wrapper";
 // 建议使用 'js-md5' 库，或者根据你现有的 crypto 实现
 // import md5 from 'js-md5'; 
 import * as crypto from 'crypto';
+import { withTimeout } from "../../utils/NetworkRequestUtils";
+import { createOcrImagePayload } from "./ImagePayload";
 
 export default class SimpleTex extends TexWrapper {
     settings: OCRSettings;
@@ -71,11 +73,12 @@ export default class SimpleTex extends TexWrapper {
     }
 
     async getTex(image: Uint8Array): Promise<string> {
+        const imagePayload = await createOcrImagePayload(image);
         // 1. 生成随机 Boundary
         const boundary = "----SimpleTexBoundary" + this.randomStr(16);
 
         // 2. 准备鉴权 Header
-        let headers: Record<string, string> = {
+        const headers: Record<string, string> = {
             "Content-Type": `multipart/form-data; boundary=${boundary}`
         };
 
@@ -105,44 +108,59 @@ export default class SimpleTex extends TexWrapper {
         // requestUrl 不支持 FormData 对象，必须手动拼接二进制流
         const encoder = new TextEncoder();
 
-        const prePayload = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="image.png"\r\nContent-Type: image/png\r\n\r\n`;
-        const postPayload = `\r\n--${boundary}--`;
+        const prePayload = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${imagePayload.fileName}"\r\nContent-Type: ${imagePayload.mimeType}\r\n\r\n`;
+        const postPayload = `\r\n--${boundary}--\r\n`;
 
         const bodyBuffer = this.mergeArrays([
             encoder.encode(prePayload),
-            image, // 图片原始二进制数据
+            new Uint8Array(imagePayload.data),
             encoder.encode(postPayload)
         ]);
 
         // 4. 使用 Obsidian 的 requestUrl 发送请求 (绕过 CORS)
         try {
-            const response = await requestUrl({
-                url: "https://server.simpletex.cn/api/latex_ocr_turbo",
-                method: "POST",
-                headers: headers,
-                body: bodyBuffer.buffer as ArrayBuffer // 将 Uint8Array 转回 ArrayBuffer
-            });
+            const response = await withTimeout(
+                requestUrl({
+                    url: "https://server.simpletex.cn/api/latex_ocr_turbo",
+                    method: "POST",
+                    headers: headers,
+                    body: bodyBuffer.buffer as ArrayBuffer // 将 Uint8Array 转回 ArrayBuffer
+                }),
+                120_000,
+                "SimpleTex OCR"
+            );
 
-            if (response.status !== 200) {
-                throw new Error(`HTTP Error ${response.status}: ${response.text}`);
+            if (response.status < 200 || response.status >= 300) {
+                const detail = typeof response.text === "string" ? response.text.trim().slice(0, 300) : "";
+                throw new Error(`HTTP Error ${response.status}${detail ? `: ${detail}` : ""}`);
             }
 
-            const data = response.json;
+            const data: unknown = response.json;
+            if (typeof data !== "object" || data === null || Array.isArray(data)) {
+                throw new Error("SimpleTex returned an invalid response");
+            }
+            const payload = data as {
+                status?: unknown;
+                err_info?: { err_msg?: unknown };
+                res?: { latex?: unknown; err_info?: { err_msg?: unknown } };
+            };
 
-            if (data.status === false) {
-                const errorMsg = data.err_info?.err_msg || "Unknown error";
+            if (payload.status === false) {
+                const errorMsg = typeof payload.err_info?.err_msg === "string"
+                    ? payload.err_info.err_msg
+                    : "Unknown error";
                 throw new Error(`SimpleTex API Error: ${errorMsg}`);
             }
 
-            if (!data.res || !data.res.latex) {
+            if (!payload.res || typeof payload.res.latex !== "string" || !payload.res.latex.trim()) {
                 // 容错处理
-                if (data.res && data.res.err_info) {
-                    throw new Error(`SimpleTex server error: ${data.res.err_info.err_msg}`);
+                if (typeof payload.res?.err_info?.err_msg === "string") {
+                    throw new Error(`SimpleTex server error: ${payload.res.err_info.err_msg}`);
                 }
                 throw new Error('Identification success but no LaTeX returned');
             }
 
-            return data.res.latex;
+            return payload.res.latex.trim();
 
         } catch (error) {
             console.error("SimpleTex Request Failed:", error);

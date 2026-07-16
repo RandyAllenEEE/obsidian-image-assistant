@@ -74,7 +74,6 @@ describe('Integration-lite: FfmpegAvifAdapter', () => {
       'Auto',
       true,
       {
-        name: 'test',
         outputFormat: 'AVIF',
         ffmpegExecutablePath: 'C:/tools/ffmpeg.exe',
         ffmpegCrf: 23,
@@ -89,7 +88,7 @@ describe('Integration-lite: FfmpegAvifAdapter', () => {
         enlargeOrReduce: 'Auto',
         allowLargerFiles: true,
         skipConversionPatterns: ''
-      }
+      } as any
     );
 
     // Assert args
@@ -155,7 +154,6 @@ describe('Integration-lite: FfmpegAvifAdapter', () => {
       'Auto',
       true,
       {
-        name: 'test',
         outputFormat: 'AVIF',
         ffmpegExecutablePath: '/usr/bin/ffmpeg',
         ffmpegCrf: 28,
@@ -170,7 +168,7 @@ describe('Integration-lite: FfmpegAvifAdapter', () => {
         enlargeOrReduce: 'Auto',
         allowLargerFiles: true,
         skipConversionPatterns: ''
-      }
+      } as any
     );
 
     // Assert filter parts in args
@@ -231,7 +229,6 @@ describe('Integration-lite: FfmpegAvifAdapter', () => {
       'Auto',
       true,
       {
-        name: 'test',
         outputFormat: 'AVIF',
         ffmpegExecutablePath: '/usr/bin/ffmpeg',
         ffmpegCrf: 25,
@@ -246,7 +243,7 @@ describe('Integration-lite: FfmpegAvifAdapter', () => {
         enlargeOrReduce: 'Auto',
         allowLargerFiles: true,
         skipConversionPatterns: ''
-      }
+      } as any
     );
 
     // Assert
@@ -330,7 +327,6 @@ describe('Integration-lite: FfmpegAvifAdapter', () => {
       'Auto',
       true,
       {
-        name: 'test',
         outputFormat: 'AVIF',
         // no ffmpegExecutablePath
         ffmpegCrf: 30,
@@ -367,7 +363,6 @@ describe('Integration-lite: FfmpegAvifAdapter', () => {
       'Auto',
       true,
       {
-        name: 'test',
         outputFormat: 'AVIF',
         ffmpegExecutablePath: '/usr/bin/ffmpeg',
         ffmpegCrf: 28,
@@ -381,7 +376,7 @@ describe('Integration-lite: FfmpegAvifAdapter', () => {
         enlargeOrReduce: 'Auto',
         allowLargerFiles: true,
         skipConversionPatterns: ''
-      }
+      } as any
     );
 
     expect(new Uint8Array(resultFail).byteLength).toBe(inputBytes.byteLength);

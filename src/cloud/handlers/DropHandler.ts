@@ -1,4 +1,4 @@
-import { App, Editor, Notice, MarkdownView, EditorPosition } from "obsidian";
+import { App, Editor } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { PasteHandler } from "./PasteHandler";
 
@@ -31,10 +31,12 @@ export class DropHandler {
                 !this.plugin.folderAndFilenameManagement.matchesPatterns(data.name, this.plugin.settings.pasteHandling.neverProcessFilenames))
             .map(data => data.file);
 
-        if (supportedFiles.length > 0) {
-            evt.preventDefault();
-            editor.setCursor(pos);
-            await this.pasteHandler.processFiles(supportedFiles, editor);
-        }
+        if (supportedFiles.length === 0) return;
+        if (supportedFiles.length !== fileData.length) return;
+        if (!this.pasteHandler.canProcessFiles()) return;
+
+        evt.preventDefault();
+        editor.setCursor(pos);
+        await this.pasteHandler.processFiles(supportedFiles, editor);
     }
 }

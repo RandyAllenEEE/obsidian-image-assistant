@@ -15,12 +15,12 @@ export interface OCRSettings {
     texify: {
         url: string;
         username: string;
-        password: string;
+        passwordSecretId: string;
     };
     pix2tex: {
         url: string;
         username: string;
-        password: string;
+        passwordSecretId: string;
     };
     aiModel: {
         providerType: "openai" | "ollama";
@@ -47,12 +47,12 @@ export const DEFAULT_OCR_SETTINGS: OCRSettings = {
     texify: {
         url: "http://127.0.0.1:5000/predict",
         username: "",
-        password: ""
+        passwordSecretId: ""
     },
     pix2tex: {
         url: "http://127.0.0.1:8502/predict/",
         username: "",
-        password: ""
+        passwordSecretId: ""
     },
     aiModel: {
         providerType: "openai",

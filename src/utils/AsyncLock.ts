@@ -2,118 +2,77 @@
 export class AsyncLock {
     private locks: Map<string, Promise<void>> = new Map();
 
-    async acquire(key: string, fn: () => Promise<void>) {
-        const release = await this.acquireLock(key);
+    async acquire<T>(key: string, fn: () => Promise<T>): Promise<T> {
+        const previous = this.locks.get(key) ?? Promise.resolve();
+        let release!: () => void;
+        const current = new Promise<void>(resolve => {
+            release = resolve;
+        });
+        const tail = previous.then(() => current);
+        this.locks.set(key, tail);
+
+        await previous;
         try {
             return await fn();
         } finally {
             release();
+            if (this.locks.get(key) === tail) {
+                this.locks.delete(key);
+            }
         }
-    }
-
-    private async acquireLock(key: string): Promise<() => void> {
-        while (this.locks.has(key)) {
-            await this.locks.get(key);
-        }
-
-        let resolve!: () => void;
-        const promise = new Promise<void>(resolver => resolve = resolver);
-        this.locks.set(key, promise);
-
-        return () => {
-            this.locks.delete(key);
-            resolve();
-        };
     }
 }
 
 // Concurrent queue for rate limiting
 export class ConcurrentQueue {
     private running = 0;
-    private queue: Array<() => Promise<void>> = [];
+    private readonly queue: Array<() => void> = [];
+    private concurrency: number;
 
-    constructor(private concurrency: number = 3) { }
+    constructor(concurrency: number = 3) {
+        this.concurrency = this.normalizeConcurrency(concurrency);
+    }
+
+    setConcurrency(concurrency: number): void {
+        this.concurrency = this.normalizeConcurrency(concurrency);
+        this.drain();
+    }
 
     async run<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
-        const results: T[] = [];
-        let index = 0;
-
-        const wrappedTasks = tasks.map((task, i) => async () => {
-            try {
-                results[i] = await task();
-            } catch (error) {
-                console.error(`Task ${i} failed:`, error);
-                throw error;
-            }
-        });
-
-        return new Promise((resolve, reject) => {
-            const next = () => {
-                if (index >= wrappedTasks.length && this.running === 0) {
-                    resolve(results);
-                    return;
-                }
-
-                while (this.running < this.concurrency && index < wrappedTasks.length) {
-                    const task = wrappedTasks[index++];
-                    this.running++;
-
-                    task()
-                        .then(() => {
-                            this.running--;
-                            next();
-                        })
-                        .catch((error) => {
-                            this.running--;
-                            reject(error);
-                        });
-                }
-            };
-
-            next();
-        });
+        return Promise.all(tasks.map((task) => this.enqueue(task)));
     }
 
     async runSettled<T>(tasks: Array<() => Promise<T>>): Promise<PromiseSettledResult<T>[]> {
-        const results: PromiseSettledResult<T>[] = new Array(tasks.length);
-        let index = 0;
+        return Promise.allSettled(tasks.map((task) => this.enqueue(task)));
+    }
 
-        const wrappedTasks = tasks.map((task, i) => async () => {
-            try {
-                const value = await task();
-                results[i] = { status: 'fulfilled', value };
-            } catch (reason) {
-                console.error(`Task ${i} failed:`, reason);
-                results[i] = { status: 'rejected', reason };
-            }
+    private enqueue<T>(task: () => Promise<T>): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+            this.queue.push(() => {
+                this.running++;
+                void (async () => {
+                    try {
+                        resolve(await task());
+                    } catch (error) {
+                        reject(error);
+                    } finally {
+                        this.running--;
+                        this.drain();
+                    }
+                })();
+            });
+            this.drain();
         });
+    }
 
-        return new Promise((resolve) => {
-            const next = () => {
-                if (index >= wrappedTasks.length && this.running === 0) {
-                    resolve(results);
-                    return;
-                }
+    private drain(): void {
+        while (this.running < this.concurrency && this.queue.length > 0) {
+            this.queue.shift()?.();
+        }
+    }
 
-                while (this.running < this.concurrency && index < wrappedTasks.length) {
-                    const task = wrappedTasks[index++];
-                    this.running++;
-
-                    task()
-                        .then(() => {
-                            this.running--;
-                            next();
-                        })
-                        .catch(() => {
-                            // This catch should generally not be hit because wrappedTasks catches internally,
-                            // but good for safety.
-                            this.running--;
-                            next();
-                        });
-                }
-            };
-
-            next();
-        });
+    private normalizeConcurrency(concurrency: number): number {
+        if (!Number.isFinite(concurrency)) return 3;
+        return Math.min(10, Math.max(1, Math.floor(concurrency)));
     }
 }

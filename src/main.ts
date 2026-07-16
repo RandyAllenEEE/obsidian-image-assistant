@@ -7,12 +7,7 @@ import {
     TFolder,
     EditorPosition,
     MarkdownView,
-    FileSystemAdapter,
-    requestUrl,
-    Modal,
-    FuzzySuggestModal,
-    normalizePath,
-    App // Ensure App is imported
+    FuzzySuggestModal
 } from "obsidian";
 
 import { SupportedImageFormats } from "./local/SupportedImageFormats";
@@ -26,6 +21,7 @@ import { ConcurrentQueue } from "./utils/AsyncLock";
 import { ImageAlignment } from './ui/ImageAlignment'; // Import class directly
 import { ImageStateManager } from './ui/ImageStateManager';
 import { ImageCaption } from './ui/ImageCaption';
+import { createLivePreviewCaptionExtension } from './ui/caption/LivePreviewCaptionExtension';
 import { ImageResizer } from "./ui/ImageResizer";
 import { t } from './lang/helpers';
 import { BatchImageProcessor } from "./local/BatchImageProcessor";
@@ -34,12 +30,7 @@ import { ProcessSingleImageModal } from "./ui/modals/ProcessSingleImageModal"; /
 
 
 
-import { UploaderManager } from "./cloud/uploader/index";
-
-import { UploadHelper, ImageLink } from "./utils/UploadHelper";
 import { UploadHistoryManager } from "./utils/UploadHistoryManager";
-import { basename, dirname, extname, join } from "path-browserify";
-import { resolve } from "path-browserify";
 
 // Settings tab and all DEFAULTS
 import { ImageConverterSettingTab } from "./settings/ImageAssistantSettings";
@@ -48,6 +39,7 @@ import { LocalLinkSettings } from "./settings/types";
 import { VaultReferenceManager } from "./utils/VaultReferenceManager";
 import { UnusedFileCleanerModal } from "./utils/UnusedFileCleanerModal";
 import { PasteModeConfigModal } from "./ui/modals/PasteModeConfigModal";
+import { getErrorMessage } from "./utils/ErrorUtils";
 
 
 // OCR imports
@@ -55,6 +47,14 @@ import { EditorContentInserter } from "./utils/EditorContentInserter";
 import { getLatexProvider, getMarkdownProvider } from "./ocr/providers/index";
 import { CloudImageHandler } from "./cloud/CloudImageHandler";
 import { LocalImageHandler } from "./local/LocalImageHandler";
+import { CaptionRenderCoordinator } from "./ui/caption/CaptionRenderCoordinator";
+import { CaptionSectionRenderChild } from "./ui/caption/CaptionSectionRenderChild";
+import {
+    getLegacyBatchConcurrency,
+    getLegacyUploadHistory,
+    mergeWithDefaults,
+    normalizeSettings
+} from "./settings/SettingsMerge";
 
 /**
  * Folder Selector Modal for selecting a folder from the vault
@@ -93,6 +93,13 @@ class FolderSelectorModal extends FuzzySuggestModal<TFolder> {
 
 export default class ImageConverterPlugin extends Plugin {
     settings: ImageAssistantSettings;
+    private legacyUploadHistory: unknown[] = [];
+    private resolveComponentsReady!: () => void;
+    private rejectComponentsReady!: (error: unknown) => void;
+    public readonly componentsReady = new Promise<void>((resolve, reject) => {
+        this.resolveComponentsReady = resolve;
+        this.rejectComponentsReady = reject;
+    });
 
     // Check supported image formats
     supportedImageFormats: SupportedImageFormats;
@@ -123,8 +130,6 @@ export default class ImageConverterPlugin extends Plugin {
     // captionManager: ImageCaptionManager; // Deprecated
     // upload history
     historyManager: UploadHistoryManager;
-    // upload helper for batch upload and download
-    uploadHelper: UploadHelper;
 
     // Handlers
     cloudImageHandler: CloudImageHandler;
@@ -133,47 +138,40 @@ export default class ImageConverterPlugin extends Plugin {
     // Concurrent Queue
     public concurrentQueue: ConcurrentQueue;
 
-    // Proxy methods for external access
-    public async uploadSingleFile(file: TFile) {
-        await this.cloudImageHandler.uploadSingleFile(file);
-    }
-
-    public async uploadFolderImagesPublic(folderPath: string, recursive: boolean) {
-        await this.cloudImageHandler.uploadFolderImages(folderPath, recursive);
-    }
-
-    public async downloadFolderImagesPublic(folderPath: string, recursive: boolean) {
-        await this.cloudImageHandler.downloadFolderImages(folderPath, recursive);
-    }
-
     // unused file cleaner
     unusedFileCleaner: UnusedFileCleanerModal | null = null;
     // Vault Reference Manager
     vaultReferenceManager: VaultReferenceManager;
+    private settingsSaveQueue: Promise<void> = Promise.resolve();
+    private runtimeUnloaded = false;
 
-    private processedImage: ArrayBuffer | null = null;
-    private temporaryBuffers: (ArrayBuffer | Blob | null)[] = [];
-    private get tempFolderPath(): string {
-        const configDir = this.app.vault.configDir || ".obsidian";
-        return normalizePath(`${configDir}/plugins/${this.manifest.id}/temp`);
+    private getWorkspaceDocuments(): Set<Document> {
+        const documents = new Set<Document>([document]);
+        const workspaceDocument = this.app.workspace.containerEl?.ownerDocument;
+        if (workspaceDocument) documents.add(workspaceDocument);
+        this.app.workspace.iterateAllLeaves?.(leaf => {
+            const ownerDocument = leaf.view?.containerEl?.ownerDocument;
+            if (ownerDocument) documents.add(ownerDocument);
+        });
+        return documents;
     }
 
-    // Memory cleanup method
-    private clearMemory() {
-        // Clear processed image
-        if (this.processedImage) {
-            this.processedImage = null;
+    applyEditModeWrapClass(targetDocument?: Document): void {
+        const documents = targetDocument ? new Set([targetDocument]) : this.getWorkspaceDocuments();
+        for (const ownerDocument of documents) {
+            ownerDocument.body?.toggleClass(
+                'image-assistant-wrap-in-edit-mode',
+                !!this.settings.alignment.enabled
+                    && !!this.settings.alignment.enableEditModeWrap
+            );
         }
+    }
 
-        // Clear temporary buffers
-        if (this.temporaryBuffers.length > 0) {
-            this.temporaryBuffers = [];
-        }
-
-        // Force garbage collection hint
-        if (typeof global !== 'undefined' && global.gc) {
-            global.gc();
-        }
+    private cleanupEditModeWrapClass(targetDocument?: Document): void {
+        const documents = targetDocument ? new Set([targetDocument]) : this.getWorkspaceDocuments();
+        documents.forEach(ownerDocument => {
+            ownerDocument.body?.removeClass('image-assistant-wrap-in-edit-mode');
+        });
     }
 
     private attachImageResizerToMarkdownView(markdownView: MarkdownView, refreshLayout = false) {
@@ -188,7 +186,11 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     private attachImageResizerToActiveView(refreshLayout = false) {
-        if (!this.settings.interactiveResize.enabled || !this.imageResizer) return;
+        if (!this.imageResizer) return;
+        if (!this.settings.interactiveResize.enabled) {
+            this.imageResizer.detachView();
+            return;
+        }
 
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (activeView) {
@@ -200,7 +202,7 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     private registerImageResizerWorkspaceEvents() {
-        if (!this.settings.interactiveResize.enabled || !this.imageResizer) return;
+        if (!this.imageResizer) return;
 
         this.registerEvent(
             this.app.workspace.on('file-open', (file) => {
@@ -239,6 +241,7 @@ export default class ImageConverterPlugin extends Plugin {
 
 
     async onload() {
+        this.runtimeUnloaded = false;
         await this.loadSettings();
 
 
@@ -247,7 +250,7 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Initialize concurrent queue with settings
         this.concurrentQueue = new ConcurrentQueue(
-            this.settings.pasteHandling.cloud.uploadConcurrency
+            this.settings.global.batchConcurrency
         );
 
         // Initialize core components immediately
@@ -257,20 +260,22 @@ export default class ImageConverterPlugin extends Plugin {
         this.cloudImageHandler = new CloudImageHandler(
             this.app,
             this,
-            new UploaderManager(this.settings.pasteHandling.cloud.uploader, this),
+            null,
             this.concurrentQueue
         );
         this.localImageHandler = new LocalImageHandler(this.app, this);
 
-        // Ensure temp folder exists for cloud upload
-        await this.ensureTempFolderExists();
-
-        // 应用编辑模式 Wrap 开关
-        if (this.settings.alignment.enableEditModeWrap) {
-            document.body.addClass('image-assistant-wrap-in-edit-mode');
-        } else {
-            document.body.removeClass('image-assistant-wrap-in-edit-mode');
-        }
+        this.applyEditModeWrapClass();
+        this.registerEvent(
+            this.app.workspace.on('window-open' as any, (_workspaceWindow: unknown, win: Window) => {
+                if (win?.document) this.applyEditModeWrapClass(win.document);
+            })
+        );
+        this.registerEvent(
+            this.app.workspace.on('window-close' as any, (_workspaceWindow: unknown, win: Window) => {
+                if (win?.document) this.cleanupEditModeWrapClass(win.document);
+            })
+        );
 
         // ✅ 立即注册所有命令（在 onLayoutReady 之前）
         // 这确保命令可以在 Obsidian 设置界面中绑定快捷键
@@ -279,11 +284,16 @@ export default class ImageConverterPlugin extends Plugin {
         // Initialize Image State Manager (Coordinator)
         this.imageStateManager = new ImageStateManager(this.app, this);
         this.imageAlignment = new ImageAlignment(this.app, this);
-        this.imageCaption = new ImageCaption(this);
-        if (this.settings.interactiveResize.enabled) {
-            this.imageResizer = new ImageResizer(this);
-            this.addChild(this.imageResizer);
-        }
+        this.imageCaption = this.addChild(new ImageCaption(this));
+        const captionRenderCoordinator = new CaptionRenderCoordinator(this.app);
+        this.registerEditorExtension(createLivePreviewCaptionExtension(this));
+        this.imageResizer = new ImageResizer(this);
+        this.addChild(this.imageResizer);
+        this.imageStateManager.initialize(
+            this.imageAlignment,
+            this.imageResizer,
+            this.imageCaption
+        );
 
         // Register StateManager refresh events
         // Note: ImageStateManager handles its own 'active-leaf-change' observation in setupObserver.
@@ -301,16 +311,8 @@ export default class ImageConverterPlugin extends Plugin {
         /* Deprecated Managers (Removed) */
 
         // Wait for layout to be ready before initializing view-dependent components
-        this.app.workspace.onLayoutReady(() => {
-            void this.initializeComponents()
-                .then(() => {
-                    this.registerImageResizerWorkspaceEvents();
-                    this.attachImageResizerToActiveView();
-                })
-                .catch((error) => {
-                    console.error('[Image Assistant] Failed to initialize layout components:', error);
-                });
-        });
+        this.app.workspace.onLayoutReady(() => this.initializeAfterLayoutReady());
+        void this.componentsReady.catch(() => undefined);
         // const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
         // if (!activeView) return;
 
@@ -325,12 +327,19 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Register MarkdownPostProcessor for Reading Mode Image Handling
         this.registerMarkdownPostProcessor((element, context) => {
-            const images = element.querySelectorAll('img');
-            images.forEach((img) => {
-                if (img instanceof HTMLImageElement && this.imageStateManager) {
-                    this.imageStateManager.processReadingModeImage(img);
-                }
-            });
+            const section = context.getSectionInfo(element);
+            const binding = captionRenderCoordinator.createSectionBinding(section?.text, context.sourcePath);
+            const hasDeferredEmbed = element.matches('.internal-embed, .external-embed')
+                || !!element.querySelector('.internal-embed, .external-embed');
+            const hasImage = !!element.querySelector('img');
+            if (!binding && !hasDeferredEmbed && !hasImage) return;
+
+            context.addChild(new CaptionSectionRenderChild(
+                element,
+                binding,
+                (image, imageContext) => this.imageStateManager?.processReadingModeImage(image, imageContext),
+                image => this.imageCaption?.removeImage(image)
+            ));
         });
     }
 
@@ -341,10 +350,12 @@ export default class ImageConverterPlugin extends Plugin {
         this.linkFormatter = new LinkFormatter(this.app);
         this.imageProcessor = new ImageProcessor(this.app, this.supportedImageFormats);
         this.vaultReferenceManager = new VaultReferenceManager(this.app, this);
+        this.imageStateManager?.start();
 
-        // Initialize History Manager
-        this.historyManager = new UploadHistoryManager(this.app, this);
-        await this.historyManager.init();
+        // Initialize History Manager. Ownership history is safety metadata for
+        // cloud deletion; an unavailable history must not disable local features.
+        await this.initializeUploadHistory();
+        if (this.runtimeUnloaded) return;
 
         if (this.settings.interactiveResize.enabled) {
             this.attachImageResizerToActiveView();
@@ -358,21 +369,8 @@ export default class ImageConverterPlugin extends Plugin {
             this.variableProcessor
         );
 
-        // Initialize upload helper
-        this.uploadHelper = new UploadHelper(this.app);
-
-        // Finalize StateManager Initialization
-        if (this.imageStateManager && this.imageAlignment && this.imageCaption) {
-            this.imageStateManager.initialize(
-                this.imageAlignment,
-                this.imageResizer!, // Can be null if disabled
-                this.imageCaption
-            );
-        }
-
         // Initialize network image downloader via CloudImageHandler facade
         this.cloudImageHandler.initializeDownloader(
-            this.uploadHelper,
             this.folderAndFilenameManagement
         );
 
@@ -414,12 +412,12 @@ export default class ImageConverterPlugin extends Plugin {
                         menu.addItem((item) => {
                             item.setTitle(t("MENU_UPLOAD_CLOUD"))
                                 .setIcon("cloud-upload")
-                                .onClick(async () => {
-                                    await this.cloudImageHandler.uploadSingleFile(file);
-                                });
+                                .onClick(() => void this.runAfterComponentsReady(() =>
+                                    this.cloudImageHandler.uploadSingleFile(file)
+                                ));
                         });
                     }
-                } else if (file instanceof TFile && file.extension === 'md') {
+                } else if (file instanceof TFile && (file.extension === 'md' || file.extension === 'canvas')) {
                     // Context menu for Markdown Notes (Batch Operations)
 
                     // 1. Local Process
@@ -444,6 +442,40 @@ export default class ImageConverterPlugin extends Plugin {
         );
     }
 
+    private initializeAfterLayoutReady(): void {
+        if (this.runtimeUnloaded) return;
+
+        const initialization = this.initializeComponents()
+            .then(() => {
+                if (this.runtimeUnloaded) return;
+                this.app.workspace.iterateAllLeaves?.((leaf) => {
+                    const ownerDocument = leaf.view?.containerEl?.ownerDocument;
+                    if (ownerDocument) this.imageCaption?.ensureDocument(ownerDocument);
+                });
+                this.registerImageResizerWorkspaceEvents();
+                this.attachImageResizerToActiveView();
+            });
+        void initialization.then(
+            () => this.resolveComponentsReady(),
+            (error) => {
+                this.rejectComponentsReady(error);
+                console.error('[Image Assistant] Failed to initialize layout components:', error);
+            }
+        );
+    }
+
+    private async initializeUploadHistory(
+        historyManager: UploadHistoryManager = new UploadHistoryManager(this.app, this)
+    ): Promise<void> {
+        this.historyManager = historyManager;
+        try {
+            await historyManager.init();
+        } catch (error) {
+            console.error("[Image Assistant] Upload history is unavailable:", error);
+            new Notice(t("MSG_UPLOAD_HISTORY_UNAVAILABLE"));
+        }
+    }
+
     /**
      * 注册所有命令
      * 重要：必须在 onload() 中立即调用，不能延迟到 onLayoutReady
@@ -459,22 +491,18 @@ export default class ImageConverterPlugin extends Plugin {
         this.addCommand({
             id: 'process-all-vault-images',
             name: t("CMD_PROCESS_ALL_VAULT"),
-            callback: () => {
-                new UnifiedBatchProcessModal(this.app, this, "vault", null, "local_process").open();
-            }
+            callback: () => void this.runAfterComponentsReady(() =>
+                new UnifiedBatchProcessModal(this.app, this, "vault", null, "local_process").open()
+            )
         });
 
         this.addCommand({
             id: 'process-all-images-current-note',
             name: t("CMD_PROCESS_CURRENT_NOTE"),
-            callback: () => {
-                const activeFile = this.app.workspace.getActiveFile();
-                if (activeFile) {
-                    new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "local_process").open();
-                } else {
-                    new Notice(t("MSG_NO_ACTIVE_FILE"));
-                }
-            }
+            callback: () => void this.runAfterComponentsReady(() => {
+                const activeFile = this.getActiveBatchSourceFile();
+                if (activeFile) new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "local_process").open();
+            })
         });
 
         this.addCommand({
@@ -496,11 +524,11 @@ export default class ImageConverterPlugin extends Plugin {
         this.addCommand({
             id: 'process-folder-images',
             name: t("MENU_PROCESS_FOLDER_IMAGES"),
-            callback: async () => {
+            callback: () => void this.runAfterComponentsReady(async () => {
                 new FolderSelectorModal(this.app, async (folder: TFolder) => {
                     new UnifiedBatchProcessModal(this.app, this, "folder", folder, "local_process").open();
                 }).open();
-            }
+            })
         });
 
         // Cloud Batch Commands (New)
@@ -509,32 +537,55 @@ export default class ImageConverterPlugin extends Plugin {
         this.addCommand({
             id: 'upload-all-vault-images',
             name: t("CMD_UPLOAD_ALL_VAULT" as any) || "Upload all images in vault", // Fallback if key missing
-            callback: async () => {
-                new UnifiedBatchProcessModal(this.app, this, "vault", null, "upload").open();
-            }
+            callback: () => void this.runAfterComponentsReady(() =>
+                new UnifiedBatchProcessModal(this.app, this, "vault", null, "upload").open()
+            )
         });
 
         this.addCommand({
             id: 'upload-all-images-current-note',
             name: t("CMD_UPLOAD_CURRENT_NOTE" as any) || "Upload all images in current note",
-            callback: async () => {
-                const activeFile = this.app.workspace.getActiveFile();
-                if (activeFile) {
-                    new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "upload").open();
-                } else {
-                    new Notice(t("MSG_NO_ACTIVE_FILE"));
-                }
-            }
+            callback: () => void this.runAfterComponentsReady(() => {
+                const activeFile = this.getActiveBatchSourceFile();
+                if (activeFile) new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "upload").open();
+            })
         });
 
         this.addCommand({
             id: 'upload-folder-images',
             name: t("MENU_UPLOAD_FOLDER_IMAGES"),
-            callback: async () => {
+            callback: () => void this.runAfterComponentsReady(async () => {
                 new FolderSelectorModal(this.app, async (folder: TFolder) => {
                     new UnifiedBatchProcessModal(this.app, this, "folder", folder, "upload").open();
                 }).open();
-            }
+            })
+        });
+
+        this.addCommand({
+            id: 'download-network-images-current-note',
+            name: t("CMD_DOWNLOAD_CURRENT_NOTE"),
+            callback: () => void this.runAfterComponentsReady(() => {
+                const activeFile = this.getActiveBatchSourceFile();
+                if (activeFile) new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "download").open();
+            })
+        });
+
+        this.addCommand({
+            id: 'download-network-images-folder',
+            name: t("CMD_DOWNLOAD_FOLDER"),
+            callback: () => void this.runAfterComponentsReady(() => {
+                new FolderSelectorModal(this.app, folder => {
+                    new UnifiedBatchProcessModal(this.app, this, "folder", folder, "download").open();
+                }).open();
+            })
+        });
+
+        this.addCommand({
+            id: 'download-network-images-vault',
+            name: t("CMD_DOWNLOAD_ALL_VAULT"),
+            callback: () => void this.runAfterComponentsReady(() =>
+                new UnifiedBatchProcessModal(this.app, this, "vault", null, "download").open()
+            )
         });
 
         // Frontmatter 模式控制命令
@@ -577,10 +628,31 @@ export default class ImageConverterPlugin extends Plugin {
         this.addReloadCommand();
     }
 
+    private async runAfterComponentsReady(action: () => void | Promise<void>): Promise<void> {
+        try {
+            await this.componentsReady;
+            await action();
+        } catch (error) {
+            console.error('[Image Assistant] Components are unavailable:', error);
+            new Notice(t("MSG_PROCESSING_FAILED"));
+        }
+    }
+
+    private getActiveBatchSourceFile(): TFile | null {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (activeFile && (activeFile.extension === "md" || activeFile.extension === "canvas")) {
+            return activeFile;
+        }
+
+        new Notice(t("MSG_OPEN_NOTE_OR_CANVAS"));
+        return null;
+    }
+
 
     async onunload() {
+        this.runtimeUnloaded = true;
         // Clean up alignment related components first
-
+        this.cleanupEditModeWrapClass();
 
         // Clean up resizer next since other components might depend on it
         if (this.imageResizer) {
@@ -596,13 +668,6 @@ export default class ImageConverterPlugin extends Plugin {
             this.removeChild(contextMenu);
         }
 
-        // Clean up modals
-        [
-            this.processSingleImageModal
-        ].forEach(modal => {
-            if (modal?.close) modal.close();
-        });
-
         // Clean up any open modals
         [
             this.processSingleImageModal
@@ -610,49 +675,82 @@ export default class ImageConverterPlugin extends Plugin {
             if (modal?.close) modal.close();
         });
 
-        document.body.classList.remove('image-captions-enabled');
+        this.imageStateManager?.onunload();
+        for (const ownerDocument of this.getWorkspaceDocuments()) {
+            this.imageAlignment?.cleanup(ownerDocument);
+        }
+        this.cloudImageHandler?.destroy();
+        this.imageStateManager = null;
+        this.imageAlignment = null;
+        this.imageCaption = null;
     }
 
 
     // Load settings method
     async loadSettings() {
-        const loadedData = await this.loadData();
-
-        // Deep merge helper
-        const deepMerge = (target: any, source: any): any => {
-            if (typeof target !== 'object' || target === null) {
-                return source;
-            }
-            if (typeof source !== 'object' || source === null) {
-                return target;
-            }
-
-            const output = { ...target };
-
-            for (const key in source) {
-                if (source.hasOwnProperty(key)) {
-                    if (source[key] instanceof Array) {
-                        // Arrays are overwritten, not merged (usually desired for lists)
-                        // But for stability, if source has array, we take it.
-                        output[key] = source[key];
-                    } else if (typeof source[key] === 'object' && source[key] !== null) {
-                        output[key] = deepMerge(target[key], source[key]);
-                    } else {
-                        output[key] = source[key];
-                    }
-                }
-            }
-            return output;
-        };
-
-        this.settings = deepMerge(DEFAULT_SETTINGS, loadedData);
+        let loadedData: unknown;
+        try {
+            loadedData = await this.loadData();
+        } catch (error) {
+            console.error("[Image Assistant] Failed to read settings; using defaults:", error);
+            new Notice(t("MSG_SETTINGS_LOAD_FAILED"));
+            loadedData = undefined;
+        }
+        const merged = mergeWithDefaults(DEFAULT_SETTINGS, loadedData);
+        const legacyConcurrency = getLegacyBatchConcurrency(loadedData);
+        if (legacyConcurrency !== undefined) merged.global.batchConcurrency = legacyConcurrency;
+        this.legacyUploadHistory = getLegacyUploadHistory(loadedData);
+        this.settings = normalizeSettings(merged);
         this.stripLegacyPresetSettings(this.settings);
+        const migratedOcrSecrets = this.migrateLegacyOcrPasswords(loadedData);
 
         // Ensure critical sections exist even if deepMerge missed something (e.g. new sections)
         if (!this.settings.global) this.settings.global = { ...DEFAULT_SETTINGS.global };
         if (!this.settings.pasteHandling) this.settings.pasteHandling = { ...DEFAULT_SETTINGS.pasteHandling };
         if (!this.settings.localProcessing) this.settings.localProcessing = { ...DEFAULT_SETTINGS.localProcessing };
         if (!this.settings.operationDefaults) this.settings.operationDefaults = { ...DEFAULT_SETTINGS.operationDefaults };
+
+        if (migratedOcrSecrets) {
+            try {
+                await this.saveData(this.settings);
+            } catch (error) {
+                console.error("[Image Assistant] Failed to persist migrated OCR secrets:", error);
+                new Notice(t("MSG_SETTINGS_SAVE_FAILED", [getErrorMessage(error)]));
+            }
+        }
+    }
+
+    private migrateLegacyOcrPasswords(loadedData: unknown): boolean {
+        if (!this.app.secretStorage?.setSecret) return false;
+        if (!loadedData || typeof loadedData !== "object" || Array.isArray(loadedData)) return false;
+        const ocrSettings = (loadedData as Record<string, unknown>).ocrSettings;
+        if (!ocrSettings || typeof ocrSettings !== "object" || Array.isArray(ocrSettings)) return false;
+
+        let migrated = false;
+        const migrateProvider = (
+            provider: "pix2tex" | "texify",
+            fallbackSecretId: string
+        ) => {
+            const rawProvider = (ocrSettings as Record<string, unknown>)[provider];
+            if (!rawProvider || typeof rawProvider !== "object" || Array.isArray(rawProvider)) return;
+            const password = (rawProvider as Record<string, unknown>).password;
+            if (typeof password !== "string" || !password) return;
+
+            const target = this.settings.ocrSettings[provider];
+            const secretId = target.passwordSecretId || fallbackSecretId;
+            try {
+                this.app.secretStorage.setSecret(secretId, password);
+                target.passwordSecretId = secretId;
+                migrated = true;
+            } catch (error) {
+                console.error(`[Image Assistant] Failed to migrate ${provider} password:`, error);
+                new Notice(t("MSG_SETTINGS_SAVE_FAILED", [getErrorMessage(error)]));
+            }
+        };
+
+        migrateProvider("pix2tex", "image-assistant-pix2tex-password");
+        migrateProvider("texify", "image-assistant-texify-password");
+        return migrated;
     }
 
     public getDefaultSingleImageOperationSettings() {
@@ -678,9 +776,24 @@ export default class ImageConverterPlugin extends Plugin {
     }
 
     // Save settings method
-    async saveSettings() {
-        this.stripLegacyPresetSettings(this.settings);
-        await this.saveData(this.settings);
+    async saveSettings(): Promise<void> {
+        normalizeSettings(this.settings);
+        const write = this.settingsSaveQueue.then(async () => {
+            this.stripLegacyPresetSettings(this.settings);
+            await this.saveData(this.settings);
+        });
+        const reported = write.catch(error => {
+            console.error("[Image Assistant] Failed to save settings:", error);
+            new Notice(t("MSG_SETTINGS_SAVE_FAILED", [getErrorMessage(error)]));
+        });
+        this.settingsSaveQueue = reported;
+        return reported;
+    }
+
+    public consumeLegacyUploadHistory(): unknown[] {
+        const records = this.legacyUploadHistory;
+        this.legacyUploadHistory = [];
+        return records;
     }
 
     private stripLegacyPresetSettings(settings: unknown): void {
@@ -739,7 +852,43 @@ export default class ImageConverterPlugin extends Plugin {
      * Called when upload concurrency setting is changed
      */
     updateConcurrentQueue(concurrency: number) {
+        if (this.concurrentQueue) {
+            this.concurrentQueue.setConcurrency(concurrency);
+            return;
+        }
+
         this.concurrentQueue = new ConcurrentQueue(concurrency);
+    }
+
+    public setInteractiveResizeEnabled(enabled: boolean): void {
+        this.settings.interactiveResize.enabled = enabled;
+        this.imageResizer?.updateSettings();
+        this.attachImageResizerToActiveView();
+    }
+
+    public updateInteractiveResizeSettings(): void {
+        this.imageResizer?.updateSettings();
+    }
+
+    public setContextMenuEnabled(enabled: boolean): void {
+        this.settings.global.enableContextMenu = enabled;
+        if (!enabled && this.contextMenu) {
+            const contextMenu = this.contextMenu;
+            this.contextMenu = null;
+            this.removeChild(contextMenu);
+            return;
+        }
+        if (!enabled || !this.folderAndFilenameManagement || !this.variableProcessor) return;
+
+        if (!this.contextMenu) {
+            this.contextMenu = new ContextMenu(
+                this.app,
+                this,
+                this.folderAndFilenameManagement,
+                this.variableProcessor
+            );
+            this.addChild(this.contextMenu);
+        }
     }
 
     // Command to open settings tab
@@ -824,6 +973,11 @@ export default class ImageConverterPlugin extends Plugin {
      * 显示粘贴模式配置模态框
      */
     private async showPasteModeConfigModal() {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile || activeFile.extension !== "md") {
+            new Notice(t("MSG_OPEN_MARKDOWN_NOTE"));
+            return;
+        }
         const modal = new PasteModeConfigModal(this.app, this);
         modal.open();
     }
@@ -903,12 +1057,9 @@ export default class ImageConverterPlugin extends Plugin {
             editorInteract.insertResponseToEditor(parsedLatex);
         } catch (error) {
             console.error('[OCR] LaTeX conversion error:', error);
-            new Notice(t("MSG_OCR_FAILED", [error.message]));
+            new Notice(t("MSG_OCR_FAILED", [getErrorMessage(error)]));
             // Remove loading text on error
             if (editorInteract) editorInteract.removeLoadingText();
-        } finally {
-            // Clear memory after OCR processing
-            this.clearMemory();
         }
     }
 
@@ -935,12 +1086,9 @@ export default class ImageConverterPlugin extends Plugin {
             editorInteract.insertResponseToEditor(result);
         } catch (error) {
             console.error('[OCR] Markdown conversion error:', error);
-            new Notice(t("MSG_OCR_FAILED", [error.message]));
+            new Notice(t("MSG_OCR_FAILED", [getErrorMessage(error)]));
             // Remove loading text on error
             if (editorInteract) editorInteract.removeLoadingText();
-        } finally {
-            // Clear memory after OCR processing
-            this.clearMemory();
         }
     }
 
@@ -985,8 +1133,6 @@ export default class ImageConverterPlugin extends Plugin {
                         return;
                     }
 
-                    evt.preventDefault(); // Prevent default behavior
-
                     if (effectiveMode === 'cloud') {
                         // Cloud mode: upload to image hosting
                         await this.cloudImageHandler.handleDrop(evt, editor);
@@ -1027,6 +1173,7 @@ export default class ImageConverterPlugin extends Plugin {
                     this.supportedImageFormats.isSupported(data.type, data.file.name) &&
                     !this.folderAndFilenameManagement.matchesPatterns(data.file.name, this.settings.pasteHandling.neverProcessFilenames)
                 );
+                const hasFileItems = itemData.some(data => data.kind === "file");
 
                 const effectiveMode = this.getEffectivePasteMode();
 
@@ -1036,8 +1183,6 @@ export default class ImageConverterPlugin extends Plugin {
                         return;
                     }
 
-                    evt.preventDefault();
-
                     if (effectiveMode === 'cloud') {
                         // Cloud mode: upload to image hosting
                         await this.cloudImageHandler.handlePaste(evt, editor);
@@ -1045,7 +1190,7 @@ export default class ImageConverterPlugin extends Plugin {
                         // Local mode: use original converter logic
                         await this.localImageHandler.handlePaste(evt, editor);
                     }
-                } else if (effectiveMode === 'cloud' && clipboardText) {
+                } else if (effectiveMode === 'cloud' && clipboardText && !hasFileItems) {
                     // Check if pasted text contains image URLs (for URL auto-upload)
                     // Use the CloudImageHandler to handle text paste
                     await this.cloudImageHandler.handlePasteText(clipboardText, editor, cursor, evt);
@@ -1076,7 +1221,8 @@ export default class ImageConverterPlugin extends Plugin {
             linkFormatToUse?.linkFormat || "wikilink",
             linkFormatToUse?.pathFormat || "shortest",
             activeFile,
-            resizeSettingToUse
+            resizeSettingToUse,
+            linkFormatToUse?.prependCurrentDir ?? false
         );
 
 
@@ -1115,7 +1261,8 @@ export default class ImageConverterPlugin extends Plugin {
             linkFormatToUse?.linkFormat || "wikilink",
             linkFormatToUse?.pathFormat || "shortest",
             activeFile,
-            resizeSettingToUse
+            resizeSettingToUse,
+            linkFormatToUse?.prependCurrentDir ?? false
         );
 
         inserter.insertResponseToEditor(formattedLink);
@@ -1142,55 +1289,6 @@ export default class ImageConverterPlugin extends Plugin {
 
         const message = `${originalSizeFormatted} → ${newSizeFormatted} (${changeSymbol}${percentChange}%)`;
         new Notice(message);
-    }
-
-    /**
-     * Ensure temp folder exists for cloud upload
-     */
-    private async ensureTempFolderExists(): Promise<void> {
-        try {
-            console.log('[Cloud Upload] Checking temp folder:', this.tempFolderPath);
-            const exists = await this.app.vault.adapter.exists(this.tempFolderPath);
-            console.log('[Cloud Upload] Temp folder exists:', exists);
-
-            if (!exists) {
-                console.log('[Cloud Upload] Creating temp folder:', this.tempFolderPath);
-                await this.app.vault.createFolder(this.tempFolderPath);
-                console.log('[Cloud Upload] Created temp folder successfully');
-            }
-        } catch (error) {
-            console.error('[Cloud Upload] Failed to create temp folder:', error);
-            console.error('[Cloud Upload] Temp folder path was:', this.tempFolderPath);
-            // Re-throw the error so caller knows folder creation failed
-            throw new Error(`Failed to ensure temp folder exists: ${error.message}`);
-        }
-    }
-
-    /**
-     * Generate unique temp file path
-     */
-    private generateTempFilePath(fileName: string): string {
-        const timestamp = Date.now();
-        const random = Math.random().toString(36).substring(2, 8);
-        // Sanitize filename: remove path separators and special characters
-        const sanitizedName = fileName.replace(/[\\/:\*\?"<>\|]/g, '_');
-        const tempFileName = `.temp_${timestamp}_${random}_${sanitizedName}`;
-        return normalizePath(`${this.tempFolderPath}/${tempFileName}`);
-    }
-
-    /**
-     * Cleanup temp file safely
-     */
-    private async cleanupTempFile(filePath: string): Promise<void> {
-        try {
-            const file = this.app.vault.getAbstractFileByPath(filePath);
-            if (file instanceof TFile) {
-                await this.app.vault.delete(file);
-            }
-        } catch (error) {
-            console.warn(`Failed to delete temp file ${filePath}:`, error);
-            // Don't throw, just log the warning
-        }
     }
 
 }

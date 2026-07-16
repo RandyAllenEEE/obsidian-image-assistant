@@ -252,7 +252,6 @@ describe('ImageProcessor - Error Handling Tests', () => {
         'Auto',
         true,
         { 
-          name: 'test',
           outputFormat: 'PNGQUANT',
           pngquantExecutablePath: '/path/to/pngquant',
           quality: 1,
@@ -264,7 +263,7 @@ describe('ImageProcessor - Error Handling Tests', () => {
           enlargeOrReduce: 'Auto',
           allowLargerFiles: true,
           skipConversionPatterns: ''
-        }
+        } as any
       );
       
       // Assert
@@ -306,7 +305,6 @@ describe('ImageProcessor - Error Handling Tests', () => {
         'Auto',
         true,
         {
-          name: 'test',
           outputFormat: 'AVIF',
           ffmpegExecutablePath: '/path/to/ffmpeg',
           ffmpegCrf: 23,
@@ -320,7 +318,7 @@ describe('ImageProcessor - Error Handling Tests', () => {
           enlargeOrReduce: 'Auto',
           allowLargerFiles: true,
           skipConversionPatterns: ''
-        }
+        } as any
       );
       
       // Assert
@@ -422,6 +420,7 @@ describe('ImageProcessor - Error Handling Tests', () => {
       
       // Mock canvas to fail for both
       mockCanvas.toBlob = vi.fn((callback) => callback(null));
+      mockCanvas.toDataURL = vi.fn(() => { throw new Error('Canvas encoding failed'); });
       
       // Act - Process both concurrently
       const [result1, result2] = await Promise.all([

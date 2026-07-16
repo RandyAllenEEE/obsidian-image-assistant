@@ -13,7 +13,7 @@ function makePlugin() {
     },
     batchImageProcessor: {
       batchProcess: vi.fn(async (files: any[]) => ({
-        successful: files.map(file => ({ success: true, item: file })),
+        successful: files.map(file => ({ status: 'success' as const, success: true as const, item: file })),
         failed: [],
         cancelled: false
       }))
@@ -32,9 +32,26 @@ describe('Vault-scope batch modal/current mode behavior', () => {
     const app = fakeApp({ vault: fakeVault({ files }) }) as any;
     const mode = new LocalProcessMode(app, makePlugin(), null, 'vault');
 
-    const tasks = await mode.loadTasks();
+    const { tasks } = await mode.loadTasks();
 
     expect(tasks.map(task => task.path)).toEqual(['a.png', 'c.webp']);
+  });
+
+  it('LocalProcessMode skips vault images already in the target format', async () => {
+    const files = [
+      fakeTFile({ path: 'a.png', name: 'a.png', extension: 'png' }),
+      fakeTFile({ path: 'b.webp', name: 'b.webp', extension: 'webp' }),
+      fakeTFile({ path: 'c.jpg', name: 'c.jpg', extension: 'jpg' })
+    ];
+    const app = fakeApp({ vault: fakeVault({ files }) }) as any;
+    const plugin = makePlugin();
+    plugin.settings.operationDefaults.batchLocal.convertTo = 'webp';
+    plugin.settings.operationDefaults.batchLocal.skipImagesInTargetFormat = true;
+    const mode = new LocalProcessMode(app, plugin, null, 'vault');
+
+    const { tasks } = await mode.loadTasks();
+
+    expect(tasks.map(task => task.path)).toEqual(['a.png', 'c.jpg']);
   });
 
   it('UnifiedBatchProcessModal renders vault scope and local processing controls', async () => {

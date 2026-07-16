@@ -32,10 +32,26 @@ export default defineConfig({
         'tests/**'
       ],
       thresholds: {
-        branches: 60,
-        functions: 60,
+        branches: 70,
+        functions: 70,
         lines: 70,
-        statements: 70
+        statements: 70,
+        'src/local/ImageConversionCommitter.ts': { lines: 85 },
+        'src/local/ImageProcessor.ts': { lines: 85 },
+        'src/cloud/NetworkImageDownloader.ts': { lines: 85 },
+        'src/utils/UploadHistoryManager.ts': { lines: 85 },
+        'src/ui/modals/batch/modes/DownloadMode.ts': { lines: 85 },
+        'src/ui/modals/batch/modes/UploadMode.ts': { lines: 85 },
+        'src/ui/contextMenu/handlers/DeleteHandler.ts': { lines: 85 },
+        'src/utils/AsyncLock.ts': { lines: 85 },
+        'src/utils/CancellableBatchRunner.ts': { lines: 85 },
+        'src/utils/CanvasReferenceUtils.ts': { lines: 85 },
+        'src/utils/EditorReplacement.ts': { lines: 85 },
+        'src/utils/ImageLinkPathReplacer.ts': { lines: 85 },
+        'src/utils/ImageReferenceReplacer.ts': { lines: 85 },
+        'src/utils/NetworkPolicy.ts': { lines: 85 },
+        'src/utils/NetworkRequestUtils.ts': { lines: 85 },
+        'src/utils/ReferenceSafetyService.ts': { lines: 85 }
       }
     },
     
@@ -44,8 +60,6 @@ export default defineConfig({
     hookTimeout: 10000,
     teardownTimeout: 1000,
     isolate: true,
-    threads: true,
-    
     // Mock configuration
     mockReset: true,
     clearMocks: true,
@@ -59,14 +73,6 @@ export default defineConfig({
       }]
     ],
     outputFile: process.env.CI ? './test-results.json' : undefined,
-    
-    // Watch mode exclusions
-    watchExclude: [
-      '**/node_modules/**',
-      '**/build/**',
-      '**/dist/**',
-      '**/.obsidian/**'
-    ],
     
     // Type checking
     typecheck: {
@@ -87,7 +93,7 @@ export default defineConfig({
   
   // Build configuration for test files
   esbuild: {
-    target: 'es2024',
+    target: 'es2022',
     platform: 'node'
   },
   

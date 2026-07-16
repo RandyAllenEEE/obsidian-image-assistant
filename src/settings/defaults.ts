@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
     localProcessing: {
         destination: {
             type: "DEFAULT",
+            customTemplate: undefined,
             subfolderTemplate: "{notename}",
         },
         filename: {
@@ -45,10 +46,15 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
             linkFormat: "wikilink",
             pathFormat: "shortest",
             prependCurrentDir: false,
-            hideFolders: false,
         },
         embedResize: {
             resizeDimension: "none",
+            width: undefined,
+            height: undefined,
+            customValue: undefined,
+            longestEdge: undefined,
+            shortestEdge: undefined,
+            editorMaxWidthValue: undefined,
             resizeScaleMode: "auto",
             respectEditorMaxWidth: true,
             maintainAspectRatio: true,
@@ -73,6 +79,7 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
         enableContextMenu: true,
         codeBlockImageLinkIndexing: true,
         showSpaceSavedNotification: true,
+        batchConcurrency: 3,
     },
 
     ocrSettings: DEFAULT_OCR_SETTINGS,
@@ -85,6 +92,11 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
 
     captions: {
         enabled: true,
+        showInReadingMode: true,
+        showInLivePreview: true,
+        inlinePolicy: 'all',
+        widthMode: 'auto',
+        maxLines: 0,
         skipExtensions: 'pdf,svg',
         fontSize: '12px',
         color: 'var(--text-muted)',
@@ -133,8 +145,6 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
             workOnNetWork: false,
             newWorkBlackDomains: '',
             applyImage: true,
-            downloadPath: 'attachments',
-            uploadConcurrency: 3,
             cloudLinkFormat: 'markdown'
         }
     },

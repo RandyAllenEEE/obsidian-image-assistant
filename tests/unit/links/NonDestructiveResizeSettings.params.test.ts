@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { LinkFormatter } from '../../../src/utils/LinkFormatter';
-import type { NonDestructiveResizePreset } from '../../../src/settings/NonDestructiveResizeSettings';
+import type { EmbedResizeSettings } from '../../../src/settings/NonDestructiveResizeSettings';
 import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
 import { setMockImageSize } from '../../helpers/test-setup';
+
+type NonDestructiveResizePreset = EmbedResizeSettings & { name?: string };
 
 function makeFormatterForImage(path: string, width: number, height: number) {
   const file = fakeTFile({ path });

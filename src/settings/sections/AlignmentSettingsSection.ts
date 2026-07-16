@@ -10,7 +10,6 @@ export function renderAlignmentSettingsSection(
     refreshDisplay: () => void
 ): void {
     // --- Image Alignment Settings Section ---
-    // --- Image Alignment Settings Section ---
     const imageAlignmentSection = containerEl.createDiv("image-converter-settings-section");
     // Add marker class for potential CSS styling
     // imageAlignmentSection.addClass("image-alignment-settings-section");
@@ -28,6 +27,9 @@ export function renderAlignmentSettingsSection(
                 .onChange(async (value) => {
                     plugin.settings.alignment.enabled = value;
                     await plugin.saveSettings();
+                    plugin.applyEditModeWrapClass();
+                    plugin.imageStateManager?.refreshAllImages();
+                    plugin.imageCaption?.refreshAllViews();
                     // Force refresh to update child settings visibility
                     refreshDisplay();
 
@@ -93,6 +95,7 @@ export function renderAlignmentSettingsSection(
                     if (plugin.imageStateManager) {
                         plugin.imageStateManager.refreshAllImages();
                     }
+                    plugin.imageCaption?.refreshAllViews();
                 })
             );
 
@@ -106,11 +109,9 @@ export function renderAlignmentSettingsSection(
                     plugin.settings.alignment.enableEditModeWrap = value;
                     await plugin.saveSettings();
                     // Update body class
-                    if (value) {
-                        document.body.addClass('image-assistant-wrap-in-edit-mode');
-                    } else {
-                        document.body.removeClass('image-assistant-wrap-in-edit-mode');
-                    }
+                    plugin.applyEditModeWrapClass();
+                    plugin.imageStateManager?.refreshAllImages();
+                    plugin.imageCaption?.refreshAllViews();
                 })
             );
     } else {

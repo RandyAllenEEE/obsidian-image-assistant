@@ -1,14 +1,13 @@
 # build-draft-release.yml
 #
 # This workflow is triggered when a version tag (e.g., 1.3.17) is pushed.
-# It builds the Obsidian plugin, minifies it with Terser, and creates a
+# It builds the Obsidian plugin and creates a
 # draft GitHub release with the three required files:
-# - main.js (minified)
-# - manifest.json (with updated version)
+# - main.js (production build)
+# - manifest.json
 # - styles.css
 #
-# The draft release must be manually published, which will trigger
-# the sync-manifest workflow to update the repository's manifest.json
+# Release metadata must already be committed and match the pushed tag.
 #
 # Improvements:
 # - Uses latest GitHub Actions versions (v4)
@@ -49,38 +48,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
         
-      - name: Update manifest version for release
+      - name: Verify tag matches committed release metadata
         run: |
-          # Strip 'v' prefix if present (supports both 1.2.3 and v1.2.3)
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          
-          node -e "
-          const fs = require('fs');
-          const version = '${VERSION}';
-          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
-          manifest.version = version;
-          fs.writeFileSync('manifest.json', JSON.stringify(manifest, null, 2) + '\n');
-          console.log('✅ Updated manifest.json to version ' + version + ' for release');
-          "
-          
-      - name: Build plugin
-        run: npm run build
+          npm run verify:release -- "$VERSION"
+
+      - name: Run delivery checks
+        run: npm run check
         
-      - name: Minify main.js with Terser
+      - name: Prepare release artifact
         run: |
-          # Copy the built file from build directory to root
           cp build/main.js main.js
-          
-          echo "📦 Original main.js size:"
-          ls -lh main.js
-          
-          # Use npx to run terser without global installation
-          npx terser@latest main.js --compress --mangle --output main.min.js
-          mv main.min.js main.js
-          
-          echo "✨ Minified main.js size:"
+          echo "📦 Production main.js size:"
           ls -lh main.js
           
       - name: Verify release files exist
@@ -96,16 +77,10 @@ jobs:
             echo "✅ Found: $file ($(ls -lh $file | awk '{print $5}'))"
           done
           
-          # Verify manifest version matches tag
-          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
-          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
-            echo "❌ Manifest version ($MANIFEST_VERSION) doesn't match tag ($VERSION)"
-            exit 1
-          fi
-          echo "✅ Manifest version verified: $VERSION"
+          npm run verify:release -- "$VERSION" --build
           
       - name: Create draft release with assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

@@ -3,14 +3,14 @@
 /**
  * prepare-release.js
  * 
- * This script creates a git tag for a new release without modifying any files.
- * It's designed to work with a GitHub Actions workflow that will:
+ * This script verifies committed release metadata and creates a git tag
+ * without modifying any files. The GitHub Actions workflow will:
  * 1. Build the plugin
  * 2. Create a draft release with the compiled files
- * 3. Update manifest.json only when the release is published
+ * 3. Refuse to publish if tag, package, manifest, docs, and bundle disagree
  * 
- * Usage: npm run pre-release X.Y.Z
- * Example: npm run pre-release 1.3.17
+ * Usage: npm run pre-release -- X.Y.Z
+ * Example: npm run pre-release -- 5.0.0
  * 
  * The script will:
  * - Verify there are no uncommitted changes
@@ -60,6 +60,9 @@ try {
         console.error(status);
         process.exit(1);
     }
+
+    // Release metadata must be committed before the tag is created.
+    execSync(`node scripts/verify-release-metadata.js ${cleanVersion}`, { stdio: 'inherit' });
     
     // Check if tag already exists locally
     try {

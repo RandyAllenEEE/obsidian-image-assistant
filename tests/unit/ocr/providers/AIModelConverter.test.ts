@@ -6,6 +6,10 @@ import { App } from 'obsidian';
 // Mock global fetch
 global.fetch = vi.fn();
 
+function pngImage(): Uint8Array {
+    return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+}
+
 describe('AIModelConverter', () => {
     let converter: AIModelConverter;
     let mockSettings: OCRSettings;
@@ -26,8 +30,8 @@ describe('AIModelConverter', () => {
                 appSecretSecretId: '',
                 tokenSecretId: ''
             },
-            texify: { url: '', username: '', password: '' },
-            pix2tex: { url: '', username: '', password: '' },
+            texify: { url: '', username: '', passwordSecretId: '' },
+            pix2tex: { url: '', username: '', passwordSecretId: '' },
             aiModel: {
                 providerType: 'openai' as const,
                 endpoint: 'https://api.openai.com/v1/chat/completions',
@@ -70,7 +74,7 @@ describe('AIModelConverter', () => {
     describe('sendRequest 方法 - 成功场景', () => {
         it('Given 图片数据, When 调用 sendRequest, Then 发送正确的 API 请求', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]); // PNG header
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -98,7 +102,7 @@ describe('AIModelConverter', () => {
 
         it('Given LaTeX 单行模式, When 收到响应, Then 包裹为单行公式', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -119,7 +123,7 @@ describe('AIModelConverter', () => {
 
         it('Given LaTeX 多行模式, When 收到响应, Then 包裹为多行公式', async () => {
             converter = new AIModelConverter(mockApp, true, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -140,7 +144,7 @@ describe('AIModelConverter', () => {
 
         it('Given Markdown 模式, When 收到响应, Then 直接返回内容', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'markdown');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -163,7 +167,7 @@ describe('AIModelConverter', () => {
     describe('sendRequest 方法 - 数据清洗', () => {
         it('Given 响应包含 markdown 代码块, When 清洗, Then 移除代码块标记', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -184,7 +188,7 @@ describe('AIModelConverter', () => {
 
         it('Given 响应已包含 $ 包裹, When 清洗, Then 移除外层 $ 符号', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -206,7 +210,7 @@ describe('AIModelConverter', () => {
 
         it('Given 响应已包含 $$ 包裹, When 清洗, Then 移除外层 $$ 符号', async () => {
             converter = new AIModelConverter(mockApp, true, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -227,7 +231,7 @@ describe('AIModelConverter', () => {
 
         it('Given 响应包含多余空白, When 清洗, Then 正确 trim', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -250,7 +254,7 @@ describe('AIModelConverter', () => {
     describe('sendRequest 方法 - 错误处理', () => {
         it('Given API 返回错误状态, When 调用, Then 抛出异常', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: false,
@@ -262,9 +266,27 @@ describe('AIModelConverter', () => {
             await expect(converter.sendRequest(mockImage)).rejects.toThrow();
         });
 
+        it('includes a bounded provider error body for a failed request', async () => {
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
+            (global.fetch as any).mockResolvedValueOnce({
+                ok: false,
+                status: 429,
+                text: async () => `quota exceeded ${'x'.repeat(500)}`
+            });
+
+            const error = await converter.sendRequest(pngImage()).then(
+                () => null,
+                value => value as Error
+            );
+
+            expect(error).toBeInstanceOf(Error);
+            expect((error as Error).message).toContain('429: quota exceeded');
+            expect((error as Error).message.length).toBeLessThan(360);
+        });
+
         it('Given 网络错误, When 调用, Then 抛出异常', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 76, 71]);
+            const mockImage = pngImage();
 
             (global.fetch as any).mockRejectedValueOnce(new Error('Network error'));
 
@@ -273,7 +295,7 @@ describe('AIModelConverter', () => {
 
         it('Given API 响应格式错误, When 调用, Then 抛出异常', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -291,7 +313,7 @@ describe('AIModelConverter', () => {
     describe('请求载荷构建', () => {
         it('Given 图片数据, When 构建请求, Then Base64 编码正确', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]); // PNG header
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -322,9 +344,24 @@ describe('AIModelConverter', () => {
             expect(payload.messages[0].content[1].image_url.url).toContain('data:image/png;base64,');
         });
 
+        it('Given WebP 图片, When 构建请求, Then data URL 使用 image/webp', async () => {
+            converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
+            const webp = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]);
+            (global.fetch as any).mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ choices: [{ message: { content: 'x' } }] })
+            });
+
+            await converter.sendRequest(webp);
+
+            const [, options] = (global.fetch as any).mock.calls[0];
+            const payload = JSON.parse(options.body);
+            expect(payload.messages[0].content[1].image_url.url).toContain('data:image/webp;base64,');
+        });
+
         it('Given Markdown 模式, When 构建请求, Then 使用 Markdown prompt', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'markdown');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -344,26 +381,17 @@ describe('AIModelConverter', () => {
     });
 
     describe('边界情况和注意事项', () => {
-        it('Given 空图片数据, When 调用, Then 仍能正常处理', async () => {
+        it('Given 空图片数据, When 调用, Then 拒绝发送请求', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
             const mockImage = new Uint8Array([]);
 
-            const mockResponse = {
-                ok: true,
-                json: async () => ({
-                    choices: [{ message: { content: 'empty' } }]
-                })
-            };
-            (global.fetch as any).mockResolvedValueOnce(mockResponse);
-
-            const result = await converter.sendRequest(mockImage);
-
-            expect(result).toBe('$empty$');
+            await expect(converter.sendRequest(mockImage)).rejects.toThrow('not a recognized image');
+            expect(global.fetch).not.toHaveBeenCalled();
         });
 
         it('Given 特殊字符响应, When 清洗, Then 保留 LaTeX 语法', async () => {
             converter = new AIModelConverter(mockApp, false, mockSettings, 'latex');
-            const mockImage = new Uint8Array([137, 80, 78, 71]);
+            const mockImage = pngImage();
 
             const mockResponse = {
                 ok: true,
@@ -383,53 +411,4 @@ describe('AIModelConverter', () => {
         });
     });
 
-    describe('功能说明和使用场景', () => {
-        it('AIModelConverter 功能说明', () => {
-            /*
-             * AIModelConverter 功能：
-             * 
-             * 1. 支持任何 OpenAI 兼容的 API
-             * 2. 可配置不同的模型（GPT-4o, Claude, 本地模型等）
-             * 3. 自动处理图片 Base64 编码
-             * 4. 智能清洗响应数据：
-             *    - 移除 markdown 代码块标记
-             *    - 移除多余的 $ 符号
-             *    - Trim 空白字符
-             * 5. 根据模式自动包裹结果：
-             *    - 单行模式：$...$
-             *    - 多行模式：$$...$$
-             *    - Markdown 模式：原样返回
-             * 
-             * 使用场景：
-             * - OCR 公式识别（LaTeX）
-             * - OCR 文本识别（Markdown）
-             * - 图片内容描述生成
-             */
-            expect(true).toBe(true);
-        });
-
-        it('与其他 Provider 的对比', () => {
-            /*
-             * AIModelConverter vs 其他 Provider：
-             * 
-             * SimpleTex/Pix2Tex/Texify：
-             * - 专用 OCR 服务，针对公式优化
-             * - 速度快，成本低
-             * - 但灵活性较低
-             * 
-             * AIModelConverter (LLM)：
-             * - 通用 AI 模型，理解能力强
-             * - 可处理复杂图表、混合内容
-             * - 可自定义 prompt
-             * - 成本较高，速度较慢
-             * - 需要 API Key
-             * 
-             * 建议：
-             * - 简单公式：使用 SimpleTex/Texify
-             * - 复杂图表：使用 LLM
-             * - 成本敏感：使用专用服务
-             */
-            expect(true).toBe(true);
-        });
-    });
 });

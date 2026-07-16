@@ -1,9 +1,10 @@
 import { App, Setting, TFile, TFolder } from "obsidian";
 import ImageConverterPlugin from "../../../../main";
-import { BatchTask, BatchItemResult, BatchResult, BatchScope } from "../../../../types/BatchTypes";
+import { BatchTask, BatchItemResult, BatchResult, BatchScope, BatchTaskDiscoveryResult } from "../../../../types/BatchTypes";
 import { IBatchMode, ReviewAction } from "./IBatchMode";
 import { t } from "../../../../lang/helpers";
 import { ImageFileCollector } from "../../../../utils/batch/ImageFileCollector";
+import { getContextualReferenceLinks } from "../../../../utils/MarkdownSourceContext";
 
 export class LocalProcessMode implements IBatchMode {
     id = "local_process" as const;
@@ -38,12 +39,7 @@ export class LocalProcessMode implements IBatchMode {
             .setDesc(t("BATCH_SETTING_QUALITY_DESC"))
             .addSlider(slider => {
                 slider.setLimits(10, 100, 5)
-                    .setValue(option.quality * 100) // Quality is 0-1 usually in settings? Defaults says 0.75. Code used 80.
-                    // defaults.ts: quality: 0.75.
-                    // Slider usually 0-100.
-                    // Need to check if code expected 0-100 or 0-1.
-                    // BatchImageProcessor logic?
-                    // Let's assume 0-100 for slider and convert.
+                    .setValue(option.quality * 100)
                     .setDynamicTooltip()
                     .onChange(async (value) => {
                         option.quality = value / 100;
@@ -164,27 +160,58 @@ export class LocalProcessMode implements IBatchMode {
         );
     }
 
-    async loadTasks(): Promise<BatchTask[]> {
+    async loadTasks(): Promise<BatchTaskDiscoveryResult> {
         const tasks: BatchTask[] = [];
         let files: TFile[] = [];
+        const collector = new ImageFileCollector(this.app, this.plugin);
+        const failedFiles: string[] = [];
+        const uncertainFiles: string[] = [];
 
+        try {
         if (this.scope === "note" && this.isFileLike(this.target)) {
-            const cache = this.app.metadataCache.getFileCache(this.target);
-            if (cache && cache.embeds) {
-                for (const embed of cache.embeds) {
-                    const file = this.app.metadataCache.getFirstLinkpathDest(embed.link, this.target.path);
+            if (this.target.extension === "canvas") {
+                const imagePaths = await collector.getImagesFromCanvas(this.target);
+                files = imagePaths
+                    .map(path => this.app.vault.getAbstractFileByPath(path))
+                    .filter((file): file is TFile =>
+                        this.isFileLike(file) &&
+                        this.plugin.supportedImageFormats.isSupported(file.extension, file.name)
+                    );
+            } else {
+                const cache = this.app.metadataCache.getFileCache(this.target);
+                if (cache) {
+                    for (const link of [...(cache.embeds ?? []), ...(cache.links ?? [])]) {
+                        const file = this.app.metadataCache.getFirstLinkpathDest(link.link, this.target.path);
+                        if (this.isFileLike(file) && this.plugin.supportedImageFormats.isSupported(file.extension, file.name)) {
+                            files.push(file);
+                        }
+                    }
+                }
+
+                const content = await this.app.vault.read(this.target);
+                for (const link of getContextualReferenceLinks(content, {
+                    includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
+                })) {
+                    const file = this.app.metadataCache.getFirstLinkpathDest(link.path, this.target.path);
                     if (this.isFileLike(file) && this.plugin.supportedImageFormats.isSupported(file.extension, file.name)) {
                         files.push(file);
                     }
                 }
             }
         } else if (this.scope === "folder" && this.isFolderLike(this.target)) {
-            files = new ImageFileCollector(this.app, this.plugin).getImageFilesInFolder(this.target, true);
+            files = collector.getImageFilesInFolder(this.target, true);
         } else if (this.scope === "vault") {
             files = this.app.vault.getFiles().filter(f => this.plugin.supportedImageFormats.isSupported(f.extension, f.name));
         }
+        } catch (error) {
+            const targetPath = this.isFileLike(this.target) || this.isFolderLike(this.target)
+                ? this.target.path
+                : this.scope;
+            failedFiles.push(`${targetPath}: ${error instanceof Error ? error.message : String(error)}`);
+            uncertainFiles.push(targetPath);
+        }
 
-        files = [...new Set(files)];
+        files = this.filterProcessableFiles([...new Set(files)], collector);
 
         for (const file of files) {
             tasks.push({
@@ -196,18 +223,45 @@ export class LocalProcessMode implements IBatchMode {
                 status: 'pending'
             });
         }
-        return tasks;
+        return { tasks, complete: failedFiles.length === 0 && uncertainFiles.length === 0, failedFiles, uncertainFiles };
+    }
+
+    private filterProcessableFiles(files: TFile[], collector: ImageFileCollector): TFile[] {
+        const {
+            convertTo,
+            skipFormats: batchSkipFormats,
+            skipImagesInTargetFormat
+        } = this.plugin.settings.operationDefaults.batchLocal;
+        const isKeepOriginalFormat = convertTo === 'disabled' || convertTo === 'Original';
+        const skipFormats = collector.parseSkipFormats(batchSkipFormats);
+
+        return files.filter(file =>
+            collector.shouldProcessImage(
+                file,
+                isKeepOriginalFormat,
+                convertTo,
+                skipFormats,
+                skipImagesInTargetFormat
+            )
+        );
     }
 
     async processTask(task: BatchTask): Promise<BatchItemResult> {
         try {
             const file = task.source as TFile;
+            if (typeof this.plugin.batchImageProcessor.processFile === "function") {
+                return await this.plugin.batchImageProcessor.processFile(file);
+            }
             const result = await this.plugin.batchImageProcessor.batchProcess([file]);
-            if (result.successful.length > 0) return result.successful[0];
-            if (result.failed.length > 0) return result.failed[0];
-            return { success: false, item: file, error: t("MSG_UNKNOWN_ERROR") };
+            return result.successful[0] ?? result.skipped[0] ?? result.failed[0]
+                ?? { status: "failed", success: false, item: file, error: t("MSG_UNKNOWN_ERROR") };
         } catch (e) {
-            return { success: false, item: task.source as TFile, error: e.message };
+            return {
+                status: "failed",
+                success: false,
+                item: task.source as TFile,
+                error: e instanceof Error ? e.message : String(e)
+            };
         }
     }
 

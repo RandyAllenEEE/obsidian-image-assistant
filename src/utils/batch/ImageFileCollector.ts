@@ -1,6 +1,8 @@
 import { App, TFile, TFolder } from 'obsidian';
 import ImageConverterPlugin from '../../main';
 import { CollectedFiles, FileCollectorOptions } from './types';
+import { isHttpUrl } from '../NetworkPolicy';
+import { getContextualReferenceLinks } from '../MarkdownSourceContext';
 
 /**
  * ImageFileCollector - Shared utility for collecting image files.
@@ -109,15 +111,23 @@ export class ImageFileCollector {
      * Get images from a canvas file.
      */
     async getImagesFromCanvas(file: TFile): Promise<string[]> {
-        const images: string[] = [];
+        const images = new Set<string>();
         try {
             const content = await this.app.vault.read(file);
             const canvasData = JSON.parse(content);
 
             if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
                 for (const node of canvasData.nodes) {
-                    if (node.type === "file" && node.file) {
-                        images.push(node.file);
+                    if (node?.type === "file" && typeof node.file === "string") {
+                        images.add(this.resolveCanvasFilePath(node.file, file));
+                    }
+                    if (typeof node?.text === "string") {
+                        for (const link of getContextualReferenceLinks(node.text, {
+                            includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
+                        })) {
+                            if (isHttpUrl(link.path)) continue;
+                            images.add(this.resolveCanvasFilePath(link.path, file));
+                        }
                     }
                 }
             }
@@ -125,7 +135,21 @@ export class ImageFileCollector {
             console.error(`Error reading canvas file ${file.path}:`, error);
         }
 
-        return images;
+        return [...images];
+    }
+
+    private resolveCanvasFilePath(canvasPath: string, canvasFile: TFile): string {
+        const directFile = this.app.vault.getAbstractFileByPath(canvasPath);
+        if (directFile instanceof TFile) {
+            return directFile.path;
+        }
+
+        const resolved = this.app.metadataCache.getFirstLinkpathDest(canvasPath, canvasFile.path);
+        if (resolved instanceof TFile) {
+            return resolved.path;
+        }
+
+        return canvasPath;
     }
 
     // ============ Validation & Filtering ============

@@ -2,11 +2,7 @@ import { App, PluginSettingTab } from "obsidian";
 import ImageConverterPlugin from "../main";
 import { renderOCRSettingsSection } from "./OCRSettingsSection";
 
-// --- Typedefs and Interfaces ---
 import { SettingsUIState } from "./types";
-
-// --- Settings Tab Class ---
-
 import { renderLocalProcessingSection } from "./sections/LocalProcessingSection";
 import { renderCloudSettingsSection } from "./sections/CloudSettingsSection";
 import { renderAlignmentSettingsSection } from "./sections/AlignmentSettingsSection";
@@ -59,9 +55,8 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         renderCaptionSettingsSection(containerEl, this.plugin, this.settingsUIState, () => this.display());
 
         // --- Unused File Cleaner ---
-        renderCleanerSettingsSection(containerEl, this.plugin, this.settingsUIState);
+        renderCleanerSettingsSection(containerEl, this.plugin, this.settingsUIState, () => this.display());
 
-        // --- OCR & LaTeX ---
         // --- OCR & LaTeX ---
         renderOCRSettingsSection(containerEl, this.plugin, this.settingsUIState, () => this.display());
 

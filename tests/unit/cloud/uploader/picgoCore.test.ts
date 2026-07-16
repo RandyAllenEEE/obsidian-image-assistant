@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import PicGoCoreUploader from '../../../../src/cloud/uploader/picgoCore';
 import ImageAssistantPlugin from '../../../../src/main';
 import { FileSystemAdapter, normalizePath } from 'obsidian';
+import { EventEmitter } from 'events';
+import crossSpawn from 'cross-spawn';
+
+vi.mock('cross-spawn', () => ({ default: vi.fn() }));
 
 // Mock Obsidian API
 vi.mock('obsidian', () => ({
@@ -39,7 +43,6 @@ describe('PicGoCoreUploader', () => {
             workOnNetWork: false,
             newWorkBlackDomains: '',
             applyImage: true,
-            downloadPath: 'attachments',
             uploadConcurrency: 3,
             cloudLinkFormat: 'markdown' as const,
         };
@@ -109,9 +112,8 @@ describe('PicGoCoreUploader', () => {
             await uploader.upload(fileList);
 
             expect(execSpy).toHaveBeenCalled();
-            const command = execSpy.mock.calls[0][0];
-            expect(command).toContain('/vault/path/attachments/image1.png');
-            expect(command).toContain('/vault/path/attachments/image2.png');
+            const args = execSpy.mock.calls[0][1];
+            expect(args).toEqual(['upload', '/vault/path/attachments/image1.png', '/vault/path/attachments/image2.png']);
         });
 
         it('Given 字符串路径数组, When 上传, Then 原样使用', async () => {
@@ -123,9 +125,8 @@ describe('PicGoCoreUploader', () => {
 
             await uploader.upload(fileList);
 
-            const command = execSpy.mock.calls[0][0];
-            expect(command).toContain('/absolute/path/image1.png');
-            expect(command).toContain('/absolute/path/image2.png');
+            const args = execSpy.mock.calls[0][1];
+            expect(args).toEqual(['upload', '/absolute/path/image1.png', '/absolute/path/image2.png']);
         });
 
         it('Given 混合类型数组, When 上传, Then 正确转换', async () => {
@@ -140,9 +141,8 @@ describe('PicGoCoreUploader', () => {
 
             await uploader.upload(fileList);
 
-            const command = execSpy.mock.calls[0][0];
-            expect(command).toContain('/vault/path/attachments/image1.png');
-            expect(command).toContain('/absolute/path/image2.png');
+            const args = execSpy.mock.calls[0][1];
+            expect(args).toEqual(['upload', '/vault/path/attachments/image1.png', '/absolute/path/image2.png']);
         });
     });
 
@@ -157,8 +157,7 @@ describe('PicGoCoreUploader', () => {
 
             await uploader.upload(fileList);
 
-            const command = execSpy.mock.calls[0][0];
-            expect(command).toMatch(/^picgo upload/);
+            expect(execSpy).toHaveBeenCalledWith('picgo', ['upload', '/path/image.png']);
         });
 
         it('Given 配置了 picgoCorePath, When 上传, Then 使用自定义路径', async () => {
@@ -171,8 +170,7 @@ describe('PicGoCoreUploader', () => {
 
             await uploader.upload(fileList);
 
-            const command = execSpy.mock.calls[0][0];
-            expect(command).toMatch(/^\/custom\/path\/picgo upload/);
+            expect(execSpy).toHaveBeenCalledWith('/custom/path/picgo', ['upload', '/path/image.png']);
         });
 
         it('Given 文件路径包含空格, When 构建命令, Then 正确引号包裹', async () => {
@@ -184,8 +182,7 @@ describe('PicGoCoreUploader', () => {
 
             await uploader.upload(fileList);
 
-            const command = execSpy.mock.calls[0][0];
-            expect(command).toContain('"/path/my image.png"');
+            expect(execSpy).toHaveBeenCalledWith('picgo', ['upload', '/path/my image.png']);
         });
 
         it('Given 多个文件, When 构建命令, Then 空格分隔路径', async () => {
@@ -197,8 +194,12 @@ describe('PicGoCoreUploader', () => {
 
             await uploader.upload(fileList);
 
-            const command = execSpy.mock.calls[0][0];
-            expect(command).toContain('"/path/image1.png" "/path/image2.png" "/path/image3.png"');
+            expect(execSpy).toHaveBeenCalledWith('picgo', [
+                'upload',
+                '/path/image1.png',
+                '/path/image2.png',
+                '/path/image3.png'
+            ]);
         });
     });
 
@@ -258,8 +259,7 @@ describe('PicGoCoreUploader', () => {
 
             const result = await uploader.upload(fileList);
 
-            // 根据代码逻辑，不包含 "PicGo ERROR" 则视为成功
-            expect(result.success).toBe(true);
+            expect(result.success).toBe(false);
         });
     });
 
@@ -275,7 +275,7 @@ describe('PicGoCoreUploader', () => {
 
             const result = await uploader.uploadByClipboard();
 
-            expect(execSpy).toHaveBeenCalledWith('picgo upload');
+            expect(execSpy).toHaveBeenCalledWith('picgo', ['upload']);
             expect(result.success).toBe(true);
             expect(result.result).toEqual(['https://example.com/clipboard.png']);
         });
@@ -293,7 +293,7 @@ describe('PicGoCoreUploader', () => {
 
             await uploader.uploadByClipboard();
 
-            expect(execSpy).toHaveBeenCalledWith('/usr/local/bin/picgo upload');
+            expect(execSpy).toHaveBeenCalledWith('/usr/local/bin/picgo', ['upload']);
         });
 
         it('Given 剪贴板上传失败, When 解析响应, Then 返回失败结果', async () => {
@@ -328,140 +328,40 @@ describe('PicGoCoreUploader', () => {
         });
     });
 
-    describe('功能说明和使用场景', () => {
-        it('PicGo-Core 工作原理', () => {
-            /*
-             * PicGo-Core 是命令行工具，通过 CLI 执行上传：
-             * 
-             * 基本用法：
-             * 1. 文件上传：picgo upload /path/to/image.png
-             * 2. 剪贴板上传：picgo upload
-             * 3. 批量上传：picgo upload file1.png file2.png
-             * 
-             * 响应格式：
-             * - 成功：输出包含图片 URL（通常在最后几行）
-             * - 失败：输出包含 "PicGo ERROR" 字样
-             * 
-             * 配置文件：
-             * - 位置：~/.picgo/config.json
-             * - 包含图床配置（Uploader）、插件等
-             * 
-             * 支持的图床：
-             * - SM.MS, 七牛云, 腾讯云 COS, 又拍云
-             * - GitHub, Gitee, Imgur
-             * - 自定义图床（通过插件）
-             */
-            expect(true).toBe(true);
-        });
-
-        it('与 PicGo GUI 的区别', () => {
-            /*
-             * PicGoCoreUploader (CLI) vs PicGoUploader (GUI)：
-             * 
-             * PicGoCoreUploader (本类)：
-             * - 调用命令行工具 picgo
-             * - 通过 child_process.exec 执行
-             * - 需要系统安装 picgo-core
-             * - 适合自动化脚本、服务器环境
-             * 
-             * PicGoUploader (GUI)：
-             * - 调用 PicGo/PicList GUI 应用的 HTTP API
-             * - 通过 requestUrl 发送 HTTP 请求
-             * - 需要启动 PicGo/PicList 应用（监听 36677 端口）
-             * - 适合桌面环境、用户交互
-             * 
-             * 选择建议：
-             * - 桌面用户 → GUI 模式（更直观）
-             * - 开发者/高级用户 → Core 模式（更灵活）
-             */
-            expect(true).toBe(true);
-        });
-
-        it('响应解析策略说明', () => {
-            /*
-             * 为什么要解析最后 N 行？
-             * 
-             * PicGo-Core 输出混合了日志和结果：
-             * [PicGo INFO]: 上传开始
-             * [PicGo INFO]: 处理图片 image1.png
-             * https://example.com/image1.png
-             * [PicGo INFO]: 处理图片 image2.png
-             * https://example.com/image2.png
-             * 
-             * 假设上传 2 张图片：
-             * 1. 按 \n 分割输出
-             * 2. 取倒数第 (1 + length) 到倒数第 1 行
-             * 3. 忽略前面的日志信息
-             * 
-             * 局限性：
-             * - 依赖日志格式稳定
-             * - 无法精确区分日志和结果
-             * - 建议 PicGo 社区改进输出格式（JSON）
-             */
-            expect(true).toBe(true);
-        });
-
-        it('剪贴板上传的特殊性', () => {
-            /*
-             * 剪贴板上传与文件上传的区别：
-             * 
-             * 文件上传：
-             * - 命令：picgo upload /path/to/file.png
-             * - 可批量上传多个文件
-             * - 响应包含多个 URL
-             * 
-             * 剪贴板上传：
-             * - 命令：picgo upload（无参数）
-             * - 一次只能上传一张图片（剪贴板限制）
-             * - 使用 getLastImage() 提取最后一行 URL
-             * 
-             * 工作流程：
-             * 1. 用户复制图片（Ctrl+C 或截图）
-             * 2. 调用 uploadByClipboard()
-             * 3. PicGo 读取系统剪贴板
-             * 4. 上传并返回 URL
-             * 
-             * 注意：
-             * - 需要系统剪贴板支持图片格式
-             * - Windows/macOS/Linux 兼容性可能不同
-             */
-            expect(true).toBe(true);
-        });
-
-        it('路径规范化的重要性', () => {
-            /*
-             * 为什么需要 normalizePath？
-             * 
-             * 跨平台路径问题：
-             * - Windows：C:\Users\vault\image.png
-             * - Linux/macOS：/home/user/vault/image.png
-             * 
-             * normalizePath 的作用：
-             * - 统一路径分隔符为 /
-             * - 移除冗余的 ./
-             * - 解析 ../ 路径
-             * 
-             * 示例：
-             * - 输入：vault\\attachments\\image.png
-             * - 输出：vault/attachments/image.png
-             * 
-             * 组合 Vault 基础路径：
-             * - 基础路径：/Users/john/Documents/MyVault
-             * - 相对路径：attachments/image.png
-             * - 最终路径：/Users/john/Documents/MyVault/attachments/image.png
-             */
-            expect(true).toBe(true);
-        });
-    });
-
     describe('边界情况和错误处理', () => {
-        it('Given 空文件列表, When 上传, Then 正常处理', async () => {
-            vi.spyOn(uploader as any, 'exec').mockResolvedValue('');
+        it('terminates a PicGo-Core process that exceeds the upload timeout', async () => {
+            vi.useFakeTimers();
+            try {
+                const child = new EventEmitter() as EventEmitter & {
+                    stdout: EventEmitter;
+                    stderr: EventEmitter;
+                    kill: ReturnType<typeof vi.fn>;
+                };
+                child.stdout = new EventEmitter();
+                child.stderr = new EventEmitter();
+                child.kill = vi.fn();
+                vi.mocked(crossSpawn).mockReturnValue(child as any);
+
+                const execution = expect((uploader as any).exec('picgo', ['upload', '/path/image.png']))
+                    .rejects.toThrow('timed out after 60 seconds');
+                await vi.advanceTimersByTimeAsync(60_000);
+
+                await execution;
+                expect(child.kill).toHaveBeenCalledOnce();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('Given 空文件列表, When 上传, Then 返回失败且不启动进程', async () => {
+            const execSpy = vi.spyOn(uploader as any, 'exec').mockResolvedValue('');
 
             const result = await uploader.upload([]);
 
-            expect(result.success).toBe(true);
+            expect(result.success).toBe(false);
+            expect(result.msg).toContain('No files');
             expect(result.result).toEqual([]);
+            expect(execSpy).not.toHaveBeenCalled();
         });
 
         it('Given 响应只有换行符, When 解析, Then 返回空结果', async () => {
@@ -469,8 +369,8 @@ describe('PicGoCoreUploader', () => {
 
             const result = await uploader.upload(['/path/image.png']);
 
-            expect(result.success).toBe(true);
-            expect(result.result.length).toBeGreaterThanOrEqual(0);
+            expect(result.success).toBe(false);
+            expect(result.result).toEqual([]);
         });
 
         it('Given 文件路径包含引号, When 构建命令, Then 正确转义', async () => {
@@ -482,9 +382,7 @@ describe('PicGoCoreUploader', () => {
 
             await uploader.upload(fileList);
 
-            const command = execSpy.mock.calls[0][0];
-            // 命令中应包含转义的引号 (quotes should be escaped for shell safety)
-            expect(command).toContain('"/path/\\"quoted\\".png"');
+            expect(execSpy).toHaveBeenCalledWith('picgo', ['upload', '/path/"quoted".png']);
         });
 
         it('Given PicGo 未安装, When 执行命令, Then exec 抛出错误', async () => {
@@ -529,41 +427,4 @@ describe('PicGoCoreUploader', () => {
         });
     });
 
-    describe('集成测试建议', () => {
-        it('完整测试流程说明', () => {
-            /*
-             * 完整测试 PicGoCoreUploader 需要：
-             * 
-             * 环境准备：
-             * 1. 安装 picgo-core：npm install -g picgo
-             * 2. 配置图床：picgo set uploader
-             * 3. 验证配置：picgo upload /path/to/test.png
-             * 
-             * 测试场景：
-             * 1. 单文件上传
-             * 2. 批量文件上传（3-5 张）
-             * 3. 剪贴板上传（需要人工复制图片）
-             * 4. 不同图片格式（PNG, JPEG, GIF, WebP）
-             * 5. 大文件上传（>5MB）
-             * 6. 特殊文件名（中文、空格、特殊字符）
-             * 7. 无效文件（文本文件伪装）
-             * 8. 网络错误（断网、图床限流）
-             * 
-             * 验证点：
-             * - 上传成功率
-             * - URL 格式正确性
-             * - 文件可访问性（打开 URL 验证）
-             * - 错误提示准确性
-             * - 性能（上传耗时）
-             * 
-             * 单元测试局限：
-             * - 无法测试实际 CLI 执行
-             * - 无法验证图床交互
-             * - 无法测试文件读取
-             * 
-             * 建议：编写 E2E 测试或手动测试
-             */
-            expect(true).toBe(true);
-        });
-    });
 });

@@ -1,169 +1,275 @@
 import { App, FileSystemAdapter } from "obsidian";
 import ImageConverterPlugin from "../main";
+import { AsyncLock } from "./AsyncLock";
 
 const HISTORY_FILE_NAME = "upload_history.json";
 
 export interface UploadRecord {
     url: string;
-    [key: string]: any;
+    imgUrl?: string;
+    localPath?: string;
+    [key: string]: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneRecord(record: UploadRecord): UploadRecord {
+    return JSON.parse(JSON.stringify(record)) as UploadRecord;
 }
 
 export class UploadHistoryManager {
-    private app: App;
-    private plugin: ImageConverterPlugin;
     private history: UploadRecord[] = [];
     private loaded = false;
+    private readonly lock = new AsyncLock();
 
-    constructor(app: App, plugin: ImageConverterPlugin) {
-        this.app = app;
-        this.plugin = plugin;
+    constructor(
+        private readonly app: App,
+        private readonly plugin: ImageConverterPlugin
+    ) { }
+
+    async init(): Promise<void> {
+        await this.lock.acquire("history", async () => {
+            await this.loadHistory();
+            await this.migrateFromSettings();
+        });
     }
 
-    /**
-     * Initialize: Load history and perform migration if needed
-     */
-    async init() {
-        await this.loadHistory();
-        await this.migrateFromSettings();
+    async addRecord(record: UploadRecord): Promise<void> {
+        const normalized = this.normalizeRecord(record);
+        if (!normalized) throw new Error("Upload history record has no valid URL");
+
+        await this.lock.acquire("history", async () => {
+            if (!this.loaded) await this.loadHistory();
+            const next = this.history.map(cloneRecord);
+            const existingIndex = next.findIndex(existing => this.isMatch(normalized.url, existing));
+            if (existingIndex >= 0) next[existingIndex] = { ...next[existingIndex], ...normalized };
+            else next.push(normalized);
+
+            const deduped = this.dedupe(next);
+            await this.saveHistory(deduped);
+            this.history = deduped;
+        });
     }
 
-    private async getAdapter(): Promise<FileSystemAdapter> {
-        return this.app.vault.adapter as FileSystemAdapter;
-    }
-
-    private async getHistoryFilePath(): Promise<string> {
-        const adapter = await this.getAdapter();
-        // Store in the plugin's configuration directory usually
-        // But for simplicity/robustness, we can store it in the plugin dir or vault root
-        // Best practice: store next to data.json under the plugin's manifest id.
-        // Or simply adjacent to data.json.
-        // To be safe and standard: use the config dir.
-        const configDir = this.app.vault.configDir;
-        return `${configDir}/plugins/${this.plugin.manifest.id}/${HISTORY_FILE_NAME}`;
-    }
-
-    private async loadHistory() {
-        const adapter = await this.getAdapter();
-        const path = await this.getHistoryFilePath();
-
-        if (await adapter.exists(path)) {
-            try {
-                const content = await adapter.read(path);
-                this.history = JSON.parse(content);
-            } catch (e) {
-                console.error("Failed to parse upload history:", e);
-                this.history = [];
-            }
-        } else {
-            this.history = [];
-        }
-        this.loaded = true;
-    }
-
-    private async saveHistory() {
-        const adapter = await this.getAdapter();
-        const path = await this.getHistoryFilePath();
-        await adapter.write(path, JSON.stringify(this.history, null, 2));
-    }
-
-    /**
-     * Migrate data from data.json (settings) to this separate file
-     */
-    private async migrateFromSettings() {
-        // Access raw settings to see if 'uploadedImages' exists, 
-        // even if removed from the interface type in the future.
-        const settings = this.plugin.settings as any;
-
-        if (settings.uploadedImages && Array.isArray(settings.uploadedImages) && settings.uploadedImages.length > 0) {
-            console.log(`[Image Assistant] Migrating ${settings.uploadedImages.length} upload records to history file...`);
-
-            // Merge existing history with new migration data
-            // Prevent duplicates based on URL
-            const existingUrls = new Set(this.history.map(r => r.url));
-            const newRecords = settings.uploadedImages.filter((r: any) => r.url && !existingUrls.has(r.url));
-
-            this.history = [...this.history, ...newRecords];
-            await this.saveHistory();
-
-            // Clear from settings
-            delete settings.uploadedImages;
-            await this.plugin.saveSettings();
-
-            console.log(`[Image Assistant] Migration complete.`);
-        }
-    }
-
-    async addRecord(record: UploadRecord) {
-        if (!this.loaded) await this.loadHistory();
-        this.history.push(record);
-        await this.saveHistory();
-    }
-
-    async removeRecord(url: string) {
-        if (!this.loaded) await this.loadHistory();
-        this.history = this.history.filter(r => !this.isMatch(url, r));
-        await this.saveHistory();
+    async removeRecord(url: string): Promise<void> {
+        await this.lock.acquire("history", async () => {
+            if (!this.loaded) await this.loadHistory();
+            const next = this.history.filter(record => !this.isMatch(url, record)).map(cloneRecord);
+            await this.saveHistory(next);
+            this.history = next;
+        });
     }
 
     getRecord(url: string): UploadRecord | undefined {
-        return this.history.find(r => this.isMatch(url, r));
-    }
-
-    /**
-     * Check if a given URL matches a history record, supporting PicList placeholders.
-     */
-    private isMatch(url: string, record: UploadRecord): boolean {
-        if (record.url === url || record.imgUrl === url) return true;
-
-        // Pattern matching for PicList placeholders
-        if (record.url && record.url.includes('{')) {
-            if (this.matchUrlWithPattern(url, record.url)) return true;
-        }
-        if (record.imgUrl && record.imgUrl.includes('{')) {
-            if (this.matchUrlWithPattern(url, record.imgUrl)) return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Converts a URL pattern with placeholders like {MD5}, {year} into a Regex and matches against target URL.
-     */
-    private matchUrlWithPattern(url: string, pattern: string): boolean {
-        try {
-            // Escape special regex characters except for our placeholders
-            let regexStr = pattern.replace(/[.*+?^${}()|[\]\\]/g, (match) => {
-                if (match === '{' || match === '}') return match; // Keep curly braces for placeholders
-                return "\\" + match;
-            });
-
-            // Replace placeholders with regex groups
-            // {year}, {month}, {day}, {hour}, {minute}, {second} -> \d+
-            regexStr = regexStr.replace(/{year}|{month}|{day}|{hour}|{minute}|{second}/g, '\\d+');
-
-            // {MD5}, {uuid}, {fileName}, {extName} -> [a-zA-Z0-9\-_]+
-            regexStr = regexStr.replace(/{MD5}|{uuid}|{fileName}|{extName}/g, '[a-zA-Z0-9\\-_]+');
-
-            // Handle custom {MD5:type:length} or similar if they exist in PicList (simplified here)
-            regexStr = regexStr.replace(/{[\w:]+}/g, '.*?');
-
-            const regex = new RegExp(`^${regexStr}$`);
-            return regex.test(url);
-        } catch (e) {
-            console.error('[UploadHistoryManager] Pattern match error:', e);
-            return false;
-        }
+        const record = this.history.find(candidate => this.isMatch(url, candidate));
+        return record ? cloneRecord(record) : undefined;
     }
 
     getHistory(): UploadRecord[] {
-        return this.history;
+        return this.history.map(cloneRecord);
     }
 
     isUrlUploaded(url: string): boolean {
-        return this.history.some(r => this.isMatch(url, r));
+        return this.history.some(record => this.isMatch(url, record));
     }
 
     isLocalPathUploaded(path: string): boolean {
-        return this.history.some(r => r.localPath === path);
+        return this.history.some(record => record.localPath === path);
+    }
+
+    private getAdapter(): FileSystemAdapter {
+        return this.app.vault.adapter as FileSystemAdapter;
+    }
+
+    private getHistoryFilePath(): string {
+        return `${this.app.vault.configDir}/plugins/${this.plugin.manifest.id}/${HISTORY_FILE_NAME}`;
+    }
+
+    private async loadHistory(): Promise<void> {
+        const adapter = this.getAdapter();
+        const filePath = this.getHistoryFilePath();
+        let parsed: unknown = [];
+
+        try {
+            if (await adapter.exists(filePath)) {
+                parsed = JSON.parse(await adapter.read(filePath)) as unknown;
+            }
+        } catch (error) {
+            console.error("Failed to read upload history; starting with an empty history:", error);
+            parsed = [];
+        }
+
+        const records = Array.isArray(parsed)
+            ? parsed.map(value => this.normalizeRecord(value)).filter((value): value is UploadRecord => !!value)
+            : [];
+        if (!Array.isArray(parsed)) {
+            console.warn("Upload history did not contain an array and was ignored.");
+        }
+
+        this.history = this.dedupe(records);
+        this.loaded = true;
+    }
+
+    private async saveHistory(records: UploadRecord[]): Promise<void> {
+        const adapter = this.getAdapter();
+        const filePath = this.getHistoryFilePath();
+        const tempPath = `${filePath}.tmp`;
+        const backupPath = `${filePath}.bak`;
+        const content = JSON.stringify(records, null, 2);
+
+        if (typeof adapter.rename !== "function" || typeof adapter.remove !== "function") {
+            await adapter.write(filePath, content);
+            return;
+        }
+
+        if (await adapter.exists(tempPath)) await adapter.remove(tempPath);
+        if (await adapter.exists(backupPath)) await adapter.remove(backupPath);
+        await adapter.write(tempPath, content);
+
+        let movedExisting = false;
+        let committed = false;
+        try {
+            if (await adapter.exists(filePath)) {
+                await adapter.rename(filePath, backupPath);
+                movedExisting = true;
+            }
+            await adapter.rename(tempPath, filePath);
+            committed = true;
+        } catch (error) {
+            try {
+                if (!await adapter.exists(filePath) && movedExisting && await adapter.exists(backupPath)) {
+                    await adapter.rename(backupPath, filePath);
+                }
+            } catch (recoveryError) {
+                throw new AggregateError(
+                    [error, recoveryError],
+                    "Upload history write failed and the previous history could not be restored"
+                );
+            }
+            throw error;
+        } finally {
+            try {
+                if (await adapter.exists(tempPath)) await adapter.remove(tempPath);
+            } catch (cleanupError) {
+                console.warn("Failed to clean up the temporary upload history file:", cleanupError);
+            }
+        }
+
+        if (committed && movedExisting) {
+            try {
+                if (await adapter.exists(backupPath)) await adapter.remove(backupPath);
+            } catch (cleanupError) {
+                console.warn("Upload history was saved, but its backup could not be removed:", cleanupError);
+            }
+        }
+    }
+
+    private async migrateFromSettings(): Promise<void> {
+        const legacy = typeof this.plugin.consumeLegacyUploadHistory === "function"
+            ? this.plugin.consumeLegacyUploadHistory()
+            : Array.isArray((this.plugin.settings as unknown as Record<string, unknown>).uploadedImages)
+                ? (this.plugin.settings as unknown as { uploadedImages: unknown[] }).uploadedImages
+                : [];
+        if (legacy.length === 0) return;
+
+        const migrated = legacy
+            .map(value => this.normalizeRecord(value))
+            .filter((value): value is UploadRecord => !!value);
+        const next = this.dedupe([...this.history, ...migrated]);
+        await this.saveHistory(next);
+        this.history = next;
+        delete (this.plugin.settings as unknown as Record<string, unknown>).uploadedImages;
+        await this.plugin.saveSettings();
+    }
+
+    private normalizeRecord(value: unknown): UploadRecord | null {
+        if (!isRecord(value)) return null;
+        const rawUrl = typeof value.url === "string" && value.url.trim()
+            ? value.url.trim()
+            : typeof value.imgUrl === "string" && value.imgUrl.trim()
+                ? value.imgUrl.trim()
+                : "";
+        const url = this.normalizeHttpTemplateUrl(rawUrl);
+        if (!url) return null;
+
+        const record = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+        record.url = url;
+        if (typeof record.imgUrl === "string") {
+            const imgUrl = this.normalizeHttpTemplateUrl(record.imgUrl);
+            if (imgUrl) record.imgUrl = imgUrl;
+            else delete record.imgUrl;
+        } else {
+            delete record.imgUrl;
+        }
+        if (typeof record.localPath !== "string") delete record.localPath;
+        return record as UploadRecord;
+    }
+
+    private normalizeHttpTemplateUrl(value: string): string | null {
+        const raw = value.trim();
+        if (!raw || /\s/.test(raw)) return null;
+
+        const schemeSeparator = raw.indexOf("://");
+        if (schemeSeparator <= 0) return null;
+        const authorityStart = schemeSeparator + 3;
+        const firstPathMarker = [raw.indexOf("/", authorityStart), raw.indexOf("?", authorityStart), raw.indexOf("#", authorityStart)]
+            .filter(index => index >= 0)
+            .reduce((minimum, index) => Math.min(minimum, index), raw.length);
+        const schemeAndAuthority = raw.slice(0, firstPathMarker);
+        const fragmentStart = raw.indexOf("#", authorityStart);
+        const fragment = fragmentStart >= 0 ? raw.slice(fragmentStart) : "";
+        if (/[{}]/.test(schemeAndAuthority) || /[{}]/.test(fragment)) return null;
+
+        const parseable = raw.replace(/{[^{}]+}/g, "image-assistant-template");
+        if (/[{}]/.test(parseable)) return null;
+        let parsed: URL;
+        try {
+            parsed = new URL(parseable);
+        } catch {
+            return null;
+        }
+        if ((parsed.protocol !== "http:" && parsed.protocol !== "https:")
+            || !parsed.hostname
+            || parsed.username
+            || parsed.password) {
+            return null;
+        }
+        return raw;
+    }
+
+    private dedupe(records: UploadRecord[]): UploadRecord[] {
+        const result: UploadRecord[] = [];
+        for (const record of records) {
+            const existingIndex = result.findIndex(existing => this.isMatch(record.url, existing));
+            if (existingIndex >= 0) result[existingIndex] = { ...result[existingIndex], ...cloneRecord(record) };
+            else result.push(cloneRecord(record));
+        }
+        return result;
+    }
+
+    private isMatch(url: string, record: UploadRecord): boolean {
+        if (record.url === url || record.imgUrl === url) return true;
+        if (record.url.includes("{") && this.matchUrlWithPattern(url, record.url)) return true;
+        if (typeof record.imgUrl === "string" && record.imgUrl.includes("{")
+            && this.matchUrlWithPattern(url, record.imgUrl)) return true;
+        return false;
+    }
+
+    private matchUrlWithPattern(url: string, pattern: string): boolean {
+        try {
+            let regexText = pattern.replace(/[.*+?^${}()|[\]\\]/g, match => {
+                if (match === "{" || match === "}") return match;
+                return `\\${match}`;
+            });
+            regexText = regexText.replace(/{year}|{month}|{day}|{hour}|{minute}|{second}/g, "\\d+");
+            regexText = regexText.replace(/{MD5}|{uuid}|{fileName}|{extName}/g, "[a-zA-Z0-9\\-_]+");
+            regexText = regexText.replace(/{[\w:]+}/g, ".*?");
+            return new RegExp(`^${regexText}$`).test(url);
+        } catch (error) {
+            console.error("[UploadHistoryManager] Pattern match error:", error);
+            return false;
+        }
     }
 }

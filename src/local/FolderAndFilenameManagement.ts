@@ -10,6 +10,9 @@ import {
 import { VariableProcessor, VariableContext } from "./VariableProcessor";
 import { SupportedImageFormats } from "./SupportedImageFormats";
 import { getVaultConfigString } from "../utils/vaultConfig";
+import { getErrorMessage } from "../utils/ErrorUtils";
+import { assertSafeVaultFilename, normalizeVaultFolderPath } from "../utils/VaultPathUtils";
+import { isHttpUrl } from "../utils/NetworkPolicy";
 
 export class FolderAndFilenameManagement {
     constructor(
@@ -87,7 +90,7 @@ export class FolderAndFilenameManagement {
         // Step 2: Handle filename generation based on whether we should skip renaming
         if (selectedFilenameSetting && this.shouldSkipRename(file.name, selectedFilenameSetting)) {
             // Skip rename case - use the original name without extension
-            newFilename = file.name.substring(0, file.name.lastIndexOf('.'));
+            newFilename = this.getFilenameStem(file.name);
             shouldSkipRename = true; // Set the flag
 
         } else {
@@ -109,7 +112,7 @@ export class FolderAndFilenameManagement {
         }
 
         // Step 3: Add the appropriate file extension based on conversion settings
-        newFilename = this.addCorrectExtension(newFilename, file, selectedConversionSetting);
+        newFilename = await this.addCorrectExtension(newFilename, file, selectedConversionSetting);
 
 
         // Step 4: Return both the destination path and final filename
@@ -213,7 +216,8 @@ export class FolderAndFilenameManagement {
      * // Folders "/NewFolder" and "/NewFolder/Subfolder" will be created.
      */
     async ensureFolderExists(path: string): Promise<void> {
-        const normalizedPath = normalizePath(path);
+        const normalizedPath = normalizeVaultFolderPath(path);
+        if (!normalizedPath || normalizedPath === "/") return;
         if (!(await this.app.vault.adapter.exists(normalizedPath))) {
             const folders = normalizedPath.split('/').filter(Boolean);
             let currentPath = '';
@@ -319,7 +323,7 @@ export class FolderAndFilenameManagement {
             newFilename = await this.validateAndRemoveExtension(newFilename, file);
         } else {
             // Default behavior (e.g., original filename without extension)
-            newFilename = file.name.substring(0, file.name.lastIndexOf("."));
+            newFilename = this.getFilenameStem(file.name);
         }
 
         return newFilename;
@@ -358,14 +362,12 @@ export class FolderAndFilenameManagement {
         return filename;
     }
 
-    private addCorrectExtension(
+    private async addCorrectExtension(
         filename: string,
         file: File,
         selectedConversionSetting?: LocalConversionSettings
-    ): string {
-        const originalExtension = file.name
-            .substring(file.name.lastIndexOf("."))
-            .toLowerCase();
+    ): Promise<string> {
+        const originalExtension = await this.getOriginalExtension(file);
 
         // First check if conversion should be skipped
         if (selectedConversionSetting && this.shouldSkipConversion(file.name, selectedConversionSetting)) {
@@ -390,6 +392,25 @@ export class FolderAndFilenameManagement {
             default:
                 return `${filename}${originalExtension}`;
         }
+    }
+
+    private getFilenameStem(filename: string): string {
+        const lastDot = filename.lastIndexOf(".");
+        if (lastDot > 0) return filename.substring(0, lastDot);
+
+        const withoutLeadingDots = filename.replace(/^\.+/, "");
+        return withoutLeadingDots || "image";
+    }
+
+    private async getOriginalExtension(file: File): Promise<string> {
+        const lastDot = file.name.lastIndexOf(".");
+        if (lastDot > 0 && lastDot < file.name.length - 1) {
+            return file.name.substring(lastDot).toLowerCase();
+        }
+
+        const mimeType = await this.supportedImageFormats.getMimeTypeFromFile(file);
+        const detectedExtension = this.supportedImageFormats.getExtensionsFromMimeType(mimeType)?.[0];
+        return detectedExtension ? `.${detectedExtension}` : "";
     }
 
     /**
@@ -592,19 +613,31 @@ export class FolderAndFilenameManagement {
         try {
             const srcAttribute = img.getAttribute('src');
             if (!srcAttribute) return null;
+            const cleanSrc = srcAttribute.split('?')[0];
 
             // Handle network URLs - return the URL directly
-            if (srcAttribute.startsWith('http://') || srcAttribute.startsWith('https://')) {
+            if (isHttpUrl(srcAttribute)) {
                 return srcAttribute;
             }
 
             // 1. Try to resolve the path directly using Obsidian's Vault API
-            let abstractFile = this.app.vault.getAbstractFileByPath(srcAttribute);
+            let abstractFile = this.app.vault.getAbstractFileByPath(cleanSrc);
             if (abstractFile instanceof TFile) {
                 return abstractFile.path;
             }
 
-            // 2. Handle specific "app://" URI pattern with potential OS path
+            // 2. Handle "app://local/" URIs (common for embedded images)
+            if (srcAttribute.startsWith('app://local/')) {
+                const internalPath = this.safeDecodeURIComponent(srcAttribute.substring('app://local/'.length).split('?')[0]);
+                const normalizedInternalPath = normalizePath(internalPath);
+                abstractFile = this.app.vault.getAbstractFileByPath(normalizedInternalPath);
+                if (abstractFile instanceof TFile) {
+                    return abstractFile.path;
+                }
+                return null;
+            }
+
+            // 3. Handle specific "app://" URI pattern with potential OS path
             if (srcAttribute.startsWith('app://')) {
                 const parts = srcAttribute.substring('app://'.length).split('/');
                 if (parts.length > 1) {
@@ -615,7 +648,7 @@ export class FolderAndFilenameManagement {
                     }
 
                     const [potentialOsPath] = potentialOsPathWithQuery.split('?'); // Remove query parameters
-                    let decodedOsPath = decodeURIComponent(potentialOsPath);
+                    let decodedOsPath = this.safeDecodeURIComponent(potentialOsPath);
                     // Standardize path separators to forward slashes
                     decodedOsPath = decodedOsPath.replace(/\\/g, '/');
 
@@ -628,27 +661,21 @@ export class FolderAndFilenameManagement {
                     if (basePath && decodedOsPath.startsWith(basePath)) {
                         const vaultRelativePath = decodedOsPath.substring(basePath.length);
                         const normalizedVaultRelativePath = normalizePath(vaultRelativePath);
-                        return normalizedVaultRelativePath;
+                        abstractFile = this.app.vault.getAbstractFileByPath(normalizedVaultRelativePath);
+                        return abstractFile instanceof TFile ? abstractFile.path : null;
                     }
-                    return decodedOsPath;
-                }
-            }
 
-            // 3. Handle "app://local/" URIs (common for embedded images)
-            if (srcAttribute.startsWith('app://local/')) {
-                const internalPath = decodeURIComponent(srcAttribute.substring('app://local/'.length).split('?')[0]);
-                abstractFile = this.app.vault.getAbstractFileByPath(internalPath);
-                if (abstractFile instanceof TFile) {
-                    return abstractFile.path;
+                    const normalizedDecodedPath = normalizePath(decodedOsPath);
+                    abstractFile = this.app.vault.getAbstractFileByPath(normalizedDecodedPath);
+                    return abstractFile instanceof TFile ? abstractFile.path : null;
                 }
             }
 
             // 4. If direct resolution fails, consider it as a relative path from the current file
             const activeFile = this.app.workspace.getActiveFile();
-            console.log("activeFile:", activeFile)
             if (activeFile) {
                 const parentFolder = activeFile.parent?.path || '';
-                const resolvedPath = normalizePath(path.join(parentFolder, srcAttribute));
+                const resolvedPath = normalizePath(path.join(parentFolder, cleanSrc));
                 abstractFile = this.app.vault.getAbstractFileByPath(resolvedPath);
                 if (abstractFile instanceof TFile) {
                     return abstractFile.path;
@@ -657,7 +684,7 @@ export class FolderAndFilenameManagement {
 
             // 5. Consider paths relative to the vault root (less common but possible)
             const vaultRootPath = this.app.vault.getRoot().path;
-            const vaultRelativePath = normalizePath(path.join(vaultRootPath, srcAttribute));
+            const vaultRelativePath = normalizePath(path.join(vaultRootPath, cleanSrc));
             abstractFile = this.app.vault.getAbstractFileByPath(vaultRelativePath);
             if (abstractFile instanceof TFile) {
                 return abstractFile.path;
@@ -672,6 +699,14 @@ export class FolderAndFilenameManagement {
         }
     }
 
+    private safeDecodeURIComponent(value: string): string {
+        try {
+            return decodeURIComponent(value);
+        } catch {
+            return value;
+        }
+    }
+
     /**
      * Performs a safe rename operation for a file, especially useful for case-only changes 
      * on case-insensitive file systems. It uses a temporary intermediate rename to ensure 
@@ -682,23 +717,39 @@ export class FolderAndFilenameManagement {
      * @returns A Promise that resolves to true if the rename was successful, false otherwise.
      */
     async safeRenameFile(file: TFile, newPath: string): Promise<boolean> {
+        const originalPath = file.path;
         const basePath = path.dirname(newPath);
         const newName = path.basename(newPath);
         const tempPath = normalizePath(path.join(basePath, `temp-${Date.now()}-${newName}`));
+        let tempFile: TFile | null = null;
 
         try {
             await this.app.fileManager.renameFile(file, tempPath);
-            const tempFile = this.app.vault.getAbstractFileByPath(tempPath);
-            if (tempFile instanceof TFile) {
-                await this.app.fileManager.renameFile(tempFile, newPath);
-                return true; // Indicate success
+            const resolvedTempFile = this.app.vault.getAbstractFileByPath(tempPath);
+            tempFile = resolvedTempFile instanceof TFile
+                ? resolvedTempFile
+                : file.path === tempPath ? file : null;
+            if (!tempFile) {
+                throw new Error(`Temporary file not found after renaming to ${tempPath}`);
             }
-            new Notice(`Error: Temporary file not found after renaming.`);
-            return false; // Indicate failure
+
+            await this.app.fileManager.renameFile(tempFile, newPath);
+            return true;
         } catch (error) {
             console.error('Error during safe rename:', error);
-            new Notice(`Error renaming file: ${error.message}`);
-            return false; // Indicate failure
+            const rollbackFile = tempFile
+                ?? (this.app.vault.getAbstractFileByPath(tempPath) instanceof TFile
+                    ? this.app.vault.getAbstractFileByPath(tempPath) as TFile
+                    : file.path === tempPath ? file : null);
+            if (rollbackFile) {
+                try {
+                    await this.app.fileManager.renameFile(rollbackFile, originalPath);
+                } catch (rollbackError) {
+                    console.error(`Failed to roll back temporary rename from ${tempPath} to ${originalPath}:`, rollbackError);
+                }
+            }
+            new Notice(`Error renaming file: ${getErrorMessage(error)}`);
+            return false;
         }
     }
 
@@ -718,7 +769,23 @@ export class FolderAndFilenameManagement {
         data: ArrayBuffer,
         conflictResolution: "reuse" | "increment" | "skip" | "overwrite" = "increment"
     ): Promise<TFile | null> {
-        const folder = normalizePath(folderPath);
+        return (await this.createUniqueBinaryDetailed(
+            folderPath,
+            filename,
+            data,
+            conflictResolution
+        )).file;
+    }
+
+    async createUniqueBinaryDetailed(
+        folderPath: string,
+        filename: string,
+        data: ArrayBuffer,
+        conflictResolution: "reuse" | "increment" | "skip" | "overwrite" = "increment",
+        options: { capturePreviousData?: boolean } = {}
+    ): Promise<BinaryWriteResult> {
+        const folder = normalizeVaultFolderPath(folderPath);
+        assertSafeVaultFilename(filename);
         let currentFilename = filename;
         let attempt = 0;
         const maxAttempts = 50;
@@ -729,19 +796,20 @@ export class FolderAndFilenameManagement {
 
             if (existing) {
                 if (conflictResolution === 'skip') {
-                    return null;
+                    return { file: null, disposition: "skipped" };
                 }
                 if (conflictResolution === 'reuse') {
-                    if (existing instanceof TFile) return existing;
-                    // If folder, fail over to increment logic or error? Incrementing is safer.
+                    if (existing instanceof TFile) return { file: existing, disposition: "reused" };
+                    conflictResolution = "increment";
                 }
                 if (conflictResolution === 'overwrite') {
                     if (existing instanceof TFile) {
-                        // Overwrite existing file
+                        const previousData = options.capturePreviousData
+                            ? await this.app.vault.readBinary(existing)
+                            : undefined;
                         await this.app.vault.modifyBinary(existing, data);
-                        return existing;
+                        return { file: existing, disposition: "overwritten", previousData };
                     }
-                    // If existing is a folder, fail over to increment
                     conflictResolution = 'increment';
                 }
             }
@@ -760,10 +828,13 @@ export class FolderAndFilenameManagement {
 
             // Try to create
             try {
-                return await this.app.vault.createBinary(fullPath, data);
+                return {
+                    file: await this.app.vault.createBinary(fullPath, data),
+                    disposition: "created"
+                };
             } catch (error) {
                 // Check for "file already exists" error
-                if (error.message && error.message.toLowerCase().includes("file already exists")) {
+                if (getErrorMessage(error).toLowerCase().includes("file already exists")) {
                     // Race condition occurred
                     if (conflictResolution === 'increment') {
                         attempt++;
@@ -779,4 +850,12 @@ export class FolderAndFilenameManagement {
         throw new Error(`Failed to create unique binary '${filename}' after ${maxAttempts} attempts.`);
     }
 
+}
+
+export type BinaryWriteDisposition = "created" | "reused" | "overwritten" | "skipped";
+
+export interface BinaryWriteResult {
+    file: TFile | null;
+    disposition: BinaryWriteDisposition;
+    previousData?: ArrayBuffer;
 }

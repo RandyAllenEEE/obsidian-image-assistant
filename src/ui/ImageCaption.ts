@@ -1,260 +1,367 @@
-import { MarkdownView } from "obsidian"
-import ImageConverterPlugin from '../main';
-import { RefinedImageUtils } from '../utils/RefinedImageUtils';
-import { pipeSyntaxParser } from '../utils/PipeSyntaxParser';
+import { Component } from 'obsidian';
+import type ImageConverterPlugin from '../main';
+import { CaptionDomRenderer, type CaptionRenderContext } from './caption/CaptionDomRenderer';
+import { CaptionRenderPolicy } from './caption/CaptionRenderPolicy';
+import { CaptionResolver, type CaptionResolverOptions } from './caption/CaptionResolver';
+import { refreshLivePreviewCaptionsEffect } from './caption/LivePreviewCaptionExtension';
+import type { ReadingImageContext } from './caption/types';
+import { resolveCaptionLayout } from './ImageLayoutResolver';
+import { getImageSourceKey } from '../utils/MarkdownSourceContext';
+import {
+    isHtmlElementNode,
+    isHtmlImageElement,
+    isTextNode
+} from './caption/CaptionDomUtils';
+import { collectUsableMarkdownViews, getMarkdownViewMode } from './MarkdownViewRegistry';
 
-export class ImageCaption {
-    private processing = false;
-    private refinedImageUtils: RefinedImageUtils;
+type ReadingCaptionContext = CaptionRenderContext & ReadingImageContext & {
+    captionText?: string | null;
+};
 
-    constructor(private plugin: ImageConverterPlugin) {
-        // console.error('DEBUG: ImageCaption Constructor Called');
-        this.refinedImageUtils = new RefinedImageUtils(this.plugin.app);
-        this.applyCaptionStyles();
-        this.applyCaptionClass();
+export class ImageCaption extends Component {
+    private readonly resolver = new CaptionResolver();
+    private readonly renderer = new CaptionDomRenderer();
+    private readonly renderPolicy = new CaptionRenderPolicy();
+    private readonly documents = new Set<Document>();
+
+    constructor(private readonly plugin: ImageConverterPlugin) {
+        super();
+        this.ensureDocument(document);
     }
 
-    /**
-     * Applies caption logic to a specific image element.
-     * Called by ImageStateManager.
-     */
-    public applyCaption(img: HTMLImageElement, captionText: string | undefined) {
-        // 1. Determine the "Effective Container" for the caption
-        // Priority:
-        // A. Resize Wrapper (Highest priority as it wraps the image visually on resize)
-        // B. Internal Embed (Standard Obsidian local image)
-        // C. External Embed / Existing Container (Markdown standard or already wrapped)
+    onload(): void {
+        this.registerEvent(
+            this.plugin.app.workspace.on('window-open' as never, (_workspaceWindow: unknown, win: Window) => {
+                if (win?.document) this.ensureDocument(win.document);
+            })
+        );
+        this.registerEvent(
+            this.plugin.app.workspace.on('window-close' as never, (_workspaceWindow: unknown, win: Window) => {
+                if (win?.document) this.cleanupDocument(win.document);
+            })
+        );
+        this.plugin.app.workspace.iterateAllLeaves?.(leaf => {
+            const ownerDocument = leaf.view?.containerEl?.ownerDocument;
+            if (ownerDocument) this.ensureDocument(ownerDocument);
+        });
+    }
 
-        let container = img.closest('.image-resize-container, .internal-embed, .external-embed, .external-image-container') as HTMLElement;
+    applyCaption(
+        img: HTMLImageElement,
+        captionText: string | undefined,
+        context: CaptionRenderContext = {}
+    ): HTMLElement | null {
+        return this.renderImage(img, { ...context, captionText });
+    }
 
-        if (!container) {
-            // Fallback for bare network images: Create a dedicated wrapper
+    renderImage(
+        img: HTMLImageElement,
+        context: ReadingCaptionContext = {}
+    ): HTMLElement | null {
+        const ownerDocument = context.document ?? img.ownerDocument ?? document;
+        this.ensureDocument(ownerDocument);
 
-            // CRITICAL FIX: Do NOT wrap in Live Preview (Source View).
-            // Manipulating the DOM structure inside CodeMirror (inserting a span wrapper parent)
-            // causes CM6 to lose track of line boundaries, leading to the "Eating Next Line" bug (data loss).
-            // In Live Preview, we simply accept that we cannot show text captions below bare <img> tags
-            // without a dedicated CM6 Widget. We fall back to a tooltip.
-            if (img.closest('.markdown-source-view')) {
-                const { enabled: enableImageCaptions, skipExtensions: skipCaptionExtensions } = this.plugin.settings.captions;
-                if (enableImageCaptions && captionText) {
-                    img.setAttribute('title', captionText);
-                    img.setAttribute('alt', captionText);
-                }
-                return;
-            }
-
-            // For Reading View (static render), safe to wrap
-            if (img.parentElement) {
-                const wrapper = document.createElement('span');
-                wrapper.addClass('external-image-container');
-                img.parentNode?.insertBefore(wrapper, img);
-                wrapper.appendChild(img);
-                container = wrapper;
-            } else {
-                return;
-            }
-        }
-
-        if (!container) return;
-
-        // Sync alignment classes from image to container if it's our dedicated wrapper
-        // This ensures the wrapper handles the float/block behavior instead of the inner image.
-        if (container.hasClass('external-image-container') || container.hasClass('image-resize-container')) {
-            const alignClasses = ['image-position-left', 'image-position-center', 'image-position-right', 'image-wrap', 'image-no-wrap', 'image-converter-aligned'];
-            alignClasses.forEach(cls => {
-                if (img.hasClass(cls)) {
-                    container.addClass(cls);
-                } else {
-                    container.removeClass(cls);
-                }
+        const resolved = context.descriptor
+            ? this.resolver.resolveFromDescriptor(context.descriptor, this.getResolverOptions())
+                ?? this.resolver.resolveFromImage(img, {
+                    ...this.getResolverOptions(),
+                    linkText: context.linkText,
+                    captionText: context.captionText
+                })
+            : this.resolver.resolveFromImage(img, {
+                ...this.getResolverOptions(),
+                linkText: context.linkText,
+                captionText: context.captionText
             });
+        const standalone = context.descriptor?.standalone ?? this.isStandaloneDomImage(img);
+        const layout = resolveCaptionLayout(
+            resolved.align,
+            this.plugin.settings.alignment,
+            this.plugin.settings.captions.alignment,
+            standalone
+        );
+        const sourceKey = context.descriptor
+            ? getImageSourceKey(context.descriptor)
+            : context.sourceKey;
+        if (!this.renderPolicy.shouldRender({
+            settings: this.plugin.settings.captions,
+            mode: 'reading',
+            standalone
+        })) {
+            resolved.caption = null;
+            resolved.shouldRender = false;
         }
 
-        const { enabled: enableImageCaptions, skipExtensions: skipCaptionExtensions } = this.plugin.settings.captions;
-        if (!enableImageCaptions) return;
+        return this.renderer.render(img, resolved, {
+            ...context,
+            document: ownerDocument,
+            sourceKey,
+            layout,
+            standalone,
+            widthMode: this.plugin.settings.captions.widthMode,
+            maxLines: this.plugin.settings.captions.maxLines
+        });
+    }
 
-        // Get the actual width of the image
-        const imgWidth = img.width || img.getAttribute('width');
-        if (imgWidth) {
-            container.style.setProperty('--img-width', `${imgWidth}px`);
-        }
+    removeImage(img: HTMLImageElement): void {
+        this.renderer.removeImage(img);
+    }
 
-        const embedSrc = container.getAttribute('src') || img.getAttribute('src') || '';
-        const extension = embedSrc.split('.').pop()?.split('?')[0]?.toLowerCase() || '';
-        const excludedExtensions = skipCaptionExtensions.split(',').map(ext => ext.trim().toLowerCase());
+    cleanup(root?: ParentNode): void {
+        this.renderer.cleanup(root);
+    }
 
-        // Get raw alt text
-        let rawAlt = captionText || img.getAttribute('alt') || '';
-
-        // Clean alt text using parser
-        const parsedState = pipeSyntaxParser.parseAltText(rawAlt);
-        let cleanAlt = parsedState.alt || '';
-
-        // Fix: Strip trailing backslash from alt text
-        // This occurs when Obsidian escapes pipes in wikilinks inside tables (e.g., ![[path\|caption\|450]])
-        // Obsidian's rendering incorrectly includes the backslash in the caption (alt="sample\")
-        const isInTable = container.closest('table, .table-cell-wrapper, .cm-table-widget') !== null;
-        if (isInTable && cleanAlt.endsWith('\\')) {
-            cleanAlt = cleanAlt.slice(0, -1);
-        }
-
-        // Handle caption visibility
-        if (excludedExtensions.includes(extension)) {
-            container.removeAttribute('alt');
-            img.removeAttribute('alt'); // Remove from img to prevent double tooltip if browser native
-            return;
-        }
-
-        const isFilename = cleanAlt.trim().toLowerCase() === embedSrc.split('/').pop()?.split('?')[0]?.toLowerCase();
-
-        if (cleanAlt === ' ' || isFilename) {
-            // Set to space to ensure container is rendered but empty (avoiding native tooltips)
-            if (container.getAttribute('alt') !== ' ') container.setAttribute('alt', ' ');
+    ensureDocument(targetDocument: Document): void {
+        if (!this.isOpenDocument(targetDocument)) return;
+        this.documents.add(targetDocument);
+        targetDocument.body.classList.toggle(
+            'image-captions-enabled',
+            this.plugin.settings.captions.enabled
+        );
+        if (this.plugin.settings.captions.enabled) {
+            this.applyCaptionStyles(targetDocument);
         } else {
-            // Genuine caption, ensure attribute is synced
-            // We force update if the attribute is missing or different
-            const currentContainerAlt = container.getAttribute('alt');
-            if (currentContainerAlt !== cleanAlt && (cleanAlt || currentContainerAlt !== null)) {
-                container.setAttribute('alt', cleanAlt);
-            }
-            if (img.getAttribute('alt') !== cleanAlt) {
-                img.setAttribute('alt', cleanAlt);
-            }
-        }
-
-        if (container.closest('.callout')) {
-            container.setAttribute('data-in-callout', 'true');
+            this.renderer.cleanup(targetDocument);
+            targetDocument.getElementById('image-caption-styles')?.remove();
         }
     }
 
-    applyCaptionClass() {
-        const { enabled: enableImageCaptions, skipExtensions: skipCaptionExtensions } = this.plugin.settings.captions;
-        const excludedExtensions = skipCaptionExtensions.split(',').map(ext => ext.trim().toLowerCase());
+    cleanupDocument(targetDocument: Document): void {
+        this.renderer.cleanup(targetDocument);
+        targetDocument.body?.classList.remove('image-captions-enabled');
+        targetDocument.getElementById('image-caption-styles')?.remove();
+        this.documents.delete(targetDocument);
+    }
 
-        if (enableImageCaptions) {
-            document.body.classList.add('image-captions-enabled');
-
-            // Perform an initial sweep of existing images to apply captions
-            // (Note: This is mostly for Reading Mode on load, Live Preview images are handled by Observer)
-            const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-            if (activeView) {
-                activeView.contentEl.querySelectorAll('img').forEach((img: HTMLImageElement) => {
-                    const embed = img.closest('.internal-embed.image-embed, .external-embed, .external-image-container, .image-resize-container') as HTMLElement;
-                    if (embed) {
-                        const rawAlt = img.getAttribute('alt') || '';
-                        const parsed = pipeSyntaxParser.parseAltText(rawAlt);
-                        let cleanAlt = parsed.alt || '';
-
-                        // Fix: Strip trailing backslash from alt text in tables
-                        const isInTable = embed.closest('table, .table-cell-wrapper, .cm-table-widget') !== null;
-                        if (isInTable && cleanAlt.endsWith('\\')) {
-                            cleanAlt = cleanAlt.slice(0, -1);
-                        }
-
-                        // Apply to DOM attributes for CSS pseudo-elements
-                        if (cleanAlt && cleanAlt !== ' ') {
-                            embed.setAttribute('alt', cleanAlt);
-                            img.setAttribute('alt', cleanAlt);
-                        }
-                    }
-                });
+    applyCaptionClass(): void {
+        for (const targetDocument of this.getOpenDocuments()) {
+            targetDocument.body.classList.toggle(
+                'image-captions-enabled',
+                this.plugin.settings.captions.enabled
+            );
+            if (!this.plugin.settings.captions.enabled) {
+                this.renderer.cleanup(targetDocument);
+                targetDocument.getElementById('image-caption-styles')?.remove();
             }
-        } else {
-            document.body.classList.remove('image-captions-enabled');
         }
     }
 
-    applyCaptionStyles() {
+    applyCaptionStyles(targetDocument: Document = document): void {
+        if (!this.isOpenDocument(targetDocument)) return;
+        this.documents.add(targetDocument);
         const styleId = 'image-caption-styles';
-        let styleElement = document.getElementById(styleId) as HTMLStyleElement;
-
+        let styleElement = targetDocument.getElementById(styleId) as HTMLStyleElement | null;
         if (!styleElement) {
-            styleElement = document.createElement('style');
+            styleElement = targetDocument.createElement('style');
             styleElement.id = styleId;
-            document.head.appendChild(styleElement);
+            targetDocument.head.appendChild(styleElement);
         }
 
-        const {
-            fontSize: captionFontSize,
-            color: captionColor,
-            fontStyle: captionFontStyle,
-            backgroundColor: captionBackgroundColor,
-            padding: captionPadding,
-            borderRadius: captionBorderRadius,
-            marginTop: captionMarginTop,
-            opacity: captionOpacity,
-            fontWeight: captionFontWeight,
-            textTransform: captionTextTransform,
-            letterSpacing: captionLetterSpacing,
-            border: captionBorder,
-            alignment: captionAlignment
-        } = this.plugin.settings.captions;
-
-        styleElement.textContent = `
-            /* Container styling (covers internal, external, and tagged containers) */
-            .image-captions-enabled .internal-embed.image-embed[alt],
-            .image-captions-enabled .external-embed[alt],
-            .image-captions-enabled .external-image-container[alt],
-            .image-captions-enabled .image-resize-container[alt] {
-                display: flex !important;
+        const settings = this.plugin.settings.captions;
+        const cssText = `
+            .image-captions-enabled .has-image-assistant-caption,
+            .image-captions-enabled [data-image-assistant-caption-owner="true"]:not(img):not(.image-wrapper) {
+                display: inline-flex !important;
                 flex-direction: column;
-                align-items: ${captionAlignment === 'center' ? 'center' :
-                captionAlignment === 'left' ? 'flex-start' :
-                    'flex-end'};
                 justify-content: center;
                 width: fit-content;
+                max-width: 100%;
+                min-width: 0;
             }
-        
-            /* Caption styling */
-            .image-captions-enabled .image-embed[alt]:after,
-            .image-captions-enabled .external-embed[alt]:after,
-            .image-captions-enabled .external-image-container[alt]:after,
-            .image-captions-enabled .image-resize-container[alt]:after {
+
+            .image-captions-enabled [data-image-assistant-caption-owner="true"][data-image-assistant-layout-owner="true"]:not(img):not(.image-wrapper) {
+                display: flex !important;
+            }
+
+            .image-captions-enabled [data-image-assistant-caption-align="left"] {
+                --image-assistant-caption-inline-start: 0;
+                --image-assistant-caption-inline-end: auto;
+                --image-assistant-caption-text-align: left;
+            }
+
+            .image-captions-enabled [data-image-assistant-caption-align="center"] {
+                --image-assistant-caption-inline-start: auto;
+                --image-assistant-caption-inline-end: auto;
+                --image-assistant-caption-text-align: center;
+            }
+
+            .image-captions-enabled [data-image-assistant-caption-align="right"] {
+                --image-assistant-caption-inline-start: auto;
+                --image-assistant-caption-inline-end: 0;
+                --image-assistant-caption-text-align: right;
+            }
+
+            .image-captions-enabled [data-image-assistant-caption-owner="true"][data-image-assistant-caption-align="left"] {
+                align-items: flex-start;
+            }
+
+            .image-captions-enabled [data-image-assistant-caption-owner="true"][data-image-assistant-caption-align="center"] {
+                align-items: center;
+            }
+
+            .image-captions-enabled [data-image-assistant-caption-owner="true"][data-image-assistant-caption-align="right"] {
+                align-items: flex-end;
+            }
+
+            .image-captions-enabled .has-image-assistant-caption > .image-wrapper {
+                width: 100%;
+            }
+
+            .image-captions-enabled .image-assistant-caption {
                 display: block;
-                width: var(--img-width);
+                width: var(--img-width, 100%);
+                max-width: 100%;
+                min-width: 0;
+                overflow-wrap: anywhere;
+                white-space: normal;
                 font-family: var(--font-interface);
-                font-size: ${captionFontSize || 'var(--font-smaller)'};
-                color: ${captionColor || 'var(--text-gray)'};
-                background-color: ${captionBackgroundColor || 'transparent'};
-                opacity: ${captionOpacity || '1'};
-                content: attr(alt);
-                margin-top: ${captionMarginTop || '4px'};
-                padding: ${captionPadding || '2px 4px'};
-                border-radius: ${captionBorderRadius || '0'};
-                font-style: ${captionFontStyle || 'italic'};
-                font-weight: ${captionFontWeight || 'normal'};
-                text-transform: ${captionTextTransform || 'none'};
-                letter-spacing: ${captionLetterSpacing || 'normal'};
-                border: ${captionBorder || 'none'};
-                text-align: ${captionAlignment || 'center'};
-                transition: all 0.2s ease;
+                font-size: ${settings.fontSize || 'var(--font-smaller)'};
+                color: ${settings.color || 'var(--text-muted)'};
+                background-color: ${settings.backgroundColor || 'transparent'};
+                opacity: ${settings.opacity || '1'};
+                margin-top: ${settings.marginTop || '4px'};
+                padding: ${settings.padding || '2px 4px'};
+                border-radius: ${settings.borderRadius || '0'};
+                font-style: ${settings.fontStyle || 'italic'};
+                font-weight: ${settings.fontWeight || 'normal'};
+                text-transform: ${settings.textTransform || 'none'};
+                letter-spacing: ${settings.letterSpacing || 'normal'};
+                border: ${settings.border || 'none'};
+                text-align: var(--image-assistant-caption-text-align, center);
+                margin-left: var(--image-assistant-caption-inline-start, auto);
+                margin-right: var(--image-assistant-caption-inline-end, auto);
+                line-height: 1.4;
                 box-sizing: border-box;
+                pointer-events: none;
             }
-        
-            /* Image styling */
-            .image-captions-enabled .image-embed[alt] img,
-            .image-captions-enabled .external-embed[alt] img,
-            .image-captions-enabled .external-image-container[alt] img,
-            .image-captions-enabled .image-resize-container[alt] img {
+
+            .image-captions-enabled .image-assistant-caption[data-image-assistant-caption-clamped="true"] {
+                display: -webkit-box;
+                overflow: hidden;
+                -webkit-box-orient: vertical;
+                -webkit-line-clamp: var(--image-assistant-caption-max-lines);
+                pointer-events: auto;
+            }
+
+            .image-captions-enabled .image-assistant-caption[data-image-assistant-caption-width="container"] {
+                width: 100%;
+            }
+
+            .image-captions-enabled img[data-image-assistant-caption-owner="true"] +
+                .image-assistant-caption[data-image-assistant-caption-renderer="dom"],
+            .image-captions-enabled .image-wrapper +
+                .image-assistant-caption[data-image-assistant-caption-renderer="dom"] {
+                width: var(--img-width, 100%);
+            }
+
+            .image-captions-enabled .has-image-assistant-caption img,
+            .image-captions-enabled [data-image-assistant-caption-owner="true"] img {
                 display: block;
                 max-width: 100%;
                 height: auto;
             }
+
+            .image-captions-enabled .cm-editor .image-assistant-live-preview-caption {
+                box-sizing: border-box;
+                max-width: 100%;
+            }
         `;
+        if (styleElement.textContent !== cssText) styleElement.textContent = cssText;
     }
 
-    public refresh() {
-        // Manager handles refreshing images
+    refresh(): void {
         this.applyCaptionClass();
-        this.applyCaptionStyles();
+        this.refreshAllViews();
+        this.updateStyles();
     }
 
-    public updateStyles() {
-        this.applyCaptionStyles();
+    refreshAllViews(): void {
+        for (const view of collectUsableMarkdownViews(this.plugin.app)) {
+            const contentEl = view.contentEl;
+            this.ensureDocument(contentEl.ownerDocument);
+
+            const mode = getMarkdownViewMode(view);
+            if (!mode) continue;
+            if (mode === 'preview') {
+                if (!this.plugin.settings.captions.enabled
+                    || !this.plugin.settings.captions.showInReadingMode) {
+                    this.renderer.cleanup(contentEl);
+                    continue;
+                }
+                contentEl.querySelectorAll('img').forEach(img => {
+                    if (!isHtmlImageElement(img)) return;
+                    if (this.plugin.imageStateManager) {
+                        this.plugin.imageStateManager.processReadingModeImage(img);
+                    } else {
+                        this.renderImage(img, { document: img.ownerDocument });
+                    }
+                });
+                continue;
+            }
+
+            this.renderer.cleanup(contentEl);
+            const editorView = (view.editor as unknown as {
+                cm?: { dispatch(spec: { effects: unknown }): void };
+            })?.cm;
+            editorView?.dispatch({ effects: refreshLivePreviewCaptionsEffect.of(undefined) });
+        }
     }
 
-    public cleanup() {
-        // Styles cleanup if needed
+    updateStyles(): void {
+        for (const targetDocument of this.getOpenDocuments()) {
+            if (this.plugin.settings.captions.enabled) {
+                this.applyCaptionStyles(targetDocument);
+            } else {
+                targetDocument.getElementById('image-caption-styles')?.remove();
+            }
+        }
+    }
+
+    cleanupStyles(): void {
+        for (const targetDocument of this.getOpenDocuments()) {
+            targetDocument.getElementById('image-caption-styles')?.remove();
+        }
+    }
+
+    destroy(): void {
+        for (const targetDocument of this.getOpenDocuments()) {
+            this.cleanupDocument(targetDocument);
+        }
+        this.documents.clear();
+    }
+
+    onunload(): void {
+        this.destroy();
+        super.onunload();
+    }
+
+    private getResolverOptions(): CaptionResolverOptions {
+        return {
+            enabled: this.plugin.settings.captions.enabled,
+            skipExtensions: this.plugin.settings.captions.skipExtensions
+        };
+    }
+
+    private getOpenDocuments(): Document[] {
+        for (const targetDocument of [...this.documents]) {
+            if (!this.isOpenDocument(targetDocument)) this.documents.delete(targetDocument);
+        }
+        return [...this.documents];
+    }
+
+    private isOpenDocument(targetDocument: Document): boolean {
+        return !!targetDocument.body && targetDocument.defaultView?.closed !== true;
+    }
+
+    private isStandaloneDomImage(img: HTMLImageElement): boolean {
+        const host = img.closest('.image-wrapper, .image-embed, .external-embed') ?? img;
+        const parent = host.parentElement;
+        if (!parent) return true;
+        return Array.from(parent.childNodes).every(node =>
+            node === host
+            || isTextNode(node) && !node.textContent?.trim()
+            || isHtmlElementNode(node)
+                && node.getAttribute('data-image-assistant-caption-renderer') === 'dom'
+        );
     }
 }

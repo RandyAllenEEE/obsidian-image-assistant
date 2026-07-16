@@ -4,18 +4,29 @@
 
 // Matches standard Markdown image links:
 // 1. ![alt](<path/to/image.png>)           — angle-bracketed path
-// 2. ![alt](path/to/image.png "title")     — plain path + optional title
-// 3. ![alt](https://example.com/image.png) — full URL with extension
-// 4. ![alt](https://example.com/image)      — URL without extension
-// 5. ![alt](data:image/png;base64,...)     — data URI
-// Extension requirement (\.\w+) is now OPTIONAL.
-export const REGEX_FILE = /!\[(.*?)?\]\(<([^)>]+)>\)|!\[(.*?)?\]\((\S+)(?:\s+"[^"]*")?\)|!\[(.*?)?\]\((https?:\/\/\S+)\)/g;
+// 2. ![alt](<path/to/my image.png> "title") — angle-bracketed path + optional title
+// 3. ![alt](path/to/image.png "title")      — plain path + optional title
+// 4. ![alt](https://example.com/image.png)  — full URL with extension
+// 5. ![alt](https://example.com/image)      — URL without extension
+// Extension requirement is intentionally omitted.
+export const REGEX_FILE = /!\[([^\]]*)\]\((<[^>\n]+>(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?|(?:[^\s()\\]|\\.|\([^)\n]*\))+(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?)\)/g;
 
 // Matches WikiLinks:
 // 1. ![[image.png]]
 // 2. ![[image.png|alt text]]
 // 3. ![[https://example.com/image.png]] (network image)
-export const REGEX_WIKI_FILE = /!\[\[([^\]]+?)(?:\s*\|[^\]]*)?\]\]/g;
+export const REGEX_WIKI_FILE = /!\[\[([^\]]+)\]\]/g;
+
+// Matches embedded and ordinary Markdown links. Groups:
+// 1. optional embed marker (`!`)
+// 2. label/alt text
+// 3. destination, possibly with a title suffix
+const REGEX_REFERENCE_FILE = /(!?)\[([^\]]*)\]\((<[^>\n]+>(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?|(?:[^\s()\\]|\\.|\([^)\n]*\))+(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?)\)/g;
+
+// Matches embedded and ordinary WikiLinks. Groups:
+// 1. optional embed marker (`!`)
+// 2. path and optional pipe attributes
+const REGEX_REFERENCE_WIKI_FILE = /(!?)\[\[([^\]]+)\]\]/g;
 
 // Matches WikiLink network images specifically:
 // ![[https://example.com/image.png]]
@@ -40,23 +51,92 @@ export interface ImageLink {
     path: string;
     name: string;
     source: string;
+    index: number;
+}
+
+export interface ReferenceLink extends ImageLink {
+    embedded: boolean;
+    syntax: "markdown" | "wiki" | "autolink";
+}
+
+/**
+ * Extract embedded images and ordinary Markdown/Wiki links.
+ *
+ * Image-only features should keep using getAllImageLinks. Reference safety and
+ * path migration use this broader parser so a non-embedded link cannot be
+ * silently orphaned when its target image is replaced or deleted.
+ */
+export function getAllReferenceLinks(text: string): ReferenceLink[] {
+    const links: ReferenceLink[] = [];
+
+    const markdownRegex = new RegExp(REGEX_REFERENCE_FILE.source, "g");
+    for (const match of text.matchAll(markdownRegex)) {
+        const source = match[0];
+        const path = extractMarkdownDestinationPath(match[3] ?? "");
+        if (!path) continue;
+
+        links.push({
+            path,
+            name: match[2] ?? "",
+            source,
+            index: match.index ?? -1,
+            embedded: match[1] === "!",
+            syntax: "markdown"
+        });
+    }
+
+    const wikiRegex = new RegExp(REGEX_REFERENCE_WIKI_FILE.source, "g");
+    for (const match of text.matchAll(wikiRegex)) {
+        const source = match[0];
+        const rawContent = match[2] ?? "";
+        const pipeIndex = findFirstUnescapedPipe(rawContent);
+        const rawPath = pipeIndex < 0
+            ? rawContent.trim()
+            : rawContent.slice(0, pipeIndex).trim();
+        const path = rawPath.replace(/\\\|/g, "|");
+        if (!path) continue;
+
+        links.push({
+            path,
+            name: path,
+            source,
+            index: match.index ?? -1,
+            embedded: match[1] === "!",
+            syntax: "wiki"
+        });
+    }
+
+    const occupiedRanges = links.map(link => ({
+        start: link.index,
+        end: link.index + link.source.length
+    }));
+    const autolinkRegex = /<(https?:\/\/[^>\s]+)>/gi;
+    for (const match of text.matchAll(autolinkRegex)) {
+        const index = match.index ?? -1;
+        const end = index + match[0].length;
+        if (occupiedRanges.some(range => index < range.end && end > range.start)) continue;
+
+        links.push({
+            path: match[1],
+            name: match[1],
+            source: match[0],
+            index,
+            embedded: false,
+            syntax: "autolink"
+        });
+    }
+
+    return links.sort((left, right) => left.index - right.index);
 }
 
 /**
  * Helper function to extract all image links from a text using the shared regexes.
  *
  * REGEX_FILE groups:
- *   Alt 1: !\[(...)?\]\(<([^)>]+)>\)
- *   Alt 2: !\[(...)?\]\((\S+)(?:\s+"[^"]*")?\)
- *   Alt 3: !\[(...)?\]\((https?:\/\/\S+)\)
+ *   Group 1 = alt text
+ *   Group 2 = Markdown destination, possibly with a title suffix
  *
- *   Group 1 = alt (alt 1),  Group 2 = path (alt 1)
- *   Group 3 = alt (alt 2),  Group 4 = path (alt 2)
- *   Group 5 = alt (alt 3),  Group 6 = url  (alt 3)
- *
- * For WikiLinks REGEX_WIKI_FILE, the non-greedy .*? stops at the first `|` in the path,
- * which breaks for paths containing literal pipes (e.g. `image|file.png`).
- * We accept this limitation and treat everything after the first `|` as attributes.
+ * WikiLinks are split at the first unescaped pipe so paths can contain `\|`.
  */
 export function getAllImageLinks(text: string): ImageLink[] {
     const fileArray: ImageLink[] = [];
@@ -66,31 +146,15 @@ export function getAllImageLinks(text: string): ImageLink[] {
     const mdRegex = new RegExp(REGEX_FILE.source, 'g');
     for (const match of text.matchAll(mdRegex)) {
         const source = match[0];
-
-        let name: string | undefined;
-        let path: string | undefined;
-
-        // Alt 1: angle-bracketed path
-        if (match[2] !== undefined) {
-            name = match[1];
-            path = match[2];
-        }
-        // Alt 2: plain path + optional title
-        else if (match[4] !== undefined) {
-            name = match[3];
-            path = match[4];
-        }
-        // Alt 3: URL
-        else if (match[6] !== undefined) {
-            name = match[5];
-            path = match[6];
-        }
+        const name = match[1] ?? "";
+        const path = extractMarkdownDestinationPath(match[2] ?? "");
 
         if (path) {
             fileArray.push({
                 path,
                 name: name ?? "",
                 source,
+                index: match.index ?? -1,
             });
         }
     }
@@ -101,17 +165,51 @@ export function getAllImageLinks(text: string): ImageLink[] {
     for (const match of text.matchAll(wikiRegex)) {
         const source = match[0];
         const rawContent = match[1]; // path|attr|...
-        const pipeIdx = rawContent.indexOf("|");
-        const path = pipeIdx < 0 ? rawContent.trim() : rawContent.slice(0, pipeIdx).trim();
+        const pipeIdx = findFirstUnescapedPipe(rawContent);
+        const rawPath = pipeIdx < 0 ? rawContent.trim() : rawContent.slice(0, pipeIdx).trim();
+        const path = rawPath.replace(/\\\|/g, "|");
 
         fileArray.push({
             path,
             name: path,
             source,
+            index: match.index ?? -1,
         });
     }
 
     return fileArray;
+}
+
+function findFirstUnescapedPipe(text: string): number {
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] !== "|") continue;
+
+        let slashCount = 0;
+        for (let j = i - 1; j >= 0 && text[j] === "\\"; j--) {
+            slashCount++;
+        }
+
+        if (slashCount % 2 === 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+function extractMarkdownDestinationPath(destination: string): string {
+    const trimmed = destination.trim();
+    if (!trimmed) return "";
+
+    if (trimmed.startsWith("<")) {
+        const closing = trimmed.indexOf(">");
+        if (closing > 0) {
+            return trimmed.slice(1, closing);
+        }
+    }
+
+    const titleMatch = trimmed.match(/^(.+?)(\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))$/);
+    return titleMatch ? titleMatch[1] : trimmed;
 }
 
 // ==== Anchored Validators for Parser ====

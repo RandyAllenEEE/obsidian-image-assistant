@@ -5,5 +5,4 @@ export interface LinkFormatOptions {
     linkFormat: LinkFormat;
     pathFormat: PathFormat;
     prependCurrentDir: boolean;
-    hideFolders: boolean;
 }

@@ -64,6 +64,30 @@ export function renderCloudSettingsSection(
         updateChevron();
     };
 
+    if (plugin.settings.pasteHandling.mode !== "disabled") {
+        new Setting(contentWrapper)
+            .setName(t("SETTING_PASTE_CURSOR_LOC"))
+            .setDesc(t("SETTING_PASTE_CURSOR_LOC_DESC"))
+            .addDropdown(dropdown => dropdown
+                .addOption("front", t("SETTING_CURSOR_FRONT"))
+                .addOption("back", t("SETTING_CURSOR_BACK"))
+                .setValue(plugin.settings.pasteHandling.cursorLocation)
+                .onChange(async (value: "front" | "back") => {
+                    plugin.settings.pasteHandling.cursorLocation = value;
+                    await plugin.saveSettings();
+                }));
+
+        new Setting(contentWrapper)
+            .setName(t("SETTING_NEVER_PROCESS"))
+            .setDesc(t("SETTING_NEVER_PROCESS_DESC"))
+            .addText(text => text
+                .setValue(plugin.settings.pasteHandling.neverProcessFilenames)
+                .onChange(async (value) => {
+                    plugin.settings.pasteHandling.neverProcessFilenames = value;
+                    await plugin.saveSettings();
+                }));
+    }
+
     // --- Cloud Upload Settings (only show when cloud mode is selected) ---
     if (plugin.settings.pasteHandling.mode === "cloud") {
         const cloudSettingsContainer = contentWrapper.createDiv("cloud-settings-container");
@@ -184,7 +208,7 @@ export function renderCloudSettingsSection(
                     .setPlaceholder(t("PLACEHOLDER_IMG_WIDTH"))
                     .setValue(plugin.settings.pasteHandling.cloud.imageSizeWidth?.toString() || "")
                     .onChange(async (value) => {
-                        plugin.settings.pasteHandling.cloud.imageSizeWidth = value ? parseInt(value) : undefined;
+                        plugin.settings.pasteHandling.cloud.imageSizeWidth = parseOptionalDimension(value);
                         await plugin.saveSettings();
                     })
                 );
@@ -196,7 +220,7 @@ export function renderCloudSettingsSection(
                     .setPlaceholder(t("PLACEHOLDER_IMG_HEIGHT"))
                     .setValue(plugin.settings.pasteHandling.cloud.imageSizeHeight?.toString() || "")
                     .onChange(async (value) => {
-                        plugin.settings.pasteHandling.cloud.imageSizeHeight = value ? parseInt(value) : undefined;
+                        plugin.settings.pasteHandling.cloud.imageSizeHeight = parseOptionalDimension(value);
                         await plugin.saveSettings();
                     })
                 );
@@ -252,21 +276,15 @@ export function renderCloudSettingsSection(
                 })
             );
 
-        // Upload Concurrency Settings
-        new Setting(cloudSettingsContainer)
-            .setName(t("SETTING_CONCURRENCY_NAME"))
-            .setDesc(t("SETTING_CONCURRENCY_DESC"))
-            .addSlider(slider => slider
-                .setLimits(1, 10, 1)
-                .setValue(plugin.settings.pasteHandling.cloud.uploadConcurrency)
-                .setDynamicTooltip()
-                .onChange(async (value) => {
-                    plugin.settings.pasteHandling.cloud.uploadConcurrency = value;
-                    await plugin.saveSettings();
-                    // 更新并发队列
-                    plugin.updateConcurrentQueue(value);
-                })
-            );
     }
     return contentWrapper;
+}
+
+function parseOptionalDimension(value: string): number | undefined {
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) return undefined;
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) && parsed > 0
+        ? Math.min(parsed, 100_000)
+        : undefined;
 }

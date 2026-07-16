@@ -1,6 +1,8 @@
 // VariableProcessor.ts
 import { App, TFile } from "obsidian";
 import { ImageAssistantSettings } from "../settings/types";
+import { loadImage } from "../utils/ImageLoadUtils";
+import { detectImageBinaryType } from "../utils/ImageBinaryType";
 
 
 export interface VariableContext {
@@ -21,7 +23,7 @@ export interface VariableInfo {
  * This is used for non-cryptographic purposes (file naming) where MD5's properties are useful.
  */
 function md5(string: string): string {
-    /* eslint-disable id-length, @typescript-eslint/naming-convention, no-param-reassign */
+
     function rotateLeft(value: number, shift: number): number {
         return (value << shift) | (value >>> (32 - shift));
     }
@@ -212,7 +214,7 @@ function md5(string: string): string {
     }
 
     return (wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d)).toLowerCase();
-    /* eslint-enable id-length, @typescript-eslint/naming-convention, no-param-reassign */
+
 }
 
 export class VariableProcessor {
@@ -748,7 +750,7 @@ export class VariableProcessor {
     // Method to group variables by category (used by AvailableVariablesModal)
     private groupVariablesByCategory(variables: VariableInfo[]): Record<string, VariableInfo[]> {
 
-        /* eslint-disable @typescript-eslint/naming-convention */
+
         const categorized: Record<string, VariableInfo[]> = {
             "Basic": [],
             "Date & Time": [],
@@ -757,7 +759,7 @@ export class VariableProcessor {
             "Calculated Image Properties": [],
             "Advanced": []
         };
-        /* eslint-enable @typescript-eslint/naming-convention */
+
 
         for (const variable of variables) {
             if (variable.name.startsWith("{date") || ["{YYYY}", "{MM}", "{DD}", "{HH}", "{mm}", "{ss}", "{weekday}", "{month}", "{calendar}", "{today}", "{YYYY-MM-DD}", "{tomorrow}", "{yesterday}", "{startofweek}", "{endofweek}", "{startofmonth}", "{endofmonth}", "{nextweek}", "{lastweek}", "{nextmonth}", "{lastmonth}", "{daysinmonth}", "{weekofyear}", "{quarterofyear}", "{week}", "{w}", "{quarter}", "{Q}", "{dayofyear}", "{DDD}", "{monthname}", "{MMMM}", "{dayname}", "{dddd}", "{dateordinal}", "{Do}", "{relativetime}", "{currentdate}", "{yyyy}", "{time}", "{timestamp}"].includes(variable.name)) {
@@ -1131,20 +1133,14 @@ export class VariableProcessor {
 
         if (file instanceof TFile) {
             // Handle TFile (files already in the vault)
+            let objectUrl: string | null = null;
             try {
                 const fileContent = await this.app.vault.readBinary(file);
-                const blob = new Blob([fileContent], { type: `image/${file.extension}` });
+                const detected = await detectImageBinaryType(fileContent);
+                const blob = new Blob([fileContent], { type: detected?.mime ?? "application/octet-stream" });
                 const img = new Image();
-                img.src = URL.createObjectURL(blob);
-
-                // Wait for the image to load
-                await new Promise((resolve, reject) => {
-                    img.onload = () => resolve(img);
-                    img.onerror = (event) => {
-                        console.error("Error extracting image metadata for File: ", event);
-                        reject(event);
-                    };
-                });
+                objectUrl = URL.createObjectURL(blob);
+                await loadImage(img, objectUrl);
 
                 const { width, height } = img;
 
@@ -1177,7 +1173,7 @@ export class VariableProcessor {
                 }
 
                 // Add properties to metadata object
-                /* eslint-disable @typescript-eslint/naming-convention */
+
                 Object.assign(metadata, {
                     // Existing properties
                     '{ratio}': aspectRatio.toFixed(2),
@@ -1218,12 +1214,12 @@ export class VariableProcessor {
                     '{mindimension}': Math.min(width, height).toString(),
                     '{diagonalpixels}': Math.sqrt(width * width + height * height).toFixed(0),
                     '{aspectratiosimplified}': (() => {
-                        /* eslint-disable id-length */
+
                         const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
                         const w = width;
                         const h = height;
                         const divisor = gcd(w, h);
-                        /* eslint-enable id-length */
+
                         return `${w / divisor}:${h / divisor}`;
                     })(),
                     '{screenfitcategory}': (() => {
@@ -1235,28 +1231,19 @@ export class VariableProcessor {
                         return 'above-4k';
                     })(),
                 });
-                /* eslint-enable @typescript-eslint/naming-convention */
-
-                // Clean up the Blob URL
-                URL.revokeObjectURL(img.src);
 
             } catch (error) {
                 console.error("Error extracting image metadata for TFile:", error);
+            } finally {
+                if (objectUrl) URL.revokeObjectURL(objectUrl);
             }
         } else {
             // Handle File (files being dragged or pasted)
+            let objectUrl: string | null = null;
             try {
                 const img = new Image();
-                img.src = URL.createObjectURL(file);
-
-                // Wait for the image to load
-                await new Promise((resolve, reject) => {
-                    img.onload = () => resolve(img);
-                    img.onerror = (event) => {
-                        console.error("Error extracting image metadata for File:", event);
-                        reject(event);
-                    };
-                });
+                objectUrl = URL.createObjectURL(file);
+                await loadImage(img, objectUrl);
 
                 const { width, height } = img;
 
@@ -1279,7 +1266,7 @@ export class VariableProcessor {
                 const fileSizeInBytes = file.size;
 
                 // Add properties to metadata object
-                /* eslint-disable @typescript-eslint/naming-convention */
+
                 Object.assign(metadata, {
                     // Existing properties
                     '{ratio}': aspectRatio.toFixed(2),
@@ -1320,12 +1307,12 @@ export class VariableProcessor {
                     '{mindimension}': Math.min(width, height).toString(),
                     '{diagonalpixels}': Math.sqrt(width * width + height * height).toFixed(0),
                     '{aspectratiosimplified}': (() => {
-                        /* eslint-disable id-length */
+
                         const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
                         const w = width;
                         const h = height;
                         const divisor = gcd(w, h);
-                        /* eslint-enable id-length */
+
                         return `${w / divisor}:${h / divisor}`;
                     })(),
                     '{screenfitcategory}': (() => {
@@ -1337,13 +1324,11 @@ export class VariableProcessor {
                         return 'above-4k';
                     })(),
                 });
-                /* eslint-enable @typescript-eslint/naming-convention */
-
-                // Clean up the Blob URL
-                URL.revokeObjectURL(img.src);
 
             } catch (error) {
                 console.error("Error extracting image metadata for File:", error);
+            } finally {
+                if (objectUrl) URL.revokeObjectURL(objectUrl);
             }
         }
 

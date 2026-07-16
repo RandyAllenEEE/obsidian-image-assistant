@@ -2,6 +2,10 @@ import { App, Notice, TFile } from 'obsidian';
 import { t } from '../../../lang/helpers';
 import { FolderAndFilenameManagement } from '../../../local/FolderAndFilenameManagement';
 
+interface FileExplorerView {
+    revealInFolder?: (file: TFile) => void | Promise<void>;
+}
+
 /**
  * Handles navigation operations (show in navigation/explorer)
  */
@@ -43,10 +47,9 @@ export class NavigationHandler {
                         }
 
                         // Now reveal the file
-                        const fileExplorerView = fileExplorerLeaf.view;
+                        const fileExplorerView = fileExplorerLeaf.view as FileExplorerView;
                         if (fileExplorerView) {
-                            // @ts-ignore (since revealInFolder is not in the type definitions)
-                            fileExplorerView.revealInFolder(file);
+                            await fileExplorerView.revealInFolder?.(file);
                         }
                     }
                 }

@@ -24,7 +24,13 @@ function makeViewWithImages(...alts: string[]) {
 
 function makePlugin(contentEl: HTMLElement, captionOverrides: any = {}) {
   const app = fakeApp() as any;
-  app.workspace.getActiveViewOfType = () => ({ contentEl });
+  const view = {
+    contentEl,
+    editor: {},
+    getMode: () => 'preview'
+  };
+  app.workspace.getActiveViewOfType = () => view;
+  app.workspace.getLeavesOfType = () => [{ view }];
   return {
     app,
     settings: {
@@ -43,14 +49,15 @@ describe('ImageCaption integration', () => {
     document.head.querySelector('#image-caption-styles')?.remove();
   });
 
-  it('refresh applies caption attributes to existing active-view images', () => {
+  it('refresh renders captions for existing images without rewriting attributes', () => {
     const contentEl = makeViewWithImages('A', 'B');
     const manager = new ImageCaption(makePlugin(contentEl));
 
     manager.refresh();
 
     const embeds = Array.from(contentEl.querySelectorAll('.internal-embed'));
-    expect(embeds.map(embed => embed.getAttribute('alt'))).toEqual(['A', 'B']);
+    expect(embeds.map(embed => embed.getAttribute('alt'))).toEqual([null, null]);
+    expect(Array.from(contentEl.querySelectorAll('.image-assistant-caption')).map(node => node.textContent)).toEqual(['A', 'B']);
     expect(document.body.classList.contains('image-captions-enabled')).toBe(true);
   });
 
@@ -70,13 +77,13 @@ describe('ImageCaption integration', () => {
     expect(styleText).toContain('text-align: left');
   });
 
-  it('disabling captions removes the body class while keeping styles safe to update', () => {
+  it('disabling captions removes the body class and runtime styles', () => {
     const contentEl = makeViewWithImages('Hidden');
     const manager = new ImageCaption(makePlugin(contentEl, { enabled: false }));
 
     manager.refresh();
 
     expect(document.body.classList.contains('image-captions-enabled')).toBe(false);
-    expect(document.getElementById('image-caption-styles')).toBeTruthy();
+    expect(document.getElementById('image-caption-styles')).toBeNull();
   });
 });

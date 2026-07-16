@@ -14,6 +14,6 @@ export interface Response {
 }
 
 export interface Uploader {
-  upload(fileList: Array<Image> | Array<string>): Promise<Response>;
+  upload(fileList: Array<Image | string>): Promise<Response>;
   uploadByClipboard(fileList?: FileList): Promise<Response>;
 }

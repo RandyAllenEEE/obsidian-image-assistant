@@ -54,12 +54,13 @@ export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: Ima
         .addToggle(toggle => toggle
             .setValue(plugin.settings.global.enableContextMenu)
             .onChange(async (value) => {
-                plugin.settings.global.enableContextMenu = value;
+                plugin.setContextMenuEnabled(value);
                 await plugin.saveSettings();
             })
         );
 
-    // Code blocks / admonition reference indexing toggle
+    // Rendered callouts and Admonition blocks are always indexed; this toggle
+    // controls only source-only fenced code blocks.
     new Setting(settingsContentWrapper)
         .setName(t("SETTING_CODE_BLOCK_IMAGE_LINK_INDEXING_NAME"))
         .setDesc(t("SETTING_CODE_BLOCK_IMAGE_LINK_INDEXING_DESC"))
@@ -78,6 +79,20 @@ export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: Ima
             .setValue(plugin.settings.global.showSpaceSavedNotification)
             .onChange(async (value) => {
                 plugin.settings.global.showSpaceSavedNotification = value;
+                await plugin.saveSettings();
+            })
+        );
+
+    new Setting(settingsContentWrapper)
+        .setName(t("SETTING_CONCURRENCY_NAME"))
+        .setDesc(t("SETTING_CONCURRENCY_DESC"))
+        .addSlider(slider => slider
+            .setLimits(1, 10, 1)
+            .setValue(plugin.settings.global.batchConcurrency)
+            .setDynamicTooltip()
+            .onChange(async value => {
+                plugin.settings.global.batchConcurrency = value;
+                plugin.updateConcurrentQueue(value);
                 await plugin.saveSettings();
             })
         );

@@ -49,7 +49,6 @@ describe('Integration-lite: PngquantAdapter', () => {
       'Auto',
       true,
       {
-        name: 'test',
         outputFormat: 'PNGQUANT',
         pngquantExecutablePath: 'C:/tools/pngquant.exe',
         pngquantQuality: '65-80',
@@ -62,7 +61,7 @@ describe('Integration-lite: PngquantAdapter', () => {
         enlargeOrReduce: 'Auto',
         allowLargerFiles: true,
         skipConversionPatterns: ''
-      }
+      } as any
     );
 
     // Assert
@@ -98,7 +97,6 @@ describe('Integration-lite: PngquantAdapter', () => {
       'Auto',
       true,
       {
-        name: 'test',
         outputFormat: 'PNGQUANT',
         // No executable path provided
         quality: 1,
@@ -141,7 +139,6 @@ describe('Integration-lite: PngquantAdapter', () => {
       'Auto',
       true,
       {
-        name: 'test',
         outputFormat: 'PNGQUANT',
         pngquantExecutablePath: '/usr/bin/pngquant',
         pngquantQuality: '60-70',
@@ -154,7 +151,7 @@ describe('Integration-lite: PngquantAdapter', () => {
         enlargeOrReduce: 'Auto',
         allowLargerFiles: true,
         skipConversionPatterns: ''
-      }
+      } as any
     );
 
     // Assert (outer catch returns original bytes)
@@ -193,7 +190,6 @@ describe('Integration-lite: PngquantAdapter', () => {
       'Auto',
       true,
       {
-        name: 'test',
         outputFormat: 'PNGQUANT',
         pngquantExecutablePath: '/usr/bin/pngquant',
         pngquantQuality: '65-80',
@@ -206,7 +202,7 @@ describe('Integration-lite: PngquantAdapter', () => {
         enlargeOrReduce: 'Auto',
         allowLargerFiles: true,
         skipConversionPatterns: ''
-      }
+      } as any
     );
 
     // Assert

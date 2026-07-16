@@ -4,6 +4,7 @@ import { t } from '../../../lang/helpers';
 import ImageConverterPlugin from '../../../main';
 import { FolderAndFilenameManagement } from '../../../local/FolderAndFilenameManagement';
 import { VariableProcessor, VariableContext } from '../../../local/VariableProcessor';
+import { normalizeVaultFolderPath } from '../../../utils/VaultPathUtils';
 
 /**
  * Handles image rename/move operations and caption/dimension updates
@@ -57,7 +58,7 @@ export class RenameHandler {
 
         newName = this.folderManagement.sanitizeFilename(newName);
 
-        if (/^[.]+$/.test(newName.trim())) {
+        if (!newName.trim() || /^[.]+$/.test(newName.trim())) {
             new Notice(t("MSG_ENTER_VALID_NAME"));
             return;
         }
@@ -68,26 +69,13 @@ export class RenameHandler {
 
         if (obsidianVaultPathForRename) {
             try {
-                // Handle Rename
-                if (newName && newName !== fileNameWithoutExt) {
-                    const newPath = normalizePath(path.join(newDirectoryPath, `${newName}${fileExtension}`));
-                    const abstractFile = this.app.vault.getAbstractFileByPath(obsidianVaultPathForRename);
-                    if (abstractFile instanceof TFile) {
-                        await this.folderManagement.ensureFolderExists(newDirectoryPath);
-                        await this.app.fileManager.renameFile(abstractFile, newPath);
-                        img.src = this.app.vault.getResourcePath(abstractFile);
-                        new Notice(t("MSG_NAME_UPDATED"));
-                    }
-                }
-                // Handle Move
-                const currentNameWithExtension = `${newName}${fileExtension}`;
                 const oldPath = obsidianVaultPathForRename;
-                const newPath = normalizePath(path.join(newDirectoryPath, currentNameWithExtension));
+                const newPath = this.buildVaultPath(newDirectoryPath, `${newName}${fileExtension}`);
 
                 if (newPath !== oldPath) {
                     const abstractFile = this.app.vault.getAbstractFileByPath(oldPath);
                     if (abstractFile instanceof TFile) {
-                        await this.folderManagement.ensureFolderExists(newDirectoryPath);
+                        await this.ensureTargetFolder(newDirectoryPath);
 
                         if (oldPath.toLowerCase() === newPath.toLowerCase()) {
                             const safeRenameSuccessful = await this.folderManagement.safeRenameFile(abstractFile, newPath);
@@ -98,15 +86,10 @@ export class RenameHandler {
                             }
                         } else {
                             await this.app.fileManager.renameFile(abstractFile, newPath);
-                            new Notice(t("MSG_PATH_UPDATED"));
+                            new Notice(newName !== fileNameWithoutExt ? t("MSG_NAME_UPDATED") : t("MSG_PATH_UPDATED"));
                         }
-                        img.src = this.app.vault.getResourcePath(abstractFile);
-                        const leaf = this.app.workspace.getMostRecentLeaf();
-                        if (leaf) {
-                            const currentState = leaf.getViewState();
-                            await leaf.setViewState({ type: 'empty', state: {} });
-                            await leaf.setViewState(currentState);
-                        }
+
+                        await this.refreshImageAndView(img, abstractFile);
                     }
                 }
             } catch (error) {
@@ -115,6 +98,58 @@ export class RenameHandler {
             }
         }
         menu.hide();
+    }
+
+    private buildVaultPath(directoryPath: string, filename: string): string {
+        const normalizedDirectory = normalizeVaultFolderPath(directoryPath);
+        const joined = normalizedDirectory === '/' || normalizedDirectory === ''
+            ? filename
+            : path.join(normalizedDirectory, filename);
+        return normalizePath(joined).replace(/^\/+/, '');
+    }
+
+    private async ensureTargetFolder(directoryPath: string): Promise<void> {
+        const normalizedDirectory = normalizeVaultFolderPath(directoryPath);
+        if (normalizedDirectory && normalizedDirectory !== '/') {
+            await this.folderManagement.ensureFolderExists(normalizedDirectory);
+        }
+    }
+
+    private async refreshImageAndView(img: HTMLImageElement, file: TFile): Promise<void> {
+        try {
+            const getResourcePath = this.app.vault.getResourcePath;
+            if (typeof getResourcePath === 'function') {
+                img.src = getResourcePath.call(this.app.vault, file);
+            }
+        } catch (error) {
+            console.warn("Image was renamed, but its resource URL could not be refreshed:", error);
+        }
+
+        const leaf = this.app.workspace.getMostRecentLeaf();
+        if (!leaf) {
+            this.plugin.imageStateManager?.refreshAllImages?.();
+            return;
+        }
+
+        const currentState = leaf.getViewState();
+        let restoreNeeded = false;
+        try {
+            await leaf.setViewState({ type: 'empty', state: {} });
+            restoreNeeded = true;
+            await leaf.setViewState(currentState);
+            restoreNeeded = false;
+        } catch (error) {
+            console.warn("Image was renamed, but the active note could not be refreshed:", error);
+            if (restoreNeeded) {
+                try {
+                    await leaf.setViewState(currentState);
+                } catch (restoreError) {
+                    console.error("Failed to restore the active note after renaming an image:", restoreError);
+                }
+            }
+        } finally {
+            this.plugin.imageStateManager?.refreshAllImages?.();
+        }
     }
 
     /**
@@ -151,8 +186,8 @@ export class RenameHandler {
         if (this.plugin.imageStateManager) {
             await this.plugin.imageStateManager.updateState(img, {
                 caption: newCaption,
-                width: widthStr ? parseInt(widthStr) : undefined,
-                height: heightStr ? parseInt(heightStr) : undefined,
+                width: widthStr ? parseInt(widthStr) : null,
+                height: heightStr ? parseInt(heightStr) : null,
                 align: align as any
             });
             new Notice(t("MSG_CAPTION_UPDATED"));

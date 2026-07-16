@@ -1,10 +1,13 @@
 // ImageProcessor.ts
-import { Notice, Platform, App, TFile, FileSystemAdapter, TFolder } from "obsidian";
+import { Notice, Platform, App, TFile, FileSystemAdapter } from "obsidian";
 import { SupportedImageFormats } from "./SupportedImageFormats";
+import { getErrorMessage } from "../utils/ErrorUtils";
+import { loadImage } from "../utils/ImageLoadUtils";
 import { ChildProcess, spawn } from 'child_process';
 import { LocalExternalToolSettings, ResizeMode, EnlargeReduce, AvifEncoder } from "../settings/types";
 import { ImageAssistantSettings, DEFAULT_SETTINGS } from "../settings/defaults";
 import { normalizeExecutablePath } from "../utils/ffmpegPath";
+import { detectImageBinaryType } from "../utils/ImageBinaryType";
 import * as piexif from "piexifjs"; // Import piexif library
 
 
@@ -19,6 +22,26 @@ interface Dimensions {
     imageWidth: number;
     imageHeight: number;
     aspectRatio: number;
+}
+
+export type ProcessedImageOutcome = "converted" | "unchanged" | "skipped";
+
+export interface ProcessedImageResult {
+    data: ArrayBuffer;
+    mimeType: string;
+    extension: string;
+    outcome: ProcessedImageOutcome;
+    reason?: string;
+}
+
+export interface ImageProcessingContext {
+    readonly settings: Readonly<ImageAssistantSettings>;
+    readonly externalTools: Readonly<LocalExternalToolSettings>;
+}
+
+interface ImageDescriptor {
+    mimeType: string;
+    extension: string;
 }
 
 interface AvifEncoderConfig {
@@ -74,8 +97,6 @@ const AVIF_ENCODER_PRIORITY: AvifEncoder[] = [
 export class ImageProcessor {
 
     supportedImageFormats: SupportedImageFormats
-    private externalTools: LocalExternalToolSettings = DEFAULT_SETTINGS.localProcessing.externalTools;
-    private settings: ImageAssistantSettings;
     private app: App;
     private static avifEncoderDetectionCache: Map<string, AvifEncoder> = new Map();
 
@@ -126,7 +147,82 @@ export class ImageProcessor {
         return null;
     }
 
-    // ... imports ...
+    /**
+     * Process an image and report the format that was actually produced.
+     * Callers that choose a filename or delete a source file must use this
+     * method rather than assuming the requested format was returned.
+     */
+    async processImageDetailed(
+        file: Blob | TFile | string,
+        format: 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL' | 'NONE' | 'PNGQUANT' | 'AVIF',
+        quality: number,
+        colorDepth: number,
+        resizeMode: ResizeMode,
+        desiredWidth: number,
+        desiredHeight: number,
+        desiredLongestEdge: number,
+        enlargeOrReduce: EnlargeReduce,
+        allowLargerFiles: boolean,
+        externalTools?: LocalExternalToolSettings,
+        settings?: ImageAssistantSettings
+    ): Promise<ProcessedImageResult> {
+        const originalData = await this.readInputData(file);
+        const data = await this.processImage(
+            file,
+            format,
+            quality,
+            colorDepth,
+            resizeMode,
+            desiredWidth,
+            desiredHeight,
+            desiredLongestEdge,
+            enlargeOrReduce,
+            allowLargerFiles,
+            externalTools,
+            settings
+        );
+
+        if (data.byteLength === 0) {
+            throw new Error("Image processing produced an empty result");
+        }
+
+        const actual = await this.detectImageDescriptor(data);
+        const original = await this.detectImageDescriptor(originalData, this.getInputDescriptor(file));
+        const unchanged = this.arrayBuffersEqual(data, originalData);
+        const expected = this.getExpectedDescriptor(format);
+
+        if (!actual) {
+            if (unchanged && original) {
+                return {
+                    data,
+                    ...original,
+                    outcome: expected ? "skipped" : "unchanged",
+                    reason: "The processor returned the original image bytes"
+                };
+            }
+            throw new Error("Unable to determine the processed image format");
+        }
+
+        if (expected && actual.mimeType !== expected.mimeType) {
+            if (unchanged) {
+                return {
+                    data,
+                    ...actual,
+                    outcome: "skipped",
+                    reason: `Requested ${expected.mimeType}, but processing kept ${actual.mimeType}`
+                };
+            }
+            throw new Error(`Processed image format mismatch: expected ${expected.mimeType}, received ${actual.mimeType}`);
+        }
+
+        return {
+            data,
+            ...actual,
+            outcome: unchanged ? "unchanged" : "converted",
+            reason: unchanged ? "The processed image is unchanged" : undefined
+        };
+    }
+
     /**
      * Main method to process an image file. This method is intended to be used directly
      * for single image processing or by other classes like BatchImageProcessor.
@@ -214,32 +310,39 @@ export class ImageProcessor {
         externalTools?: LocalExternalToolSettings,
         settings?: ImageAssistantSettings
     ): Promise<ArrayBuffer> {
-        this.settings = settings ?? DEFAULT_SETTINGS;
-        this.externalTools = externalTools || this.settings.localProcessing?.externalTools || DEFAULT_SETTINGS.localProcessing.externalTools;
+        const resolvedSettings = structuredClone(settings ?? DEFAULT_SETTINGS);
+        const context: Readonly<ImageProcessingContext> = Object.freeze({
+            settings: Object.freeze(resolvedSettings),
+            externalTools: Object.freeze({
+                ...(externalTools
+                    ?? resolvedSettings.localProcessing?.externalTools
+                    ?? DEFAULT_SETTINGS.localProcessing.externalTools)
+            })
+        });
 
         // Resolve input to Blob and optionally Path (for zero-copy)
         let inputBlob: Blob;
         let inputPath: string | null = null;
-        let filename = (file instanceof TFile) ? file.name : (typeof file === 'string' ? path.basename(file) : 'image');
+        const filename = (file instanceof TFile) ? file.name : (typeof file === 'string' ? path.basename(file) : 'image');
 
         try {
             if (file instanceof Blob) {
                 inputBlob = file;
             } else if (file instanceof TFile) {
                 // If it's a TFile, we can get the system path if adapter allows
-                if (this.externalTools.useSystemPathForBinary && this.app.vault.adapter instanceof FileSystemAdapter) {
+                if (context.externalTools.useSystemPathForBinary && this.app.vault.adapter instanceof FileSystemAdapter) {
                     inputPath = this.app.vault.adapter.getFullPath(file.path);
                 }
                 const data = await this.app.vault.readBinary(file);
-                inputBlob = new Blob([data], { type: `image/${file.extension}` });
+                const detected = await detectImageBinaryType(data);
+                inputBlob = new Blob([data], { type: detected?.mime ?? "application/octet-stream" });
             } else if (typeof file === 'string') {
                 // Assuming it's a file path
                 inputPath = file;
                 const buffer = await fs.readFile(file);
-                // Determine mime type from extension or magic bytes?
-                // Simple extension check for now
-                const ext = path.extname(file).substring(1);
-                inputBlob = new Blob([new Uint8Array(buffer)], { type: `image/${ext}` });
+                const data = this.nodeBufferToArrayBuffer(buffer);
+                const detected = await detectImageBinaryType(data);
+                inputBlob = new Blob([data], { type: detected?.mime ?? "application/octet-stream" });
             } else {
                 throw new Error("Invalid file input type");
             }
@@ -300,9 +403,10 @@ export class ImageProcessor {
                             desiredLongestEdge,
                             enlargeOrReduce,
                             allowLargerFiles,
-                            inputPath // Pass inputPath
+                            inputPath,
+                            context
                         );
-                    } catch (e) {
+                    } catch {
                         return inputBlob.arrayBuffer();
                     }
                 }
@@ -325,9 +429,10 @@ export class ImageProcessor {
                             desiredLongestEdge,
                             enlargeOrReduce,
                             allowLargerFiles,
-                            null // HEIC intermediate is blob, lost path
+                            null,
+                            context
                         );
-                    } catch (e) {
+                    } catch {
                         return inputBlob.arrayBuffer();
                     }
                 }
@@ -344,7 +449,8 @@ export class ImageProcessor {
                             desiredLongestEdge,
                             enlargeOrReduce,
                             allowLargerFiles,
-                            inputPath
+                            inputPath,
+                            context
                         );
                     } catch (unexpected) {
                         this.notifyProcessingFailure(filename, format, unexpected);
@@ -393,7 +499,7 @@ export class ImageProcessor {
             process.on('close', (code) => settle(code === 0 || code === null));
             // Add timeout in case it hangs
             setTimeout(() => {
-                try { process.kill(); } catch { }
+                try { process.kill(); } catch { /* Process may already have exited. */ }
                 settle(false);
             }, 2000);
         });
@@ -481,7 +587,7 @@ export class ImageProcessor {
             });
 
             timeout = setTimeout(() => {
-                try { ffmpeg?.kill?.('SIGTERM'); } catch { }
+                try { ffmpeg?.kill?.('SIGTERM'); } catch { /* Process may already have exited. */ }
                 settle(1, true);
             }, timeoutMs);
         });
@@ -491,9 +597,12 @@ export class ImageProcessor {
         return !!encoder && Object.prototype.hasOwnProperty.call(AVIF_ENCODER_CONFIGS, encoder);
     }
 
-    private getCachedAvifEncoder(normalizedPath: string): AvifEncoder | undefined {
-        const cachedEncoder = this.externalTools.ffmpegDetectedEncoder;
-        const cachedPath = this.externalTools.ffmpegDetectedEncoderPath;
+    private getCachedAvifEncoder(
+        normalizedPath: string,
+        externalTools: Readonly<LocalExternalToolSettings>
+    ): AvifEncoder | undefined {
+        const cachedEncoder = externalTools.ffmpegDetectedEncoder;
+        const cachedPath = externalTools.ffmpegDetectedEncoderPath;
         if (!this.isValidAvifEncoder(cachedEncoder)) return undefined;
         if (cachedPath && normalizeExecutablePath(cachedPath) !== normalizedPath) return undefined;
         return cachedEncoder;
@@ -501,8 +610,6 @@ export class ImageProcessor {
 
     private rememberAvifEncoder(normalizedPath: string, encoder: AvifEncoder): void {
         ImageProcessor.avifEncoderDetectionCache.set(normalizedPath, encoder);
-        this.externalTools.ffmpegDetectedEncoder = encoder;
-        this.externalTools.ffmpegDetectedEncoderPath = normalizedPath;
     }
 
     private validateAvifCrf(crf: number, encoder: AvifEncoder): number {
@@ -617,7 +724,7 @@ export class ImageProcessor {
             });
         } catch (error) {
             console.error('Error converting HEIC:', error);
-            throw new Error(`Failed to convert HEIC image: ${error.message}`);
+            throw new Error(`Failed to convert HEIC image: ${getErrorMessage(error)}`);
         }
     }
 
@@ -646,7 +753,8 @@ export class ImageProcessor {
         desiredLongestEdge: number,
         enlargeOrReduce: EnlargeReduce,
         allowLargerFiles: boolean,
-        inputPath: string | null = null
+        inputPath: string | null,
+        context: Readonly<ImageProcessingContext>
     ): Promise<ArrayBuffer> {
         switch (format) {
             case 'WEBP':
@@ -683,8 +791,8 @@ export class ImageProcessor {
                     allowLargerFiles
                 );
             case 'PNGQUANT': {// Add case for PNGQUANT
-                const pngquantExecutablePath = this.externalTools.pngquantExecutablePath;
-                const pngquantQuality = this.externalTools.pngquantQuality;
+                const pngquantExecutablePath = context.externalTools.pngquantExecutablePath;
+                const pngquantQuality = context.externalTools.pngquantQuality;
                 // Check if executable path is set
                 if (!pngquantExecutablePath) {
                     new Notice("PNGQUANT executable path is not set. Please configure it in the plugin settings.");
@@ -711,9 +819,9 @@ export class ImageProcessor {
                 );
             }
             case 'AVIF': {
-                const ffmpegExecutablePath = normalizeExecutablePath(this.externalTools.ffmpegExecutablePath);
-                const ffmpegCrf = this.externalTools.ffmpegCrf;
-                const ffmpegPreset = this.externalTools.ffmpegPreset;
+                const ffmpegExecutablePath = normalizeExecutablePath(context.externalTools.ffmpegExecutablePath);
+                const ffmpegCrf = context.externalTools.ffmpegCrf;
+                const ffmpegPreset = context.externalTools.ffmpegPreset;
 
                 // Check if executable path is set
                 if (!ffmpegExecutablePath) {
@@ -738,7 +846,8 @@ export class ImageProcessor {
                     desiredHeight,
                     desiredLongestEdge,
                     enlargeOrReduce,
-                    inputPath
+                    inputPath,
+                    context
                 );
             }
             default:
@@ -769,12 +878,13 @@ export class ImageProcessor {
         desiredHeight: number,
         desiredLongestEdge: number,
         enlargeOrReduce: EnlargeReduce,
-        inputPath: string | null = null,
+        inputPath: string | null,
+        context: Readonly<ImageProcessingContext>,
         forcedEncoder?: AvifEncoder,
         fallbackAttempted = false
     ): Promise<ArrayBuffer> {
         const normalizedExecutablePath = normalizeExecutablePath(executablePath);
-        const cachedEncoder = this.getCachedAvifEncoder(normalizedExecutablePath);
+        const cachedEncoder = this.getCachedAvifEncoder(normalizedExecutablePath, context.externalTools);
         const encoder = forcedEncoder ?? await this.detectAvifEncoder(normalizedExecutablePath, cachedEncoder);
 
         if (!encoder) {
@@ -916,6 +1026,7 @@ export class ImageProcessor {
                                 desiredLongestEdge,
                                 enlargeOrReduce,
                                 inputPath,
+                                context,
                                 softwareFallback,
                                 true
                             );
@@ -1000,7 +1111,7 @@ export class ImageProcessor {
 
             // Safety timeout to avoid hanging tests in case mocks fail to emit expected events
             safetyTimeout = setTimeout(() => {
-                try { ffmpeg?.kill?.('SIGKILL'); } catch { }
+                try { ffmpeg?.kill?.('SIGKILL'); } catch { /* Process may already have exited. */ }
                 void fail(new Error('FFmpeg process timed out'));
             }, 5000);
 
@@ -1066,16 +1177,14 @@ export class ImageProcessor {
      * Helper function to get the dimensions of an image Blob.
      */
     private async getImageDimensions(blob: Blob): Promise<{ width: number, height: number }> {
-        return new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => {
-                resolve({ width: img.naturalWidth, height: img.naturalHeight });
-            };
-            img.onerror = () => {
-                reject(new Error("Failed to load image to get dimensions."));
-            }
-            img.src = URL.createObjectURL(blob);
-        });
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+            await loadImage(img, objectUrl);
+            return { width: img.naturalWidth, height: img.naturalHeight };
+        } finally {
+            URL.revokeObjectURL(objectUrl);
+        }
     }
 
 
@@ -1179,8 +1288,8 @@ export class ImageProcessor {
         enlargeOrReduce: EnlargeReduce,
         allowLargerFiles: boolean
     ): Promise<ArrayBuffer> {
-        // Early return if no processing needed
-        if (quality === 1 && resizeMode === 'None') {
+        // Returning the source bytes is only valid when it is already WebP.
+        if (quality === 1 && resizeMode === 'None' && file.type === 'image/webp') {
             return file.arrayBuffer();
         }
 
@@ -1287,26 +1396,11 @@ export class ImageProcessor {
                 })
             ]);
 
-            // Get original format compression as well
-            // We're working with the original blob at the beginning,but the crucial 
-            // part is HOW we're creating the new compressed version. The path we take
-            // to create the compressed version (toDataURL vs toBlob) can result in 
-            // different compression algorithms being used internally by the browser.
-            const originalCompressed = await this.compressOriginalImage(
-                file,
-                quality,
-                resizeMode,
-                desiredWidth,
-                desiredHeight,
-                desiredLongestEdge,
-                enlargeOrReduce
-            );
-
-            // Compare all results and choose the smallest one
+            // Compare only WebP candidates. Original-format bytes must never be
+            // returned under a .webp filename.
             const results = [
                 { type: 'blob', data: blobResult, size: blobResult.byteLength },
-                { type: 'dataUrl', data: dataUrlResult, size: dataUrlResult.byteLength },
-                { type: 'original', data: originalCompressed, size: originalCompressed.byteLength }
+                { type: 'dataUrl', data: dataUrlResult, size: dataUrlResult.byteLength }
             ].filter(result => result.size > 0);
 
             // Sort by size
@@ -1322,7 +1416,7 @@ export class ImageProcessor {
             //     return file.arrayBuffer();
             // }
 
-            // Return the smallest result
+            if (results.length === 0) throw new Error('WebP encoder returned no data');
             return results[0].data;
 
         } catch (error) {
@@ -1354,8 +1448,8 @@ export class ImageProcessor {
         enlargeOrReduce: EnlargeReduce,
         allowLargerFiles: boolean
     ): Promise<ArrayBuffer> {
-        // Early return if no processing needed
-        if (quality === 1 && resizeMode === 'None') {
+        // Returning the source bytes is only valid when it is already JPEG.
+        if (quality === 1 && resizeMode === 'None' && (file.type === 'image/jpeg' || file.type === 'image/jpg')) {
             return file.arrayBuffer();
         }
 
@@ -1473,20 +1567,6 @@ export class ImageProcessor {
                 { type: 'blob', data: blobResult, size: blobResult.byteLength },
                 { type: 'dataUrl', data: dataUrlResult, size: dataUrlResult.byteLength }
             ];
-            // Include original format compression only when input is not already JPEG
-            if (file.type !== 'image/jpeg') {
-                const originalCompressed = await this.compressOriginalImage(
-                    file,
-                    quality,
-                    resizeMode,
-                    desiredWidth,
-                    desiredHeight,
-                    desiredLongestEdge,
-                    enlargeOrReduce
-                );
-                results.push({ type: 'original', data: originalCompressed, size: originalCompressed.byteLength });
-            }
-
             const filtered = results.filter(result => result.size > 0);
 
             // Sort by size
@@ -1502,7 +1582,7 @@ export class ImageProcessor {
             //     return file.arrayBuffer();
             // }
 
-            // Return the smallest result
+            if (filtered.length === 0) throw new Error('JPEG encoder returned no data');
             return filtered[0].data;
 
         } catch (error) {
@@ -1534,8 +1614,8 @@ export class ImageProcessor {
         enlargeOrReduce: EnlargeReduce,
         allowLargerFiles: boolean
     ): Promise<ArrayBuffer> {
-        // Early return if no processing needed
-        if (colorDepth === 1 && resizeMode === 'None') {
+        // Returning the source bytes is only valid when it is already PNG.
+        if (colorDepth === 1 && resizeMode === 'None' && file.type === 'image/png') {
             return file.arrayBuffer();
         }
 
@@ -1656,24 +1736,6 @@ export class ImageProcessor {
                 { type: 'dataUrl', data: dataUrlResult, size: dataUrlResult.byteLength }
             ];
 
-            // If input wasn't PNG, add original format as comparison
-            if (file.type !== 'image/png') {
-                const originalCompressed = await this.compressOriginalImage(
-                    file,
-                    1, // PNG doesn't use quality parameter
-                    resizeMode,
-                    desiredWidth,
-                    desiredHeight,
-                    desiredLongestEdge,
-                    enlargeOrReduce
-                );
-                results.push({
-                    type: 'original',
-                    data: originalCompressed,
-                    size: originalCompressed.byteLength
-                });
-            }
-
             // Filter out empty results and sort by size
             const validResults = results
                 .filter(result => result.size > 0)
@@ -1689,7 +1751,7 @@ export class ImageProcessor {
             //     return file.arrayBuffer();
             // }
 
-            // Return the smallest result
+            if (validResults.length === 0) throw new Error('PNG encoder returned no data');
             return validResults[0].data;
 
         } catch (error) {
@@ -2105,6 +2167,103 @@ export class ImageProcessor {
         }
         const reducedImageData = new ImageData(reducedData, imageData.width, imageData.height);
         return reducedImageData;
+    }
+
+    private async readInputData(file: Blob | TFile | string): Promise<ArrayBuffer> {
+        if (file instanceof Blob) return file.arrayBuffer();
+        if (file instanceof TFile) return this.app.vault.readBinary(file);
+        return this.nodeBufferToArrayBuffer(await fs.readFile(file));
+    }
+
+    private async detectImageDescriptor(
+        data: ArrayBuffer,
+        fallback?: ImageDescriptor
+    ): Promise<ImageDescriptor | undefined> {
+        const detected = await detectImageBinaryType(data);
+        return detected
+            ? { mimeType: detected.mime, extension: detected.ext }
+            : fallback;
+    }
+
+    private getExpectedDescriptor(
+        format: 'WEBP' | 'JPEG' | 'PNG' | 'ORIGINAL' | 'NONE' | 'PNGQUANT' | 'AVIF'
+    ): ImageDescriptor | undefined {
+        switch (format) {
+            case "WEBP": return { mimeType: "image/webp", extension: "webp" };
+            case "JPEG": return { mimeType: "image/jpeg", extension: "jpg" };
+            case "PNG":
+            case "PNGQUANT": return { mimeType: "image/png", extension: "png" };
+            case "AVIF": return { mimeType: "image/avif", extension: "avif" };
+            default: return undefined;
+        }
+    }
+
+    private getInputDescriptor(file: Blob | TFile | string): ImageDescriptor | undefined {
+        const extension = file instanceof TFile
+            ? file.extension.toLowerCase()
+            : typeof file === "string"
+                ? path.extname(file).slice(1).toLowerCase()
+                : this.extensionFromMime(file.type);
+        if (!extension) return undefined;
+
+        const mimeType = file instanceof Blob && file.type
+            ? this.normalizeMime(file.type)
+            : this.mimeFromExtension(extension);
+        return mimeType ? { mimeType, extension: extension === "jpeg" ? "jpg" : extension } : undefined;
+    }
+
+    private extensionFromMime(mimeType: string): string | undefined {
+        const normalized = this.normalizeMime(mimeType);
+        const entries: Record<string, string> = {
+            "image/jpeg": "jpg",
+            "image/png": "png",
+            "image/webp": "webp",
+            "image/gif": "gif",
+            "image/bmp": "bmp",
+            "image/x-icon": "ico",
+            "image/vnd.microsoft.icon": "ico",
+            "image/tiff": "tif",
+            "image/avif": "avif",
+            "image/heic": "heic",
+            "image/heif": "heif",
+            "image/svg+xml": "svg"
+        };
+        return entries[normalized];
+    }
+
+    private mimeFromExtension(extension: string): string | undefined {
+        const normalized = extension.toLowerCase();
+        const entries: Record<string, string> = {
+            jpg: "image/jpeg",
+            jpeg: "image/jpeg",
+            png: "image/png",
+            webp: "image/webp",
+            gif: "image/gif",
+            bmp: "image/bmp",
+            ico: "image/x-icon",
+            tif: "image/tiff",
+            tiff: "image/tiff",
+            avif: "image/avif",
+            heic: "image/heic",
+            heif: "image/heif",
+            svg: "image/svg+xml"
+        };
+        return entries[normalized];
+    }
+
+    private normalizeMime(mimeType: string): string {
+        const normalized = mimeType.split(";")[0].trim().toLowerCase();
+        return normalized === "image/jpg" ? "image/jpeg" : normalized;
+    }
+
+    private arrayBuffersEqual(left: ArrayBuffer, right: ArrayBuffer): boolean {
+        if (left.byteLength !== right.byteLength) return false;
+        const leftView = new Uint8Array(left);
+        const rightView = new Uint8Array(right);
+        for (let index = 0; index < leftView.length; index++) {
+            if (leftView[index] !== rightView[index]) return false;
+        }
+        return true;
     }
 
     private nodeBufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
