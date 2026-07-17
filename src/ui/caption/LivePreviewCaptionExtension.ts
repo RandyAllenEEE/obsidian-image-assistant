@@ -14,9 +14,11 @@ import { editorLivePreviewField } from 'obsidian';
 import { syntaxTree } from '@codemirror/language';
 import type ImageConverterPlugin from '../../main';
 import {
+    getImageLayoutKey,
     getImageSourceKey,
     type CaptionLinkDescriptor
 } from '../../utils/MarkdownSourceContext';
+import { IMAGE_LAYOUT_KEY_ATTRIBUTE } from '../../utils/RefinedImageUtils';
 import { CaptionRenderPolicy } from './CaptionRenderPolicy';
 import {
     CaptionSourceScanner,
@@ -29,10 +31,6 @@ import {
     resolveCaptionLayout,
     type HorizontalImageAlignment
 } from '../ImageLayoutResolver';
-import {
-    CAPTION_EXPLICIT_WIDTH_ATTRIBUTE,
-    syncLivePreviewCaptionWidget
-} from './LivePreviewCaptionGeometry';
 
 export const refreshLivePreviewCaptionsEffect = StateEffect.define<void>();
 
@@ -61,7 +59,8 @@ class CaptionWidget extends WidgetType {
         private readonly alignment: HorizontalImageAlignment,
         private readonly wrap: boolean,
         private readonly standalone: boolean,
-        private readonly sourceKey: string
+        private readonly sourceKey: string,
+        private readonly layoutKey: string
     ) {
         super();
     }
@@ -74,7 +73,8 @@ class CaptionWidget extends WidgetType {
             && this.alignment === other.alignment
             && this.wrap === other.wrap
             && this.standalone === other.standalone
-            && this.sourceKey === other.sourceKey;
+            && this.sourceKey === other.sourceKey
+            && this.layoutKey === other.layoutKey;
     }
 
     toDOM(view: EditorView): HTMLElement {
@@ -87,7 +87,7 @@ class CaptionWidget extends WidgetType {
         caption.setAttribute('data-image-assistant-caption-wrap', this.wrap ? 'true' : 'false');
         caption.setAttribute('data-image-assistant-caption-standalone', this.standalone ? 'true' : 'false');
         caption.setAttribute('data-image-assistant-source-key', this.sourceKey);
-        caption.setAttribute(CAPTION_EXPLICIT_WIDTH_ATTRIBUTE, this.width ? 'true' : 'false');
+        caption.setAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE, this.layoutKey);
         caption.setAttribute('aria-hidden', 'true');
         caption.textContent = this.caption;
 
@@ -97,11 +97,6 @@ class CaptionWidget extends WidgetType {
             caption.style.setProperty('--img-width', '100%');
         }
         applyLineClamp(caption, this.caption, this.maxLines);
-        queueMicrotask(() => {
-            if (caption.isConnected) {
-                syncLivePreviewCaptionWidget(view.dom, caption, this.sourceKey);
-            }
-        });
         return caption;
     }
 
@@ -175,7 +170,8 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
                     layout.alignment,
                     safeWrap,
                     link.standalone,
-                    getImageSourceKey(link)
+                    getImageSourceKey(link),
+                    getImageLayoutKey(link)
                 ),
                 side: 10_000,
                 block: true
@@ -275,7 +271,16 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
                 incremental: true
             };
         },
-        provide: field => EditorView.decorations.from(field, value => value.decorations)
+        provide: field => [
+            EditorView.decorations.from(field, value => value.decorations),
+            EditorView.updateListener.of(update => {
+                if (!update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
+                plugin.imageStateManager?.handleLivePreviewEditorUpdate(update.view.dom, {
+                    reconcileSource: update.docChanged || update.viewportChanged,
+                    geometryChanged: update.geometryChanged
+                });
+            })
+        ]
     });
 }
 

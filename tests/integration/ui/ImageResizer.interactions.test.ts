@@ -413,7 +413,7 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
     await Promise.resolve();
     expect(updateState).toHaveBeenCalledWith(img, expect.objectContaining({
       width: expect.any(Number),
-      height: expect.any(Number)
+      height: null
     }));
   });
 
@@ -905,5 +905,29 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
     await (resizer as any).updateMarkdownLink(img, 320, 160, 'se');
 
     expect(editor.getValue()).toBe('![[other/pic.jpg|100]] and ![[imgs/pic.jpg|320]]');
+  });
+
+  it('serializes locked interactive resize as one axis through ImageStateManager', async () => {
+    const { resizer, plugin } = makeResizer({ overrides: { aspectRatioLocked: true } });
+    const updateState = vi.fn().mockResolvedValue(undefined);
+    (plugin as any).imageStateManager = { updateState };
+    const image = document.createElement('img');
+
+    await (resizer as any).updateMarkdownLink(image, 500.4, 300.4, 'e');
+    expect(updateState).toHaveBeenLastCalledWith(image, { width: 500, height: null });
+
+    await (resizer as any).updateMarkdownLink(image, 500.4, 300.4, 's');
+    expect(updateState).toHaveBeenLastCalledWith(image, { width: null, height: 300 });
+  });
+
+  it('serializes unlocked interactive resize as an explicit two-axis size', async () => {
+    const { resizer, plugin } = makeResizer({ overrides: { aspectRatioLocked: false } });
+    const updateState = vi.fn().mockResolvedValue(undefined);
+    (plugin as any).imageStateManager = { updateState };
+    const image = document.createElement('img');
+
+    await (resizer as any).updateMarkdownLink(image, 500.4, 300.4, 'se');
+
+    expect(updateState).toHaveBeenCalledWith(image, { width: 500, height: 300 });
   });
 });

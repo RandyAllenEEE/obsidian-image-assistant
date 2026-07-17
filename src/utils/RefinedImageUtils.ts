@@ -1,6 +1,7 @@
 import { App, MarkdownView, Editor, TFile, normalizePath } from 'obsidian';
 import { type ImageLink } from './RegexPatterns';
 import {
+    getImageLayoutKey,
     getImageSourceDescriptors,
     getImageSourceKey,
     type ImageSourceDescriptor
@@ -8,6 +9,7 @@ import {
 import { isHttpUrl } from './NetworkPolicy';
 
 export const IMAGE_SOURCE_KEY_ATTRIBUTE = 'data-image-assistant-source-key';
+export const IMAGE_LAYOUT_KEY_ATTRIBUTE = 'data-image-assistant-layout-key';
 
 export interface ImageLinkMatch {
     linkText: string;
@@ -17,6 +19,7 @@ export interface ImageLinkMatch {
     score: number;
     descriptor: ImageSourceDescriptor;
     sourceKey: string;
+    layoutKey: string;
 }
 
 export interface ImageSourceIndex {
@@ -24,6 +27,11 @@ export interface ImageSourceIndex {
     descriptors: readonly ImageSourceDescriptor[];
     lineStarts: readonly number[];
 }
+
+export type ImageResolutionResult =
+    | { status: 'resolved'; match: ImageLinkMatch }
+    | { status: 'pending' }
+    | { status: 'absent' };
 
 const SHARED_SOURCE_INDEX_CACHE = new WeakMap<Editor, ImageSourceIndex>();
 
@@ -71,15 +79,26 @@ export class RefinedImageUtils {
         viewContent?: HTMLElement,
         preparedIndex?: ImageSourceIndex
     ): ImageLinkMatch | null {
+        const result = this.resolveImageLinkFromEditor(img, editor, viewContent, preparedIndex);
+        return result.status === 'resolved' ? result.match : null;
+    }
+
+    /** Distinguishes a transient CodeMirror mapping gap from a confirmed missing source link. */
+    public resolveImageLinkFromEditor(
+        img: HTMLImageElement,
+        editor: Editor,
+        viewContent?: HTMLElement,
+        preparedIndex?: ImageSourceIndex
+    ): ImageResolutionResult {
         try {
-            if (viewContent && !viewContent.contains(img)) return null;
+            if (viewContent && !viewContent.contains(img)) return { status: 'absent' };
 
             const src = img.getAttribute('src');
-            if (!src) return null;
+            if (!src) return { status: 'absent' };
 
             const isNetwork = isHttpUrl(src);
             const candidates = this.buildSourceCandidates(src, isNetwork);
-            if (candidates.length === 0) return null;
+            if (candidates.length === 0) return { status: 'absent' };
 
             const sourceIndex = preparedIndex ?? this.getImageSourceIndex(editor);
             const scored: ScoredDescriptor[] = [];
@@ -96,7 +115,7 @@ export class RefinedImageUtils {
                 if (score === bestScore) scored.push({ descriptor, score });
             }
 
-            if (scored.length === 0) return null;
+            if (scored.length === 0) return { status: 'absent' };
 
             const editorOffset = this.getEditorOffset(img, editor);
             if (editorOffset !== null) {
@@ -106,9 +125,9 @@ export class RefinedImageUtils {
                         IMAGE_SOURCE_KEY_ATTRIBUTE,
                         getImageSourceKey(positioned.descriptor)
                     );
-                    return this.toImageLinkMatch(positioned, sourceIndex);
+                    return { status: 'resolved', match: this.toImageLinkMatch(positioned, sourceIndex) };
                 }
-                return null;
+                return { status: 'pending' };
             }
 
             const sourceKey = img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
@@ -116,17 +135,19 @@ export class RefinedImageUtils {
                 const keyed = scored.find(({ descriptor }) =>
                     getImageSourceKey(descriptor) === sourceKey
                 );
-                if (keyed) return this.toImageLinkMatch(keyed, sourceIndex);
+                if (keyed) {
+                    return { status: 'resolved', match: this.toImageLinkMatch(keyed, sourceIndex) };
+                }
             }
 
             // Without a source position, repeated targets are ambiguous under
             // CodeMirror virtualization. Only a document-wide unique target is safe.
             return scored.length === 1
-                ? this.toImageLinkMatch(scored[0], sourceIndex)
-                : null;
+                ? { status: 'resolved', match: this.toImageLinkMatch(scored[0], sourceIndex) }
+                : { status: 'pending' };
         } catch (error) {
             console.error('RefinedImageUtils: Error getting image link text:', error);
-            return null;
+            return { status: 'pending' };
         }
     }
 
@@ -341,7 +362,8 @@ export class RefinedImageUtils {
             end: start + descriptor.source.length,
             score,
             descriptor,
-            sourceKey: getImageSourceKey(descriptor)
+            sourceKey: getImageSourceKey(descriptor),
+            layoutKey: getImageLayoutKey(descriptor)
         };
     }
 

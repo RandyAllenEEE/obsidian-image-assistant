@@ -5,6 +5,8 @@ import {
     getContextualImageLinks,
     getContextualReferenceLinks,
     getCaptionLinkDescriptors,
+    getImageLayoutKey,
+    getImageSourceKey,
     isAdmonitionFenceInfo,
     parseFenceOpening
 } from '../../../src/utils/MarkdownSourceContext';
@@ -157,6 +159,14 @@ describe('MarkdownSourceContext', () => {
             { ordinal: 0, line: 0, end: 27 },
             { ordinal: 1, line: 1, end: source.length }
         ]);
+    });
+
+    it('keeps the layout key stable when source offsets move', () => {
+        const first = getCaptionLinkDescriptors('![[photo.png|Caption]]')[0];
+        const moved = getCaptionLinkDescriptors('intro\n![[photo.png|Caption]]')[0];
+
+        expect(getImageSourceKey(moved)).not.toBe(getImageSourceKey(first));
+        expect(getImageLayoutKey(moved)).toBe(getImageLayoutKey(first));
     });
 
     it('classifies standalone images through quote, list, task, callout, and Admonition prefixes', () => {

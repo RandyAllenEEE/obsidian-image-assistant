@@ -15,6 +15,11 @@ export interface ImageViewContext {
 
 export type ImageViewOwnerContext = Omit<ImageViewContext, 'match'>;
 
+export type ImageViewContextResolution =
+    | { status: 'resolved'; context: ImageViewContext }
+    | { status: 'pending' }
+    | { status: 'absent' };
+
 /** Resolves an image against the Markdown leaf that actually owns its DOM. */
 export class ImageViewContextResolver {
     private readonly imageUtils: RefinedImageUtils;
@@ -24,21 +29,29 @@ export class ImageViewContextResolver {
     }
 
     resolve(img: HTMLImageElement, preparedIndex?: ImageSourceIndex): ImageViewContext | null {
-        const owner = this.resolveOwner(img);
-        if (!owner) return null;
+        const result = this.resolveDetailed(img, preparedIndex);
+        return result.status === 'resolved' ? result.context : null;
+    }
 
-        const match = this.imageUtils.getImageLinkMatchFromEditor(
+    resolveDetailed(
+        img: HTMLImageElement,
+        preparedIndex?: ImageSourceIndex
+    ): ImageViewContextResolution {
+        const owner = this.resolveOwner(img);
+        if (!owner) return img.isConnected ? { status: 'pending' } : { status: 'absent' };
+
+        const resolution = this.imageUtils.resolveImageLinkFromEditor(
             img,
             owner.editor,
             owner.view.contentEl,
             preparedIndex
         );
-        if (!match) return null;
+        if (resolution.status !== 'resolved') return resolution;
 
-        return Object.freeze({
+        return { status: 'resolved', context: Object.freeze({
             ...owner,
-            match: Object.freeze({ ...match })
-        });
+            match: Object.freeze({ ...resolution.match })
+        }) };
     }
 
     prepareEditor(editor: Editor): ImageSourceIndex {
@@ -46,15 +59,17 @@ export class ImageViewContextResolver {
     }
 
     resolveOwner(img: HTMLImageElement): ImageViewOwnerContext | null {
+        const workspace = this.app?.workspace;
+        if (!workspace) return null;
         const views = collectUsableMarkdownViews(this.app);
-        const activeView = this.app.workspace.getActiveViewOfType?.(MarkdownView);
+        const activeView = workspace.getActiveViewOfType?.(MarkdownView);
         if (isUsableMarkdownView(activeView) && !views.includes(activeView)) views.push(activeView);
 
         const hasEnumeratedLeaves = views.length > 0 && !(views.length === 1 && views[0] === activeView
-            && (this.app.workspace.getLeavesOfType?.('markdown') ?? []).length === 0);
+            && (workspace.getLeavesOfType?.('markdown') ?? []).length === 0);
         for (const view of views) {
             const ownsImage = view?.contentEl?.contains(img) || (!hasEnumeratedLeaves && view === activeView);
-            const file = view.file ?? (!hasEnumeratedLeaves ? this.app.workspace.getActiveFile?.() : null);
+            const file = view.file ?? (!hasEnumeratedLeaves ? workspace.getActiveFile?.() : null);
             if (!ownsImage || !view.editor || !file) {
                 continue;
             }

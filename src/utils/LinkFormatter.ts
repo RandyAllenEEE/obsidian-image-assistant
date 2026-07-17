@@ -82,17 +82,6 @@ export class LinkFormatter {
                     originalDimensions.width,
                     embedResize.resizeUnits
                 );
-
-                // Calculate height only if maintainAspectRatio is true
-                if (embedResize.maintainAspectRatio) {
-                    height = Math.round(
-                        (width ?? 0) *
-                        originalDimensions.height /
-                        originalDimensions.width
-                    );
-
-                }
-
                 break;
             case "height":
                 height = this.getDimensionValue(
@@ -100,14 +89,6 @@ export class LinkFormatter {
                     originalDimensions.height,
                     embedResize.resizeUnits
                 );
-                // Calculate width only if maintainAspectRatio is true
-                if (embedResize.maintainAspectRatio) {
-                    width = Math.round(
-                        (height ?? 0) *
-                        originalDimensions.width /
-                        originalDimensions.height
-                    );
-                }
                 break;
             case "both":
                 if (embedResize.width !== undefined || embedResize.height !== undefined) {
@@ -139,34 +120,12 @@ export class LinkFormatter {
                     ),
                     embedResize.resizeUnits
                 );
-                // Calculate width and height based on the longest edge ONLY if maintainAspectRatio is true
-                if (embedResize.maintainAspectRatio) {
-                    if (originalDimensions.width >= originalDimensions.height) {
-                        width = longestEdge;
-                        height = Math.round(
-                            (width ?? 0) *
-                            originalDimensions.height /
-                            originalDimensions.width
-                        );
-                    } else {
-                        height = longestEdge;
-                        width = Math.round(
-                            (height ?? 0) *
-                            originalDimensions.width /
-                            originalDimensions.height
-                        );
-                    }
-                } else {
-                    // If not maintaining aspect ratio, only set the longest edge
-                    width =
-                        originalDimensions.width >= originalDimensions.height
-                            ? longestEdge
-                            : undefined;
-                    height =
-                        originalDimensions.height > originalDimensions.width
-                            ? longestEdge
-                            : undefined;
-                }
+                width = originalDimensions.width >= originalDimensions.height
+                    ? longestEdge
+                    : undefined;
+                height = originalDimensions.height > originalDimensions.width
+                    ? longestEdge
+                    : undefined;
                 break;
             case "shortest-edge":
                 shortestEdge = this.getDimensionValue(
@@ -177,46 +136,18 @@ export class LinkFormatter {
                     ),
                     embedResize.resizeUnits
                 );
-                // Calculate width and height based on the shortest edge ONLY if maintainAspectRatio is true
-                if (embedResize.maintainAspectRatio) {
-                    if (originalDimensions.width < originalDimensions.height) {
-                        width = shortestEdge;
-                        height = Math.round(
-                            (width ?? 0) *
-                            originalDimensions.height /
-                            originalDimensions.width
-                        );
-                    } else {
-                        height = shortestEdge;
-                        width = Math.round(
-                            (height ?? 0) *
-                            originalDimensions.width /
-                            originalDimensions.height
-                        );
-                    }
-                } else {
-                    // If not maintaining aspect ratio, only set the shortest edge
-                    width =
-                        originalDimensions.width < originalDimensions.height
-                            ? shortestEdge
-                            : undefined;
-                    height =
-                        originalDimensions.height <= originalDimensions.width
-                            ? shortestEdge
-                            : undefined;
-                }
+                width = originalDimensions.width < originalDimensions.height
+                    ? shortestEdge
+                    : undefined;
+                height = originalDimensions.height <= originalDimensions.width
+                    ? shortestEdge
+                    : undefined;
                 break;
             case "original-width":
-                ({ width, height } = originalDimensions);
-                height = embedResize.maintainAspectRatio
-                    ? height
-                    : undefined;
+                width = originalDimensions.width;
                 break;
             case "original-height":
-                ({ width, height } = originalDimensions);
-                width = embedResize.maintainAspectRatio
-                    ? width
-                    : undefined;
+                height = originalDimensions.height;
                 break;
             case "editor-max-width": {
                 const editorMaxWidth = this.getEditorMaxWidth();
@@ -237,25 +168,6 @@ export class LinkFormatter {
                     : embedResize.editorMaxWidthValue;
 
                 width = targetWidth;
-
-                // Always calculate height if we have original dimensions
-                if (originalDimensions && originalDimensions.width > 0) {
-                    const scalingFactor = targetWidth / originalDimensions.width;
-                    height = Math.round(originalDimensions.height * scalingFactor);
-
-                    // Apply aspect ratio constraints only if maintainAspectRatio is true
-                    if (embedResize.maintainAspectRatio) {
-                        const maxHeightToWidthRatio = 2;
-                        if (height / width > maxHeightToWidthRatio) {
-                            height = Math.round(width * maxHeightToWidthRatio);
-                            width = Math.round(height * (originalDimensions.width / originalDimensions.height));
-                        }
-                    }
-                } else {
-                    // Fallback height if no original dimensions
-                    height = Math.round(width * 0.75); // 4:3 aspect ratio as fallback
-                }
-
                 break;
             }
             case "none":
@@ -294,31 +206,19 @@ export class LinkFormatter {
             }
         }
 
-        // 4. Ensure Both Width and Height Are Present (ONLY if maintainAspectRatio is FALSE)
-        if (!embedResize.maintainAspectRatio) {
-            if (width === undefined && height !== undefined) {
-                // Only set width to original if height is defined and we're not maintaining aspect ratio
-                width = originalDimensions ? originalDimensions.width : 100;
-            } else if (width === undefined) {
-                // Only provide fallback if width is still undefined
-                width = 100
-            }
-
-            if (height === undefined && width !== undefined) {
-                // Only set height to original if width is defined and we're not maintaining aspect ratio
-                height = originalDimensions ? originalDimensions.height : 100;
-            } else if (height === undefined) {
-                // Only provide fallback if height is still undefined
-                height = 100;
-            }
-        }
-
-
-        // 5. Build Resize Parameter String (Handle undefined width/height)
+        // 4. Build the canonical single- or double-axis PipeSyntax.
         if (width !== undefined || height !== undefined) {
             const roundedWidth = width !== undefined ? Math.round(width) : undefined;
             const roundedHeight = height !== undefined ? Math.round(height) : undefined;
-            resizeParams = `|${roundedWidth ?? ""}x${roundedHeight ?? ""}`;
+            if (roundedWidth !== undefined && roundedHeight !== undefined) {
+                resizeParams = `|${roundedWidth}x${roundedHeight}`;
+            } else if (roundedWidth !== undefined) {
+                const preservesTrailingAxis = embedResize.resizeDimension === 'both'
+                    && /^\s*\d+(?:\.\d+)?%?x\s*$/.test(embedResize.customValue ?? '');
+                resizeParams = `|${roundedWidth}${preservesTrailingAxis ? 'x' : ''}`;
+            } else {
+                resizeParams = `|x${roundedHeight}`;
+            }
         } else {
             resizeParams = "";
         }

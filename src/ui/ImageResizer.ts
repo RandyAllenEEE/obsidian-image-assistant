@@ -108,18 +108,6 @@ export class ImageResizer extends Component {
 
     }
 
-    /**
-     * Applies size to the image element. Called by ImageStateManager.
-     */
-    public applySize(img: HTMLImageElement, width?: number, height?: number) {
-        if (width && img.style.width !== `${width}px`) {
-            img.style.width = `${width}px`;
-        }
-        if (height && img.style.height !== `${height}px`) {
-            img.style.height = `${height}px`;
-        }
-    }
-
     onload(markdownView?: MarkdownView) {
         if (markdownView) {
             this.attachView(markdownView);
@@ -1244,8 +1232,24 @@ export class ImageResizer extends Component {
      */
     private async updateMarkdownLink(image: HTMLImageElement, newWidth: number, newHeight: number, currentHandle: string | null) {
         if (this.plugin.imageStateManager) {
-            // For consistency, we pass width/height. Handlers are abstracted away by StateManager which just takes final W/H.
-            this.plugin.imageStateManager.updateState(image, { width: newWidth, height: newHeight });
+            const roundedWidth = Math.round(newWidth);
+            const roundedHeight = Math.round(newHeight);
+            if (!this.plugin.settings.interactiveResize.aspectRatioLocked) {
+                await this.plugin.imageStateManager.updateState(image, {
+                    width: roundedWidth,
+                    height: roundedHeight
+                });
+            } else if (currentHandle === 'n' || currentHandle === 's') {
+                await this.plugin.imageStateManager.updateState(image, {
+                    width: null,
+                    height: roundedHeight
+                });
+            } else {
+                await this.plugin.imageStateManager.updateState(image, {
+                    width: roundedWidth,
+                    height: null
+                });
+            }
             return;
         }
 

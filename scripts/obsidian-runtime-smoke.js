@@ -523,9 +523,13 @@ async function main() {
                 const plugin = application.plugins.plugins[${JSON.stringify(pluginId)}];
                 if (!plugin) throw new Error('Image alignment smoke plugin is unavailable');
                 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-                const tempPath = 'Image Assistant Alignment Smoke ' + Date.now() + '.md';
+                const token = Date.now();
+                const tempPath = 'Image Assistant Alignment Smoke ' + token + '.md';
+                const imagePath = 'Image Assistant Dimension Smoke ' + token + '.png';
                 const repeatedUrl = 'https://example.com/image-assistant-align-smoke?id=1';
                 const source = [
+                    '![[' + imagePath + '|Square local caption|center|500]]',
+                    '',
                     '![Left network caption|left|180](' + repeatedUrl + ')',
                     '',
                     '![Right network caption|right|220](' + repeatedUrl + ')',
@@ -534,7 +538,11 @@ async function main() {
                 ].join('\\n');
                 let leaf = null;
                 let file = null;
+                let imageFile = null;
                 try {
+                    const binary = atob('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8AARAwMDAxQAAAjAQHn6w0EAAAAAElFTkSuQmCC');
+                    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+                    imageFile = await application.vault.createBinary(imagePath, bytes.buffer);
                     file = await application.vault.create(tempPath, source);
                     leaf = application.workspace.getLeaf('tab');
                     await leaf.setViewState({
@@ -549,17 +557,18 @@ async function main() {
 
                     const container = leaf.view.containerEl;
                     const images = [...container.querySelectorAll('img')]
-                        .filter(image => image.src.includes('image-assistant-align-smoke'));
+                        .filter(image => image.src.includes('image-assistant-align-smoke')
+                            || image.src.includes('Image%20Assistant%20Dimension%20Smoke'));
                     const captions = [...container.querySelectorAll(
-                        '.image-assistant-live-preview-caption[data-image-assistant-source-key]'
-                    )].filter(caption => /network caption/.test(caption.textContent ?? ''));
+                        '.image-assistant-live-preview-caption[data-image-assistant-layout-key]'
+                    )].filter(caption => /(?:network|local) caption/i.test(caption.textContent ?? ''));
                     const contentRect = container.querySelector('.cm-content')?.getBoundingClientRect()
                         ?? container.getBoundingClientRect();
                     const rendered = images.map(image => {
                         const owner = image.closest('[data-image-assistant-layout-owner="true"]');
-                        const key = image.getAttribute('data-image-assistant-source-key');
+                        const key = image.getAttribute('data-image-assistant-layout-key');
                         const caption = captions.find(node =>
-                            node.getAttribute('data-image-assistant-source-key') === key
+                            node.getAttribute('data-image-assistant-layout-key') === key
                         );
                         const rect = owner?.getBoundingClientRect();
                         const imageRect = image.getBoundingClientRect();
@@ -590,6 +599,87 @@ async function main() {
                         };
                     });
 
+                    const inspectDimension = () => {
+                        const currentContainer = leaf.view.containerEl;
+                        const image = [...currentContainer.querySelectorAll('img')]
+                            .find(node => node.src.includes('Image%20Assistant%20Dimension%20Smoke'));
+                        if (!image) return null;
+                        const key = image.getAttribute('data-image-assistant-layout-key');
+                        const caption = [...currentContainer.querySelectorAll(
+                            '.image-assistant-live-preview-caption[data-image-assistant-layout-key]'
+                        )].find(node => node.getAttribute('data-image-assistant-layout-key') === key);
+                        const imageRect = image.getBoundingClientRect();
+                        const captionRect = caption?.getBoundingClientRect();
+                        const scope = image.closest('.cm-line')
+                            ?? currentContainer.querySelector('.cm-content');
+                        const scopeRect = scope?.getBoundingClientRect();
+                        const expectedWidth = Math.min(500, scopeRect?.width ?? 500);
+                        const naturalRatio = image.naturalWidth > 0 && image.naturalHeight > 0
+                            ? image.naturalHeight / image.naturalWidth
+                            : null;
+                        return {
+                            imageLeft: imageRect.left,
+                            imageWidth: imageRect.width,
+                            imageHeight: imageRect.height,
+                            expectedWidth,
+                            widthError: Math.abs(imageRect.width - expectedWidth),
+                            ratioError: naturalRatio === null
+                                ? null
+                                : Math.abs(imageRect.height - imageRect.width * naturalRatio),
+                            captionLeftError: captionRect
+                                ? Math.abs(captionRect.left - imageRect.left)
+                                : null,
+                            captionWidthError: captionRect
+                                ? Math.abs(captionRect.width - imageRect.width)
+                                : null,
+                            dimensionMode: image.getAttribute('data-image-assistant-dimension-mode'),
+                            captionPositioned: caption?.getAttribute(
+                                'data-image-assistant-caption-positioned'
+                            ) === 'true',
+                            naturalWidth: image.naturalWidth,
+                            naturalHeight: image.naturalHeight
+                        };
+                    };
+
+                    const initialDimension = inspectDimension();
+                    const cmContent = container.querySelector('.cm-content');
+                    const originalContentStyle = cmContent?.getAttribute('style') ?? null;
+                    if (cmContent) {
+                        cmContent.style.width = '360px';
+                        cmContent.style.maxWidth = '360px';
+                    }
+                    application.workspace.trigger('layout-change');
+                    window.dispatchEvent(new Event('resize'));
+                    await sleep(900);
+                    const narrowDimension = inspectDimension();
+
+                    if (cmContent) {
+                        if (originalContentStyle === null) cmContent.removeAttribute('style');
+                        else cmContent.setAttribute('style', originalContentStyle);
+                    }
+                    const acceptanceFile = application.vault.getAbstractFileByPath(
+                        ${JSON.stringify(notePath)}
+                    );
+                    if (acceptanceFile) {
+                        await leaf.setViewState({
+                            type: 'markdown',
+                            state: { file: acceptanceFile.path, mode: 'source', source: false },
+                            active: true
+                        });
+                        await sleep(350);
+                        await leaf.setViewState({
+                            type: 'markdown',
+                            state: { file: file.path, mode: 'source', source: false },
+                            active: true
+                        });
+                        await sleep(1100);
+                        plugin.imageStateManager?.refreshAllImages();
+                        plugin.imageCaption?.refreshAllViews();
+                    }
+                    const returnedDimension = inspectDimension();
+                    await sleep(1500);
+                    const settledDimension = inspectDimension();
+
                     await leaf.setViewState({
                         type: 'markdown',
                         state: { file: file.path, mode: 'source', source: true },
@@ -597,17 +687,23 @@ async function main() {
                     });
                     await sleep(400);
                     const sourceVisualNodes = leaf.view.containerEl.querySelectorAll(
-                        '[data-image-assistant-layout-owner], .image-assistant-live-preview-caption'
+                        '[data-image-assistant-layout-owner], [data-image-assistant-dimension-owner], '
+                        + '.image-assistant-live-preview-caption'
                     ).length;
                     return {
                         imageCount: images.length,
                         captionCount: captions.length,
                         rendered,
+                        initialDimension,
+                        narrowDimension,
+                        returnedDimension,
+                        settledDimension,
                         sourceVisualNodes
                     };
                 } finally {
                     leaf?.detach?.();
                     if (file) await application.vault.delete(file, true);
+                    if (imageFile) await application.vault.delete(imageFile, true);
                 }
 
                 function getAncestors(node) {
@@ -621,14 +717,37 @@ async function main() {
                 }
             })()`);
             const alignments = livePreviewAlignment.rendered?.map(item => item.alignment) ?? [];
-            if (livePreviewAlignment.imageCount !== 3
-                || livePreviewAlignment.captionCount !== 3
-                || alignments.join(',') !== 'left,right,center'
+            const validDimension = value => value
+                && value.imageWidth > 0
+                && value.imageHeight > 0
+                && value.dimensionMode === 'width'
+                && value.captionPositioned
+                && value.widthError <= 2
+                && value.ratioError !== null
+                && value.ratioError <= 1
+                && value.captionLeftError !== null
+                && value.captionLeftError <= 1
+                && value.captionWidthError !== null
+                && value.captionWidthError <= 1;
+            const geometryChanged = livePreviewAlignment.initialDimension
+                && livePreviewAlignment.narrowDimension
+                && (Math.abs(livePreviewAlignment.initialDimension.imageLeft
+                    - livePreviewAlignment.narrowDimension.imageLeft) > 1
+                    || Math.abs(livePreviewAlignment.initialDimension.imageWidth
+                        - livePreviewAlignment.narrowDimension.imageWidth) > 1);
+            if (livePreviewAlignment.imageCount !== 4
+                || livePreviewAlignment.captionCount !== 4
+                || alignments.join(',') !== 'center,left,right,center'
                 || livePreviewAlignment.rendered.some(item => item.ownerCount !== 1
                     || item.captionAlignment !== item.alignment
                     || !item.horizontalBound
                     || !item.captionGeometry
                     || !item.finiteBounds)
+                || !validDimension(livePreviewAlignment.initialDimension)
+                || !validDimension(livePreviewAlignment.narrowDimension)
+                || !validDimension(livePreviewAlignment.returnedDimension)
+                || !validDimension(livePreviewAlignment.settledDimension)
+                || !geometryChanged
                 || livePreviewAlignment.sourceVisualNodes !== 0) {
                 failures.push(`Live Preview alignment smoke failed: ${JSON.stringify(livePreviewAlignment)}`);
             }

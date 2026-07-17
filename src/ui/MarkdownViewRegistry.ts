@@ -27,17 +27,19 @@ export function getMarkdownViewMode(view: MarkdownView): MarkdownViewModeType | 
 
 export function collectUsableMarkdownViews(app: App): MarkdownView[] {
     const views: MarkdownView[] = [];
+    const workspace = app?.workspace;
+    if (!workspace) return views;
     const add = (candidate: unknown): void => {
         if (isUsableMarkdownView(candidate) && !views.includes(candidate)) views.push(candidate);
     };
 
     try {
-        for (const leaf of app.workspace.getLeavesOfType?.("markdown") ?? []) add(leaf?.view);
+        for (const leaf of workspace.getLeavesOfType?.("markdown") ?? []) add(leaf?.view);
     } catch {
         // A workspace transition can temporarily make leaf enumeration unavailable.
     }
     try {
-        add(app.workspace.getActiveViewOfType?.(MarkdownView));
+        add(workspace.getActiveViewOfType?.(MarkdownView));
     } catch {
         // The next workspace event will retry the refresh.
     }

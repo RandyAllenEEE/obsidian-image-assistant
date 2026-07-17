@@ -29,24 +29,24 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
     vi.spyOn(LinkFormatter.prototype as any, 'getEditorMaxWidth').mockReturnValue(800);
   });
 
-  it('20.1 Width (pixels) maintain aspect: 1000x800 → |500x400', async () => {
+  it('20.1 Width (pixels) uses intrinsic height: 1000x800 → |500', async () => {
     const preset: NonDestructiveResizePreset = {
       name: 'W500', resizeDimension: 'width', width: 500,
       resizeScaleMode: 'auto', respectEditorMaxWidth: true,
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    expect(sizeSpec).toBe('500x400');
+    expect(sizeSpec).toBe('500');
   });
 
-  it('20.2 Height (percentage) maintain aspect: 50% of 1000x800 → |500x400', async () => {
+  it('20.2 Height (percentage) uses intrinsic width: 50% of 1000x800 → |x400', async () => {
     const preset: NonDestructiveResizePreset = {
       name: 'H50%', resizeDimension: 'height', height: 50,
       resizeScaleMode: 'auto', respectEditorMaxWidth: true,
       maintainAspectRatio: true, resizeUnits: 'percentage'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    expect(sizeSpec).toBe('500x400');
+    expect(sizeSpec).toBe('x400');
   });
 
   it('20.3 Both (custom) no aspect → exactly |300x100', async () => {
@@ -76,7 +76,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 2000, 1000);
-    expect(sizeSpec).toBe('1000x500');
+    expect(sizeSpec).toBe('1000');
   });
 
   it('20.5 Longest edge 1000 maintain aspect → 1000x2000 → |500x1000', async () => {
@@ -86,7 +86,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 2000);
-    expect(sizeSpec).toBe('500x1000');
+    expect(sizeSpec).toBe('x1000');
   });
 
   it('20.6 Shortest edge 500 maintain aspect → 2000x1000 → |1000x500', async () => {
@@ -96,7 +96,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 2000, 1000);
-    expect(sizeSpec).toBe('1000x500');
+    expect(sizeSpec).toBe('x500');
   });
 
   it('20.6 Shortest edge 500 maintain aspect → 1000x2000 → |500x1000', async () => {
@@ -106,7 +106,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 2000);
-    expect(sizeSpec).toBe('500x1000');
+    expect(sizeSpec).toBe('500');
   });
 
   it('20.8 Editor max width (pixels): editor=800, value=400 → |400x320', async () => {
@@ -116,7 +116,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    expect(sizeSpec).toBe('400x320');
+    expect(sizeSpec).toBe('400');
   });
 
   it('20.9 Editor max width (percentage): editor=800, value=50% → |400x320', async () => {
@@ -126,7 +126,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'percentage'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    expect(sizeSpec).toBe('400x320');
+    expect(sizeSpec).toBe('400');
   });
 
   it('20.11 Scale mode reduce clamps width above original', async () => {
@@ -136,8 +136,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    // Width clamped to original 1000, height 800
-    expect(sizeSpec).toBe('1000x800');
+    expect(sizeSpec).toBe('1000');
   });
 
   it('20.13 None → empty string', async () => {
@@ -151,24 +150,24 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
     expect(out).toBe('![[/img/p.png]]');
   });
 
-  it('20.7 Original width maintainAspectRatio=true yields original WxH', async () => {
+  it('20.7 Original width emits only the original width', async () => {
     const preset: NonDestructiveResizePreset = {
       name: 'Original Width keep aspect', resizeDimension: 'original-width',
       resizeScaleMode: 'auto', respectEditorMaxWidth: false,
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    expect(sizeSpec).toBe('1000x800');
+    expect(sizeSpec).toBe('1000');
   });
 
-  it('20.7 Original width maintainAspectRatio=false emits both dimensions per implementation', async () => {
+  it('20.7 Original width remains single-axis when the legacy aspect toggle is off', async () => {
     const preset: NonDestructiveResizePreset = {
       name: 'Original Width no aspect', resizeDimension: 'original-width',
       resizeScaleMode: 'auto', respectEditorMaxWidth: false,
       maintainAspectRatio: false, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    expect(sizeSpec).toBe('1000x800');
+    expect(sizeSpec).toBe('1000');
   });
 
   it('20.10 Respect editor constraint clamps width to editor and recomputes height', async () => {
@@ -179,7 +178,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    expect(sizeSpec).toBe('800x640');
+    expect(sizeSpec).toBe('800');
   });
 
   it('20.11 Scale mode enlarge raises below-original width to original', async () => {
@@ -189,7 +188,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    expect(sizeSpec).toBe('1000x800');
+    expect(sizeSpec).toBe('1000');
   });
 
   it('20.11 Scale mode auto leaves width unchanged', async () => {
@@ -199,7 +198,7 @@ describe('Non-destructive resize parameter computation (via LinkFormatter)', () 
       maintainAspectRatio: true, resizeUnits: 'pixels'
     };
     const sizeSpec = await params(preset, 'img/p.png', 1000, 800);
-    expect(sizeSpec).toBe('500x400');
+    expect(sizeSpec).toBe('500');
   });
 
   it('20.14 Output format supports missing side (width only → "|Wx")', async () => {

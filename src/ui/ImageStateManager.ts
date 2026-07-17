@@ -1,5 +1,5 @@
 
-import { App, debounce, editorLivePreviewField, MarkdownView } from 'obsidian';
+import { App, editorLivePreviewField, MarkdownView } from 'obsidian';
 import ImageConverterPlugin from '../main';
 import { ImageAlignment } from './ImageAlignment';
 import { ImageResizer } from './ImageResizer';
@@ -10,18 +10,20 @@ import { isElementNode, isHtmlImageElement } from './caption/CaptionDomUtils';
 import { ImageViewContextResolver } from './contextMenu/utils/ImageViewContextResolver';
 import { resolveImageLayout } from './ImageLayoutResolver';
 import {
+    IMAGE_LAYOUT_KEY_ATTRIBUTE,
     IMAGE_SOURCE_KEY_ATTRIBUTE,
     type ImageSourceIndex
 } from '../utils/RefinedImageUtils';
-import {
-    clearLivePreviewCaptionGeometry,
-    syncLivePreviewCaptionGeometry
-} from './caption/LivePreviewCaptionGeometry';
+import { getImageLayoutKey } from '../utils/MarkdownSourceContext';
 import { collectUsableMarkdownViews, getMarkdownViewMode } from './MarkdownViewRegistry';
 import {
     LivePreviewImageLayoutCoordinator,
     type LivePreviewLayoutScope
 } from './caption/LivePreviewImageLayoutCoordinator';
+import {
+    ImageDimensionRenderer,
+    resolveImageDimensions
+} from './ImageDimensions';
 
 
 export interface ImageState {
@@ -30,9 +32,11 @@ export interface ImageState {
     pipeAlignment?: AlignType;
     standalone?: boolean;
     sourceKey?: string;
+    layoutKey?: string;
     layoutScope?: LivePreviewLayoutScope;
     width?: number | null;
     height?: number | null;
+    size?: PipeSyntaxData['size'];
     caption?: string;
 }
 
@@ -52,6 +56,8 @@ export class ImageStateManager {
     private started = false;
     private readingLinkTexts = new WeakMap<HTMLImageElement, string>();
     private readingContexts = new WeakMap<HTMLImageElement, ReadingImageContext>();
+    private pendingResolutionAttempts = new WeakMap<HTMLImageElement, number>();
+    private readonly dimensions = new ImageDimensionRenderer();
 
     // Delegates
     public alignment: ImageAlignment;
@@ -92,10 +98,9 @@ export class ImageStateManager {
                 const workspace = this.app.workspace as WorkspaceWithLayoutState;
                 if (!workspace.layoutReady) return;
 
-                this.schedule(() => {
-                    this.syncObservers();
-                    this.refreshAllImages();
-                }, 200);
+                this.syncObservers();
+                this.refreshAllImages();
+                this.scheduleAllLayouts(3);
             })
         );
         this.plugin.registerEvent(
@@ -118,6 +123,30 @@ export class ImageStateManager {
         );
     }
 
+    public handleLivePreviewEditorUpdate(
+        editorDom: HTMLElement,
+        update: { reconcileSource: boolean; geometryChanged: boolean }
+    ): void {
+        if (this.unloaded) return;
+        const entry = [...this.layoutCoordinators.entries()].find(([view]) =>
+            view.contentEl.contains(editorDom)
+        );
+        if (!entry) return;
+        const [view, coordinator] = entry;
+        if (update.geometryChanged) coordinator.schedule(3);
+        if (!update.reconcileSource) return;
+
+        const sourceIndex = this.viewContextResolver.prepareEditor(view.editor);
+        coordinator.reconcileSourceKeys(new Set(
+            sourceIndex.descriptors.map(getImageLayoutKey)
+        ));
+
+        this.queueImages(
+            view,
+            Array.from(view.contentEl.querySelectorAll('img')).filter(isHtmlImageElement)
+        );
+    }
+
     private syncObservers(): void {
         if (this.unloaded) return;
 
@@ -134,8 +163,11 @@ export class ImageStateManager {
                 this.scheduledViews.delete(view);
                 if (getMarkdownViewMode(view) !== 'preview') {
                     this.alignment?.cleanup(view.contentEl);
+                    this.dimensions.cleanup(view.contentEl);
                     view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
                         .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
+                    view.contentEl.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
+                        .forEach(element => element.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE));
                 }
             }
         }
@@ -144,8 +176,11 @@ export class ImageStateManager {
             if (!this.isLivePreview(view)) {
                 if (getMarkdownViewMode(view) !== 'preview') {
                     this.alignment?.cleanup(view.contentEl);
+                    this.dimensions.cleanup(view.contentEl);
                     view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
                         .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
+                    view.contentEl.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
+                        .forEach(element => element.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE));
                 }
                 continue;
             }
@@ -209,11 +244,11 @@ export class ImageStateManager {
             });
             mutation.removedNodes.forEach(node => {
                 if (isHtmlImageElement(node)) {
-                    this.layoutCoordinators.get(view)?.unregisterImage(node);
+                    this.layoutCoordinators.get(view)?.detachImage(node);
                 } else if (isElementNode(node)) {
                     node.querySelectorAll('img').forEach(image => {
                         if (isHtmlImageElement(image)) {
-                            this.layoutCoordinators.get(view)?.unregisterImage(image);
+                            this.layoutCoordinators.get(view)?.detachImage(image);
                         }
                     });
                 }
@@ -269,7 +304,12 @@ export class ImageStateManager {
         }
     }
 
-    public refreshAllImages = debounce(() => {
+    public refreshAllImages = (): void => {
+        if (this.unloaded) return;
+        this.performRefreshAllImages();
+    };
+
+    private performRefreshAllImages(): void {
         // Extra safety check for layout readiness
         const workspace = this.app.workspace as WorkspaceWithLayoutState;
         if (workspace.layoutReady === false) return;
@@ -292,14 +332,16 @@ export class ImageStateManager {
                         this.processImage(img, sourceIndex);
                     } else {
                         this.alignment.clearImage(img);
+                        this.dimensions.clearImage(img);
                         img.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
+                        img.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE);
                         this.caption.removeImage?.(img);
                     }
                 }
             });
         }
         this.syncObservers();
-    }, 300, true);
+    }
 
     /**
      * Coordinator method: Gets state from markdown and calls delegates to apply it.
@@ -315,36 +357,43 @@ export class ImageStateManager {
             this.processingImages.add(img);
 
             // 2. Get State
-            const state = this.getImageState(img, sourceIndex);
-            if (!state) {
-                this.clearCaptionGeometryForImage(img);
+            const resolution = this.resolveImageState(img, sourceIndex);
+            if (resolution.status === 'pending') {
+                const owner = this.viewContextResolver.resolveOwner(img);
+                if (owner) {
+                    this.layoutCoordinators.get(owner.view)?.schedule(3);
+                    const attempts = this.pendingResolutionAttempts.get(img) ?? 0;
+                    if (attempts < 3) {
+                        this.pendingResolutionAttempts.set(img, attempts + 1);
+                        this.schedule(() => this.queueImages(owner.view, [img]), 16);
+                    }
+                }
+                return;
+            }
+            this.pendingResolutionAttempts.delete(img);
+            if (resolution.status === 'absent') {
                 this.unregisterLivePreviewLayout(img);
                 this.alignment.clearImage(img);
+                this.dimensions.clearImage(img);
                 img.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
+                img.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE);
                 this.caption.removeImage?.(img);
                 return;
             }
+            const state = resolution.state;
 
             const layout = resolveImageLayout(
                 state.pipeAlignment ?? this.toPipeAlignment(state.align),
                 this.plugin.settings.alignment,
                 state.standalone ?? true
             );
-            this.alignment.applyLayout(img, layout, {
-                width: state.width?.toString(),
-                height: state.height?.toString()
-            });
+            this.alignment.applyLayout(img, layout);
+            this.dimensions.apply(img, resolveImageDimensions(state.size));
 
-            // 4. Delegate: Size
-            if ((state.width || state.height) && this.resizer) {
-                this.resizer.applySize(img, state.width ?? undefined, state.height ?? undefined);
-            }
-
-            if (state.sourceKey) {
+            if (state.layoutKey) {
                 const owner = this.viewContextResolver.resolveOwner(img);
                 if (owner) {
-                    syncLivePreviewCaptionGeometry(owner.view.contentEl, img, state.sourceKey);
-                    this.layoutCoordinators.get(owner.view)?.registerImage(img, state.sourceKey, {
+                    this.layoutCoordinators.get(owner.view)?.registerImage(img, state.layoutKey, {
                         standalone: state.standalone ?? true,
                         scope: state.layoutScope ?? 'root'
                     });
@@ -401,6 +450,7 @@ export class ImageStateManager {
             ?? pipeSyntaxParser.parsePipeAttributes(img.getAttribute('alt') || '', true, 'display');
         if (!parsed) {
             this.alignment.clearImage(img);
+            this.dimensions.clearImage(img);
             this.caption.removeImage?.(img);
             return;
         }
@@ -412,15 +462,8 @@ export class ImageStateManager {
             this.plugin.settings.alignment,
             standalone
         );
-        this.alignment.applyLayout(img, layout, {
-            width: state.width?.toString(),
-            height: state.height?.toString()
-        });
-
-        // 5. Delegate: Size
-        if ((state.width || state.height) && this.resizer) {
-            this.resizer.applySize(img, state.width ?? undefined, state.height ?? undefined);
-        }
+        this.alignment.applyLayout(img, layout);
+        this.dimensions.apply(img, resolveImageDimensions(state.size));
 
         this.caption.renderImage(img, linkText
             ? { linkText, ...(descriptor ? { descriptor } : {}) }
@@ -460,6 +503,7 @@ export class ImageStateManager {
             standalone,
             width: parsed.size?.width,
             height: parsed.size?.height,
+            size: parsed.size ? { ...parsed.size } : undefined,
             caption: parsed.alt ? parsed.alt.replace(/\\\|/g, '|') : undefined
         };
     }
@@ -468,22 +512,35 @@ export class ImageStateManager {
      * Reads the current state of the image from the Markdown source.
      */
     public getImageState(img: HTMLImageElement, sourceIndex?: ImageSourceIndex): ImageState | null {
-        const context = this.viewContextResolver.resolve(img, sourceIndex);
-        const linkText = context?.match.linkText;
-        if (!linkText) return null;
+        const resolution = this.resolveImageState(img, sourceIndex);
+        return resolution.status === 'resolved' ? resolution.state : null;
+    }
+
+    private resolveImageState(
+        img: HTMLImageElement,
+        sourceIndex?: ImageSourceIndex
+    ): { status: 'resolved'; state: ImageState } | { status: 'pending' } | { status: 'absent' } {
+        const resolution = this.viewContextResolver.resolveDetailed(img, sourceIndex);
+        if (resolution.status !== 'resolved') return resolution;
+        const context = resolution.context;
+        const linkText = context.match.linkText;
 
         const parsed = context.match.descriptor.pipeData
             ?? pipeSyntaxParser.parsePipeSyntax(linkText, { attributeMode: 'display' });
-        if (!parsed) return null;
+        if (!parsed) return { status: 'absent' };
 
         if (img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE) !== context.match.sourceKey) {
             img.setAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE, context.match.sourceKey);
         }
-        return {
+        if (img.getAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE) !== context.match.layoutKey) {
+            img.setAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE, context.match.layoutKey);
+        }
+        return { status: 'resolved', state: {
             ...this.mapPipeDataToState(parsed, context.match.descriptor.standalone),
             sourceKey: context.match.sourceKey,
+            layoutKey: context.match.layoutKey,
             layoutScope: context.match.descriptor.layoutScope
-        };
+        } };
     }
 
     /**
@@ -574,15 +631,21 @@ export class ImageStateManager {
         for (const [view, observer] of this.observers) {
             observer.disconnect();
             this.alignment?.cleanup(view.contentEl);
+            this.dimensions.cleanup(view.contentEl);
             view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
                 .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
+            view.contentEl.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
+                .forEach(element => element.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE));
         }
         for (const leaf of this.app.workspace?.getLeavesOfType?.('markdown') ?? []) {
             const contentEl = (leaf.view as MarkdownView)?.contentEl;
             if (!contentEl) continue;
             this.alignment?.cleanup(contentEl);
+            this.dimensions.cleanup(contentEl);
             contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
                 .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
+            contentEl.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
+                .forEach(element => element.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE));
         }
         this.observers.clear();
         this.layoutCoordinators.forEach(coordinator => coordinator.destroy());
@@ -594,7 +657,7 @@ export class ImageStateManager {
         this.processingImages.clear();
         this.readingLinkTexts = new WeakMap<HTMLImageElement, string>();
         this.readingContexts = new WeakMap<HTMLImageElement, ReadingImageContext>();
-        (this.refreshAllImages as typeof this.refreshAllImages & { cancel?: () => void }).cancel?.();
+        this.pendingResolutionAttempts = new WeakMap<HTMLImageElement, number>();
     }
 
     private toPipeAlignment(align: ImageState['align']): AlignType {
@@ -611,13 +674,6 @@ export class ImageStateManager {
             || isElementNode(node)
                 && node.getAttribute('data-image-assistant-caption-renderer') === 'dom'
         );
-    }
-
-    private clearCaptionGeometryForImage(img: HTMLImageElement): void {
-        const sourceKey = img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
-        if (!sourceKey) return;
-        const owner = this.viewContextResolver.resolveOwner(img);
-        if (owner) clearLivePreviewCaptionGeometry(owner.view.contentEl, sourceKey);
     }
 
     private unregisterLivePreviewLayout(img: HTMLImageElement): void {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ImageStateManager } from '../../../src/ui/ImageStateManager';
 import { ImageAlignment } from '../../../src/ui/ImageAlignment';
 import {
+  getImageLayoutKey,
   getImageSourceDescriptors,
   getImageSourceKey
 } from '../../../src/utils/MarkdownSourceContext';
@@ -22,9 +23,6 @@ function makeManager(app: any = {}) {
     cleanup: vi.fn(),
     applyAlignmentToImage: vi.fn(),
     ensureReadingModeLayout: vi.fn()
-  };
-  (manager as any).resizer = {
-    applySize: vi.fn()
   };
   (manager as any).caption = {
     renderImage: vi.fn(),
@@ -156,6 +154,10 @@ describe('ImageStateManager pipe syntax integration', () => {
   it('clears stale layout in Source Mode when Live Preview is not explicitly enabled', () => {
     const contentEl = document.createElement('div');
     const image = contentEl.appendChild(document.createElement('img'));
+    image.style.width = '500px';
+    image.style.height = 'auto';
+    image.setAttribute('data-image-assistant-dimension-owner', 'true');
+    image.setAttribute('data-image-assistant-dimension-mode', 'width');
     const view = {
       contentEl,
       getMode: () => 'source',
@@ -178,6 +180,9 @@ describe('ImageStateManager pipe syntax integration', () => {
 
     expect(processImage).not.toHaveBeenCalled();
     expect((manager as any).alignment.clearImage).toHaveBeenCalledWith(image);
+    expect(image.style.width).toBe('');
+    expect(image.style.height).toBe('');
+    expect(image.hasAttribute('data-image-assistant-dimension-owner')).toBe(false);
   });
 
   it('clears alignment delegates when alignment is disabled', () => {
@@ -192,10 +197,9 @@ describe('ImageStateManager pipe syntax integration', () => {
       alignment: null,
       wrap: false,
       source: 'none'
-    }, {
-      width: '320',
-      height: '200'
     });
+    expect(img.style.width).toBe('320px');
+    expect(img.style.height).toBe('200px');
   });
 
   it('maps reading-mode pipe syntax into alignment, size, and caption delegates', () => {
@@ -209,11 +213,9 @@ describe('ImageStateManager pipe syntax integration', () => {
       alignment: 'left',
       wrap: true,
       source: 'pipe'
-    }, {
-      width: '320',
-      height: '200'
     });
-    expect((manager as any).resizer.applySize).toHaveBeenCalledWith(img, 320, 200);
+    expect(img.style.width).toBe('320px');
+    expect(img.style.height).toBe('200px');
     expect((manager as any).caption.renderImage).toHaveBeenCalledWith(img, { captionText: 'Caption' });
   });
 
@@ -228,11 +230,9 @@ describe('ImageStateManager pipe syntax integration', () => {
       alignment: 'center',
       wrap: false,
       source: 'image-default'
-    }, {
-      width: '640',
-      height: undefined
     });
-    expect((manager as any).resizer.applySize).toHaveBeenCalledWith(img, 640, undefined);
+    expect(img.style.width).toBe('640px');
+    expect(img.style.height).toBe('auto');
     expect((manager as any).caption.renderImage).toHaveBeenCalledWith(img, { captionText: 'Caption' });
   });
 
@@ -247,10 +247,9 @@ describe('ImageStateManager pipe syntax integration', () => {
       alignment: 'right',
       wrap: false,
       source: 'pipe'
-    }, {
-      width: '300',
-      height: undefined
     });
+    expect(img.style.width).toBe('300px');
+    expect(img.style.height).toBe('auto');
     expect((manager as any).caption.renderImage).toHaveBeenCalledWith(img, { captionText: 'Caption' });
   });
 
@@ -268,10 +267,9 @@ describe('ImageStateManager pipe syntax integration', () => {
       alignment: 'right',
       wrap: false,
       source: 'pipe'
-    }, {
-      width: '300',
-      height: undefined
     });
+    expect(img.style.width).toBe('300px');
+    expect(img.style.height).toBe('auto');
     expect((manager as any).caption.renderImage).toHaveBeenCalledWith(img, {
       linkText: '![[https://cdn.example.com/photo.webp|right|300|Exact caption]]'
     });
@@ -323,11 +321,11 @@ describe('ImageStateManager pipe syntax integration', () => {
       alignment: 'right',
       wrap: false,
       source: 'pipe'
-    }, { width: undefined, height: undefined });
+    });
     expect(img.getAttribute('data-image-assistant-source-key')).toContain(':1:https://example.com/image?id=1');
   });
 
-  it('fails closed for repeated targets when CodeMirror cannot provide a source offset', () => {
+  it('preserves the last layout while a repeated target is temporarily unresolved', () => {
     const lines = [
       '![[https://example.com/image|First|left]]',
       '![[https://example.com/image|Second|right]]'
@@ -354,30 +352,38 @@ describe('ImageStateManager pipe syntax integration', () => {
     manager.processImage(img);
 
     expect((manager as any).alignment.applyLayout).not.toHaveBeenCalled();
-    expect((manager as any).alignment.clearImage).toHaveBeenCalledWith(img);
+    expect((manager as any).alignment.clearImage).not.toHaveBeenCalled();
   });
 
   it('processes a network image that was rendered before its Live Preview observer starts', async () => {
     const source = '![GFL current droop|center|800](https://example.com/gfl?id=1)';
     const contentEl = document.createElement('div');
+    document.body.appendChild(contentEl);
     const img = contentEl.appendChild(document.createElement('img'));
     img.src = 'https://example.com/gfl?id=1';
-    const sourceKey = getImageSourceKey(getImageSourceDescriptors(source)[0]);
+    const descriptor = getImageSourceDescriptors(source)[0];
+    const sourceKey = getImageSourceKey(descriptor);
+    const layoutKey = getImageLayoutKey(descriptor);
     const caption = contentEl.appendChild(document.createElement('span'));
     caption.className = 'image-assistant-caption image-assistant-live-preview-caption';
     caption.setAttribute('data-image-assistant-caption-renderer', 'codemirror');
     caption.setAttribute('data-image-assistant-source-key', sourceKey);
+    caption.setAttribute('data-image-assistant-layout-key', layoutKey);
     caption.setAttribute('data-image-assistant-caption-width', 'auto');
-    caption.setAttribute('data-image-assistant-caption-explicit-width', 'true');
     caption.setAttribute('data-image-assistant-caption-wrap', 'false');
     vi.spyOn(img, 'getBoundingClientRect').mockReturnValue({
       left: 300, width: 800, right: 1100, top: 0, bottom: 100,
       height: 100, x: 300, y: 0, toJSON: () => ({})
     } as DOMRect);
-    vi.spyOn(caption, 'getBoundingClientRect').mockReturnValue({
-      left: 100, width: 800, right: 900, top: 100, bottom: 130,
-      height: 30, x: 100, y: 100, toJSON: () => ({})
-    } as DOMRect);
+    vi.spyOn(caption, 'getBoundingClientRect').mockImplementation(() => {
+      const offset = Number.parseFloat(
+        caption.style.getPropertyValue('--image-assistant-caption-offset')
+      ) || 0;
+      return {
+        left: 100 + offset, width: 800, right: 900 + offset, top: 100, bottom: 130,
+        height: 30, x: 100 + offset, y: 100, toJSON: () => ({})
+      } as DOMRect;
+    });
     const editor = {
       getValue: vi.fn(() => source),
       getLine: vi.fn(() => source),
@@ -406,6 +412,8 @@ describe('ImageStateManager pipe syntax integration', () => {
 
     manager.start();
     await Promise.resolve();
+    const coordinator = [...(manager as any).layoutCoordinators.values()][0];
+    (coordinator as any).flush();
 
     expect(img.style.width).toBe('800px');
     expect(img.getAttribute('data-image-assistant-align')).toBe('center');
@@ -415,6 +423,7 @@ describe('ImageStateManager pipe syntax integration', () => {
     expect(caption.style.getPropertyValue('--image-assistant-caption-offset')).toBe('200px');
 
     manager.onunload();
+    contentEl.remove();
   });
 
   it('queues images already present when a new Live Preview leaf is discovered', async () => {

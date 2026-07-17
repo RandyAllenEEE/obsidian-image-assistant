@@ -31,8 +31,6 @@ export interface ImageAlignmentOptions {
 export interface ImagePositionData {
     position: HorizontalImageAlignment | 'none';
     wrap: boolean;
-    width?: string;
-    height?: string;
 }
 
 /** Owns the DOM representation of resolved image layout. */
@@ -52,19 +50,13 @@ export class ImageAlignment extends Component {
             alignment: positionData.position === 'none' ? null : positionData.position,
             wrap: positionData.position === 'none' ? false : positionData.wrap,
             source: positionData.position === 'none' ? 'none' : 'pipe'
-        }, {
-            width: positionData.width,
-            height: positionData.height
         });
     }
 
     applyLayout(
         img: HTMLImageElement,
-        layout: ResolvedImageLayout,
-        dimensions: { width?: string; height?: string } = {}
+        layout: ResolvedImageLayout
     ): HTMLElement | null {
-        this.applyDimensions(img, dimensions);
-
         const owner = layout.alignment ? this.findPreferredOwner(img) : null;
         this.clearOtherOwners(img, owner);
         if (!owner || !layout.alignment) {
@@ -190,6 +182,10 @@ export class ImageAlignment extends Component {
         }
         toggleClassIfChanged(owner, 'image-wrap', wrap);
         toggleClassIfChanged(owner, 'image-no-wrap', !wrap);
+
+        const inlineMargins = getInlineMargins(alignment, wrap);
+        setImportantPropertyIfChanged(owner, 'margin-inline-start', inlineMargins.start);
+        setImportantPropertyIfChanged(owner, 'margin-inline-end', inlineMargins.end);
     }
 
     private clearOwnerState(owner: HTMLElement): void {
@@ -212,23 +208,11 @@ export class ImageAlignment extends Component {
             owner.style.removeProperty('clear');
             owner.style.removeProperty('margin-left');
             owner.style.removeProperty('margin-right');
+            owner.style.removeProperty('margin-inline-start');
+            owner.style.removeProperty('margin-inline-end');
             if (owner.tagName === 'IMG' && owner.style.display === 'inline-block') {
                 owner.style.removeProperty('display');
             }
-        }
-    }
-
-    private applyDimensions(
-        img: HTMLImageElement,
-        dimensions: { width?: string; height?: string }
-    ): void {
-        if (dimensions.width) {
-            const width = withDefaultUnit(dimensions.width);
-            if (img.style.width !== width) img.style.width = width;
-        }
-        if (dimensions.height) {
-            const height = withDefaultUnit(dimensions.height);
-            if (img.style.height !== height) img.style.height = height;
         }
     }
 
@@ -254,10 +238,6 @@ function isHTMLElement(value: unknown): value is HTMLElement {
     return !!value && typeof value === 'object' && (value as Node).nodeType === 1;
 }
 
-function withDefaultUnit(value: string): string {
-    return /^\d+(?:\.\d+)?$/.test(value) ? `${value}px` : value;
-}
-
 function setAttributeIfChanged(element: Element, name: string, value: string): void {
     if (element.getAttribute(name) !== value) element.setAttribute(name, value);
 }
@@ -266,4 +246,28 @@ function toggleClassIfChanged(element: Element, className: string, enabled: bool
     if (element.classList.contains(className) !== enabled) {
         element.classList.toggle(className, enabled);
     }
+}
+
+function getInlineMargins(
+    alignment: HorizontalImageAlignment,
+    wrap: boolean
+): { start: string; end: string } {
+    if (wrap) {
+        return alignment === 'right'
+            ? { start: '1.5rem', end: '0' }
+            : { start: '0', end: '1.5rem' };
+    }
+    if (alignment === 'left') return { start: '0', end: 'auto' };
+    if (alignment === 'right') return { start: 'auto', end: '0' };
+    return { start: 'auto', end: 'auto' };
+}
+
+function setImportantPropertyIfChanged(
+    element: HTMLElement,
+    name: string,
+    value: string
+): void {
+    if (element.style.getPropertyValue(name) === value
+        && element.style.getPropertyPriority(name) === 'important') return;
+    element.style.setProperty(name, value, 'important');
 }

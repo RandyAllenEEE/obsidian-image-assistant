@@ -61,6 +61,24 @@ describe('LivePreviewCaptionExtension', () => {
     expect(captions[1].getAttribute('data-image-assistant-caption-align')).toBe('left');
     expect(captions[1].getAttribute('data-image-assistant-caption-wrap')).toBe('false');
     expect(captions.every(node => !!node.getAttribute('data-image-assistant-source-key'))).toBe(true);
+    expect(captions.every(node => !!node.getAttribute('data-image-assistant-layout-key'))).toBe(true);
+  });
+
+  it('keeps the layout binding stable when a caption widget is rebuilt', () => {
+    const source = '![[photo.png|Old caption|center|500]]';
+    const { parent, view } = createFixture(source);
+    views.push(view);
+    const before = parent.querySelector<HTMLElement>('.image-assistant-live-preview-caption')!;
+    const layoutKey = before.getAttribute('data-image-assistant-layout-key');
+    const sourceKey = before.getAttribute('data-image-assistant-source-key');
+    const from = source.indexOf('Old caption');
+
+    view.dispatch({ changes: { from, to: from + 'Old caption'.length, insert: 'Updated caption' } });
+
+    const after = parent.querySelector<HTMLElement>('.image-assistant-live-preview-caption')!;
+    expect(after.textContent).toBe('Updated caption');
+    expect(after.getAttribute('data-image-assistant-layout-key')).toBe(layoutKey);
+    expect(after.getAttribute('data-image-assistant-source-key')).not.toBe(sourceKey);
   });
 
   it('honors skipped extensions and refreshes when caption settings change', () => {

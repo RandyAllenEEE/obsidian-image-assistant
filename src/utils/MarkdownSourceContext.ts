@@ -328,6 +328,13 @@ export function getImageSourceKey(descriptor: ImageSourceDescriptor): string {
     ].join(':');
 }
 
+export type ImageLayoutKey = string;
+
+/** Stable across edits before an image; used only for non-destructive DOM layout binding. */
+export function getImageLayoutKey(descriptor: ImageSourceDescriptor): ImageLayoutKey {
+    return `${descriptor.ordinal}:${descriptor.normalizedTarget}`;
+}
+
 export function getContextualReferenceLinks(
     text: string,
     options: MarkdownSourceScanOptions = {}

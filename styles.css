@@ -2267,6 +2267,11 @@
 
 
 /* ---------------------- IMAGE ALIGNMENT --------------------------- */
+img[data-image-assistant-dimension-owner="true"] {
+    box-sizing: border-box;
+    max-width: 100%;
+}
+
 /* A single plugin-owned element controls alignment for each image. */
 [data-image-assistant-layout-owner="true"] {
     box-sizing: border-box;
@@ -2363,16 +2368,22 @@ body:not(.image-assistant-wrap-in-edit-mode) .markdown-source-view [data-image-a
 .image-assistant-live-preview-caption[data-image-assistant-caption-align="left"] {
     margin-left: 0 !important;
     margin-right: auto !important;
+    margin-inline-start: 0 !important;
+    margin-inline-end: auto !important;
 }
 
 .image-assistant-live-preview-caption[data-image-assistant-caption-align="center"] {
     margin-left: auto !important;
     margin-right: auto !important;
+    margin-inline-start: auto !important;
+    margin-inline-end: auto !important;
 }
 
 .image-assistant-live-preview-caption[data-image-assistant-caption-align="right"] {
     margin-left: auto !important;
     margin-right: 0 !important;
+    margin-inline-start: auto !important;
+    margin-inline-end: 0 !important;
 }
 
 /* Explicit-width widgets share the rendered image's actual coordinate space. */
@@ -2382,6 +2393,8 @@ body:not(.image-assistant-wrap-in-edit-mode) .markdown-source-view [data-image-a
     left: var(--image-assistant-caption-offset, 0px);
     margin-left: 0 !important;
     margin-right: 0 !important;
+    margin-inline-start: 0 !important;
+    margin-inline-end: 0 !important;
 }
 
 .markdown-source-view [data-image-assistant-layout-positioned="true"] {

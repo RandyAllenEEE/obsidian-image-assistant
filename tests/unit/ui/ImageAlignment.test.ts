@@ -15,18 +15,21 @@ describe("ImageAlignment", () => {
         image.src = "image.png";
         embed.appendChild(image);
 
-        alignment.applyAlignmentToImage(image, { position: "right", wrap: false, width: "320", height: "50%" });
+        alignment.applyAlignmentToImage(image, { position: "right", wrap: false });
         expect(image.classList.contains("image-position-right")).toBe(false);
-        expect(image.style.width).toBe("320px");
-        expect(image.style.height).toBe("50%");
         expect(embed.classList.contains("image-position-right")).toBe(true);
         expect(embed.classList.contains("image-no-wrap")).toBe(true);
         expect(embed.getAttribute('data-image-assistant-layout-owner')).toBe('true');
+        expect(embed.style.getPropertyValue('margin-inline-start')).toBe('auto');
+        expect(embed.style.getPropertyValue('margin-inline-end')).toBe('0');
+        expect(embed.style.getPropertyPriority('margin-inline-start')).toBe('important');
         expect(embed.querySelectorAll('[data-image-assistant-layout-owner]')).toHaveLength(0);
 
         alignment.applyAlignmentToImage(image, { position: "none", wrap: false });
         expect(image.classList.contains("image-converter-aligned")).toBe(false);
         expect(embed.classList.contains("image-converter-aligned")).toBe(false);
+        expect(embed.style.getPropertyValue('margin-inline-start')).toBe('');
+        expect(embed.style.getPropertyValue('margin-inline-end')).toBe('');
     });
 
     it("is idempotent and handles missing position data", () => {
@@ -37,7 +40,7 @@ describe("ImageAlignment", () => {
         image.style.width = "100px";
         const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-        alignment.applyAlignmentToImage(image, { position: "left", wrap: true, width: "100" });
+        alignment.applyAlignmentToImage(image, { position: "left", wrap: true });
         alignment.applyAlignmentToImage(image, undefined as any);
         expect(error).toHaveBeenCalled();
     });
@@ -64,12 +67,12 @@ describe("ImageAlignment", () => {
         embed.className = 'internal-embed image-embed';
         const image = embed.appendChild(document.createElement('img'));
         const layout = { alignment: 'center', wrap: false, source: 'image-default' } as const;
-        alignment.applyLayout(image, layout, { width: '320' });
+        alignment.applyLayout(image, layout);
         const mutations: MutationRecord[] = [];
         const observer = new MutationObserver(records => mutations.push(...records));
         observer.observe(embed, { subtree: true, attributes: true });
 
-        alignment.applyLayout(image, layout, { width: '320' });
+        alignment.applyLayout(image, layout);
         await new Promise(resolve => setTimeout(resolve, 0));
         observer.disconnect();
 

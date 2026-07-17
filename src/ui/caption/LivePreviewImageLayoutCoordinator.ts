@@ -1,8 +1,4 @@
-import { IMAGE_SOURCE_KEY_ATTRIBUTE } from '../../utils/RefinedImageUtils';
-import {
-    CAPTION_GEOMETRY_ATTRIBUTE,
-    clearLivePreviewCaptionGeometry
-} from './LivePreviewCaptionGeometry';
+import { IMAGE_LAYOUT_KEY_ATTRIBUTE } from '../../utils/RefinedImageUtils';
 import {
     IMAGE_LAYOUT_ALIGN_ATTRIBUTE,
     IMAGE_LAYOUT_OWNER_ATTRIBUTE,
@@ -16,23 +12,35 @@ export interface LivePreviewTrackedImageOptions {
     scope: LivePreviewLayoutScope;
 }
 
+export interface LivePreviewGeometrySnapshot {
+    imageLeft: number;
+    imageWidth: number;
+}
+
+export const CAPTION_GEOMETRY_ATTRIBUTE = 'data-image-assistant-caption-positioned';
+
 const LAYOUT_POSITIONED_ATTRIBUTE = 'data-image-assistant-layout-positioned';
 const LAYOUT_OFFSET_PROPERTY = '--image-assistant-layout-offset';
 const CAPTION_OFFSET_PROPERTY = '--image-assistant-caption-offset';
 const CAPTION_WIDTH_PROPERTY = '--image-assistant-caption-rendered-width';
+const REQUIRED_STABLE_FRAMES = 3;
+const MAX_SETTLE_FRAMES = 12;
 
 interface TrackedImage extends LivePreviewTrackedImageOptions {
     image: HTMLImageElement;
-    sourceKey: string;
+    layoutKey: string;
 }
 
 interface GeometryMeasurement {
     tracked: TrackedImage;
     owner: HTMLElement | null;
+    ownerEligible: boolean;
     ownerOffset: number | null;
     caption: HTMLElement | null;
+    captionEligible: boolean;
     captionOffset: number | null;
-    imageWidth: number;
+    imageWidth: number | null;
+    signature: string;
 }
 
 type WindowWithDomConstructors = Window & {
@@ -40,82 +48,127 @@ type WindowWithDomConstructors = Window & {
     MutationObserver?: typeof MutationObserver;
 };
 
-/** Keeps CodeMirror-owned image and Caption geometry in the same coordinate space. */
+/** Keeps CodeMirror-owned image and Caption geometry in one coordinate space. */
 export class LivePreviewImageLayoutCoordinator {
     private readonly tracked = new Map<string, TrackedImage>();
+    private readonly lastValidGeometry = new Map<string, LivePreviewGeometrySnapshot>();
+    private readonly captionElements = new Map<string, HTMLElement>();
     private readonly observedElements = new Set<Element>();
     private readonly resizeObserver: ResizeObserver | null;
     private readonly mutationObserver: MutationObserver;
     private readonly ownerWindow: WindowWithDomConstructors;
+    private readonly ownerDocument: Document;
     private animationFrame: number | null = null;
-    private settleFrames = 0;
+    private frameCount = 0;
+    private stableFrames = 0;
+    private previousSignature = '';
     private destroyed = false;
 
-    private readonly onWindowResize = (): void => this.schedule(2);
-    private readonly onPointerMove = (event: PointerEvent): void => {
-        if (event.buttons !== 0) this.schedule(2);
+    private readonly onWindowResize = (): void => this.schedule();
+    private readonly onPointerMove = (event: PointerEvent | MouseEvent): void => {
+        if (event.buttons !== 0) this.schedule();
     };
-    private readonly onTransition = (): void => this.schedule(2);
+    private readonly onGeometryEvent = (): void => this.schedule();
+    private readonly onVisibilityChange = (): void => {
+        if (this.ownerDocument.visibilityState !== 'hidden') this.schedule();
+    };
+    private readonly onImageLoad = (event: Event): void => {
+        if (isImage(event.target)) this.schedule();
+    };
 
     constructor(private readonly root: HTMLElement) {
-        this.ownerWindow = (root.ownerDocument.defaultView ?? window) as WindowWithDomConstructors;
+        this.ownerDocument = root.ownerDocument;
+        this.ownerWindow = (this.ownerDocument.defaultView ?? window) as WindowWithDomConstructors;
         const ResizeObserverConstructor = this.ownerWindow.ResizeObserver
             ?? (typeof ResizeObserver === 'undefined' ? undefined : ResizeObserver);
         this.resizeObserver = ResizeObserverConstructor
-            ? new ResizeObserverConstructor(() => this.schedule(2))
+            ? new ResizeObserverConstructor(() => this.schedule())
             : null;
         const MutationObserverConstructor = this.ownerWindow.MutationObserver ?? MutationObserver;
         this.mutationObserver = new MutationObserverConstructor((mutations: MutationRecord[]) => {
-            if (mutations.some(mutation => mutation.type === 'childList')) this.schedule(2);
+            if (mutations.some(mutation => mutation.type === 'childList')) this.schedule();
         });
         this.mutationObserver.observe(root, { childList: true, subtree: true });
         this.observeGeometryRoots();
         this.ownerWindow.addEventListener('resize', this.onWindowResize, { passive: true });
+        this.ownerWindow.addEventListener('focus', this.onGeometryEvent, { passive: true });
         this.ownerWindow.addEventListener('pointermove', this.onPointerMove, { passive: true });
-        root.addEventListener('transitionrun', this.onTransition, { passive: true });
-        root.addEventListener('transitionend', this.onTransition, { passive: true });
+        this.ownerWindow.addEventListener('mousemove', this.onPointerMove, { passive: true });
+        this.ownerDocument.addEventListener('scroll', this.onGeometryEvent, { capture: true, passive: true });
+        this.ownerDocument.addEventListener('transitionrun', this.onGeometryEvent, { capture: true, passive: true });
+        this.ownerDocument.addEventListener('transitionend', this.onGeometryEvent, { capture: true, passive: true });
+        this.ownerDocument.addEventListener('visibilitychange', this.onVisibilityChange);
+        root.addEventListener('load', this.onImageLoad, true);
     }
 
     registerImage(
         image: HTMLImageElement,
-        sourceKey: string,
+        layoutKey: string,
         options: LivePreviewTrackedImageOptions
     ): void {
         if (this.destroyed || !this.root.contains(image)) return;
         for (const [trackedKey, previous] of this.tracked) {
-            if (trackedKey === sourceKey && previous.image !== image) {
-                this.releaseTrackedImage(previous);
+            if (trackedKey === layoutKey && previous.image !== image) {
+                this.releaseTrackedImage(previous, false);
                 this.tracked.delete(trackedKey);
-            } else if (trackedKey !== sourceKey && previous.image === image) {
+            } else if (trackedKey !== layoutKey && previous.image === image) {
+                const snapshot = this.lastValidGeometry.get(trackedKey);
+                if (snapshot) this.lastValidGeometry.set(layoutKey, snapshot);
+                this.clearCaptionForKey(trackedKey);
+                this.lastValidGeometry.delete(trackedKey);
                 this.tracked.delete(trackedKey);
             }
         }
-        this.tracked.set(sourceKey, { image, sourceKey, ...options });
+        this.tracked.set(layoutKey, { image, layoutKey, ...options });
+        setAttributeIfChanged(image, IMAGE_LAYOUT_KEY_ATTRIBUTE, layoutKey);
         this.observe(image);
         const owner = findLayoutOwner(image);
         if (owner) this.observe(owner);
         this.observeGeometryRoots();
-        this.schedule(2);
+        this.schedule();
     }
 
     unregisterImage(image: HTMLImageElement): void {
-        for (const [sourceKey, tracked] of this.tracked) {
+        for (const [layoutKey, tracked] of this.tracked) {
             if (tracked.image !== image) continue;
-            this.tracked.delete(sourceKey);
-            clearLivePreviewCaptionGeometry(this.root, sourceKey);
-            this.releaseTrackedImage(tracked);
+            this.tracked.delete(layoutKey);
+            this.lastValidGeometry.delete(layoutKey);
+            this.clearCaptionForKey(layoutKey);
+            this.releaseTrackedImage(tracked, true);
         }
         clearLayoutPosition(findLayoutOwner(image));
+        image.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE);
     }
 
-    schedule(settleFrames = 1): void {
+    /** Releases a virtualized DOM node while retaining geometry for its replacement. */
+    detachImage(image: HTMLImageElement): void {
+        for (const [layoutKey, tracked] of this.tracked) {
+            if (tracked.image !== image) continue;
+            this.tracked.delete(layoutKey);
+            this.releaseTrackedImage(tracked, true);
+        }
+        image.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE);
+    }
+
+    /** Drops retained geometry only after the source index confirms the link is gone. */
+    reconcileSourceKeys(sourceKeys: ReadonlySet<string>): void {
+        for (const [layoutKey, tracked] of [...this.tracked]) {
+            if (sourceKeys.has(layoutKey)) continue;
+            this.tracked.delete(layoutKey);
+            this.releaseTrackedImage(tracked, true);
+        }
+        for (const layoutKey of [...this.lastValidGeometry.keys()]) {
+            if (sourceKeys.has(layoutKey)) continue;
+            this.lastValidGeometry.delete(layoutKey);
+            this.clearCaptionForKey(layoutKey);
+        }
+    }
+
+    schedule(_settleFrames = REQUIRED_STABLE_FRAMES): void {
         if (this.destroyed || this.tracked.size === 0) return;
-        this.settleFrames = Math.max(this.settleFrames, settleFrames);
-        if (this.animationFrame !== null) return;
-        this.animationFrame = this.requestFrame(() => {
-            this.animationFrame = null;
-            this.flush();
-        });
+        this.frameCount = 0;
+        this.stableFrames = 0;
+        this.requestNextFrame();
     }
 
     destroy(): void {
@@ -126,23 +179,41 @@ export class LivePreviewImageLayoutCoordinator {
         this.resizeObserver?.disconnect();
         this.mutationObserver.disconnect();
         this.ownerWindow.removeEventListener('resize', this.onWindowResize);
+        this.ownerWindow.removeEventListener('focus', this.onGeometryEvent);
         this.ownerWindow.removeEventListener('pointermove', this.onPointerMove);
-        this.root.removeEventListener('transitionrun', this.onTransition);
-        this.root.removeEventListener('transitionend', this.onTransition);
+        this.ownerWindow.removeEventListener('mousemove', this.onPointerMove);
+        this.ownerDocument.removeEventListener('scroll', this.onGeometryEvent, true);
+        this.ownerDocument.removeEventListener('transitionrun', this.onGeometryEvent, true);
+        this.ownerDocument.removeEventListener('transitionend', this.onGeometryEvent, true);
+        this.ownerDocument.removeEventListener('visibilitychange', this.onVisibilityChange);
+        this.root.removeEventListener('load', this.onImageLoad, true);
         this.root.querySelectorAll<HTMLElement>(`[${LAYOUT_POSITIONED_ATTRIBUTE}]`)
             .forEach(clearLayoutPosition);
         this.root.querySelectorAll<HTMLElement>(`[${CAPTION_GEOMETRY_ATTRIBUTE}]`)
             .forEach(clearCaptionPosition);
+        this.root.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
+            .forEach(element => element.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE));
         this.tracked.clear();
+        this.lastValidGeometry.clear();
+        this.captionElements.clear();
         this.observedElements.clear();
+    }
+
+    private requestNextFrame(): void {
+        if (this.animationFrame !== null || this.destroyed) return;
+        this.animationFrame = this.requestFrame(() => {
+            this.animationFrame = null;
+            this.flush();
+        });
     }
 
     private flush(): void {
         if (this.destroyed) return;
         const measurements: GeometryMeasurement[] = [];
-        for (const [sourceKey, tracked] of this.tracked) {
+        for (const [layoutKey, tracked] of [...this.tracked]) {
             if (!tracked.image.isConnected || !this.root.contains(tracked.image)) {
-                this.tracked.delete(sourceKey);
+                this.tracked.delete(layoutKey);
+                this.releaseTrackedImage(tracked, true);
                 continue;
             }
             measurements.push(this.measure(tracked));
@@ -155,48 +226,81 @@ export class LivePreviewImageLayoutCoordinator {
         for (const measurement of measurements) {
             changed = this.applyCaptionMeasurement(measurement) || changed;
         }
+        this.pruneObservedElements();
 
-        this.settleFrames = Math.max(0, this.settleFrames - 1);
-        if (this.settleFrames > 0 || changed) {
-            const remaining = changed ? Math.max(this.settleFrames, 1) : this.settleFrames;
-            this.schedule(remaining);
+        const signature = measurements.map(measurement => measurement.signature).join('|');
+        if (!changed && signature === this.previousSignature) this.stableFrames++;
+        else this.stableFrames = 0;
+        this.previousSignature = signature;
+        this.frameCount++;
+
+        if (this.tracked.size > 0
+            && this.stableFrames < REQUIRED_STABLE_FRAMES
+            && this.frameCount < MAX_SETTLE_FRAMES) {
+            this.requestNextFrame();
         }
     }
 
     private measure(tracked: TrackedImage): GeometryMeasurement {
         const imageRect = tracked.image.getBoundingClientRect();
+        const imageValid = isPositiveFinite(imageRect.width) && Number.isFinite(imageRect.left);
+        if (imageValid) {
+            this.lastValidGeometry.set(tracked.layoutKey, {
+                imageLeft: imageRect.left,
+                imageWidth: imageRect.width
+            });
+        }
+        const geometry = imageValid
+            ? { imageLeft: imageRect.left, imageWidth: imageRect.width }
+            : this.lastValidGeometry.get(tracked.layoutKey);
+
         const owner = findLayoutOwner(tracked.image);
-        const ownerOffset = owner
-            ? this.measureOwnerOffset(owner, tracked, imageRect.width)
+        if (owner) this.observe(owner);
+        const alignment = owner?.getAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE) ?? null;
+        const wraps = owner?.getAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE) === 'true';
+        const ownerEligible = !!owner && tracked.standalone && !wraps && isAlignment(alignment);
+        const ownerOffset = ownerEligible && imageValid
+            ? this.measureOwnerOffset(owner, tracked, imageRect.width, alignment)
             : null;
-        const caption = findCaption(this.root, tracked.sourceKey);
-        if (caption) this.observe(caption);
-        const captionOffset = caption
-            ? this.measureCaptionOffset(caption, imageRect.left)
+
+        const caption = findCaption(this.root, tracked.layoutKey);
+        this.trackCaptionElement(tracked.layoutKey, caption);
+        const captionEligible = !!caption
+            && caption.getAttribute('data-image-assistant-caption-width') === 'auto'
+            && caption.getAttribute('data-image-assistant-caption-wrap') !== 'true';
+        const captionOffset = captionEligible && geometry
+            ? this.measureCaptionOffset(caption, geometry.imageLeft)
             : null;
+
         return {
             tracked,
             owner,
+            ownerEligible,
             ownerOffset,
             caption,
+            captionEligible,
             captionOffset,
-            imageWidth: imageRect.width
+            imageWidth: geometry?.imageWidth ?? null,
+            signature: [
+                tracked.layoutKey,
+                imageValid ? imageRect.left : 'pending',
+                imageValid ? imageRect.width : 'pending',
+                ownerOffset ?? 'unchanged',
+                captionOffset ?? 'unchanged'
+            ].join(':')
         };
     }
 
     private measureOwnerOffset(
         owner: HTMLElement,
         tracked: TrackedImage,
-        imageWidth: number
+        imageWidth: number,
+        alignment: 'left' | 'center' | 'right'
     ): number | null {
-        const alignment = owner.getAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE);
-        const wraps = owner.getAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE) === 'true';
-        if (!tracked.standalone || wraps || !isAlignment(alignment)) return null;
-
         const ownerRect = owner.getBoundingClientRect();
         const scopeBox = this.getScopeBox(tracked);
         if (!scopeBox || !isPositiveFinite(ownerRect.width) || !isPositiveFinite(scopeBox.width)) return null;
-        const visualWidth = isPositiveFinite(imageWidth) ? Math.min(ownerRect.width, imageWidth) : ownerRect.width;
+        const visualWidth = Math.min(ownerRect.width, imageWidth);
         const desiredLeft = alignment === 'left'
             ? scopeBox.left
             : alignment === 'right'
@@ -208,11 +312,6 @@ export class LivePreviewImageLayoutCoordinator {
     }
 
     private measureCaptionOffset(caption: HTMLElement, imageLeft: number): number | null {
-        if (caption.getAttribute('data-image-assistant-caption-width') !== 'auto'
-            || caption.getAttribute('data-image-assistant-caption-wrap') === 'true'
-            || !Number.isFinite(imageLeft)) {
-            return null;
-        }
         const captionRect = caption.getBoundingClientRect();
         const previousOffset = parsePixels(caption.style.getPropertyValue(CAPTION_OFFSET_PROPERTY));
         const baselineLeft = captionRect.left - previousOffset;
@@ -220,20 +319,20 @@ export class LivePreviewImageLayoutCoordinator {
     }
 
     private applyOwnerMeasurement(measurement: GeometryMeasurement): boolean {
-        const { owner, ownerOffset } = measurement;
-        if (!owner || ownerOffset === null) {
-            return clearLayoutPosition(owner);
-        }
+        const { owner, ownerEligible, ownerOffset } = measurement;
+        if (!owner) return false;
+        if (!ownerEligible) return clearLayoutPosition(owner);
+        if (ownerOffset === null) return false;
         let changed = setAttributeIfChanged(owner, LAYOUT_POSITIONED_ATTRIBUTE, 'true');
         changed = setPropertyIfChanged(owner, LAYOUT_OFFSET_PROPERTY, toPixels(ownerOffset)) || changed;
         return changed;
     }
 
     private applyCaptionMeasurement(measurement: GeometryMeasurement): boolean {
-        const { caption, captionOffset, imageWidth } = measurement;
-        if (!caption || captionOffset === null || !isPositiveFinite(imageWidth)) {
-            return clearCaptionPosition(caption);
-        }
+        const { caption, captionEligible, captionOffset, imageWidth } = measurement;
+        if (!caption) return false;
+        if (!captionEligible) return clearCaptionPosition(caption);
+        if (captionOffset === null || imageWidth === null || !isPositiveFinite(imageWidth)) return false;
         let changed = setAttributeIfChanged(caption, CAPTION_GEOMETRY_ATTRIBUTE, 'true');
         changed = setPropertyIfChanged(caption, CAPTION_WIDTH_PROPERTY, toPixels(imageWidth)) || changed;
         changed = setPropertyIfChanged(caption, CAPTION_OFFSET_PROPERTY, toPixels(captionOffset)) || changed;
@@ -252,7 +351,8 @@ export class LivePreviewImageLayoutCoordinator {
             ?? editor?.querySelector('.cm-content')
             ?? editor?.querySelector('.cm-contentContainer')
             ?? this.root;
-        if (!scope || (scope as Node).nodeType !== 1) return null;
+        if (!isElement(scope)) return null;
+        this.observe(scope);
         const rect = scope.getBoundingClientRect();
         const style = this.ownerWindow.getComputedStyle(scope);
         const paddingLeft = parsePixels(style.paddingLeft);
@@ -265,6 +365,8 @@ export class LivePreviewImageLayoutCoordinator {
 
     private observeGeometryRoots(): void {
         this.observe(this.root);
+        const leaf = this.root.closest('.workspace-leaf-content, .view-content, .markdown-source-view');
+        if (leaf) this.observe(leaf);
         this.root.querySelectorAll(
             '.cm-editor, .cm-scroller, .cm-sizer, .cm-contentContainer, .cm-content'
         ).forEach(element => this.observe(element));
@@ -276,9 +378,33 @@ export class LivePreviewImageLayoutCoordinator {
         this.observedElements.add(element);
     }
 
-    private releaseTrackedImage(tracked: TrackedImage): void {
+    private trackCaptionElement(layoutKey: string, caption: HTMLElement | null): void {
+        const previous = this.captionElements.get(layoutKey);
+        if (previous && previous !== caption) {
+            clearCaptionPosition(previous);
+            this.resizeObserver?.unobserve(previous);
+            this.observedElements.delete(previous);
+            this.captionElements.delete(layoutKey);
+        }
+        if (!caption) return;
+        this.captionElements.set(layoutKey, caption);
+        this.observe(caption);
+    }
+
+    private clearCaptionForKey(layoutKey: string): void {
+        const caption = this.captionElements.get(layoutKey)
+            ?? findCaption(this.root, layoutKey);
+        if (caption) {
+            clearCaptionPosition(caption);
+            this.resizeObserver?.unobserve(caption);
+            this.observedElements.delete(caption);
+        }
+        this.captionElements.delete(layoutKey);
+    }
+
+    private releaseTrackedImage(tracked: TrackedImage, clearOwner: boolean): void {
         const owner = findLayoutOwner(tracked.image);
-        clearLayoutPosition(owner);
+        if (clearOwner) clearLayoutPosition(owner);
         this.unobserveIfUnused(tracked.image, tracked);
         if (owner && owner !== tracked.image) this.unobserveIfUnused(owner, tracked);
     }
@@ -289,6 +415,14 @@ export class LivePreviewImageLayoutCoordinator {
         if (stillUsed || element === this.root) return;
         this.resizeObserver?.unobserve(element);
         this.observedElements.delete(element);
+    }
+
+    private pruneObservedElements(): void {
+        for (const element of [...this.observedElements]) {
+            if (element === this.root || element.isConnected) continue;
+            this.resizeObserver?.unobserve(element);
+            this.observedElements.delete(element);
+        }
     }
 
     private requestFrame(callback: FrameRequestCallback): number {
@@ -309,14 +443,13 @@ export class LivePreviewImageLayoutCoordinator {
 
 function findLayoutOwner(image: HTMLImageElement): HTMLElement | null {
     if (image.hasAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE)) return image;
-    const owner = image.closest<HTMLElement>(`[${IMAGE_LAYOUT_OWNER_ATTRIBUTE}]`);
-    return owner ?? image;
+    return image.closest<HTMLElement>(`[${IMAGE_LAYOUT_OWNER_ATTRIBUTE}]`) ?? image;
 }
 
-function findCaption(root: ParentNode, sourceKey: string): HTMLElement | null {
+function findCaption(root: ParentNode, layoutKey: string): HTMLElement | null {
     return Array.from(root.querySelectorAll<HTMLElement>(
         '.image-assistant-live-preview-caption[data-image-assistant-caption-renderer="codemirror"]'
-    )).find(caption => caption.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE) === sourceKey) ?? null;
+    )).find(caption => caption.getAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE) === layoutKey) ?? null;
 }
 
 function clearLayoutPosition(owner: HTMLElement | null): boolean {
@@ -333,8 +466,7 @@ function clearLayoutPosition(owner: HTMLElement | null): boolean {
     return changed;
 }
 
-function clearCaptionPosition(caption: HTMLElement | null): boolean {
-    if (!caption) return false;
+function clearCaptionPosition(caption: HTMLElement): boolean {
     let changed = false;
     if (caption.hasAttribute(CAPTION_GEOMETRY_ATTRIBUTE)) {
         caption.removeAttribute(CAPTION_GEOMETRY_ATTRIBUTE);
@@ -354,6 +486,14 @@ function isAlignment(value: string | null): value is 'left' | 'center' | 'right'
 
 function isPositiveFinite(value: number): boolean {
     return Number.isFinite(value) && value > 0;
+}
+
+function isElement(value: unknown): value is Element {
+    return !!value && typeof value === 'object' && (value as Node).nodeType === 1;
+}
+
+function isImage(value: unknown): value is HTMLImageElement {
+    return isElement(value) && value.tagName === 'IMG';
 }
 
 function parsePixels(value: string): number {

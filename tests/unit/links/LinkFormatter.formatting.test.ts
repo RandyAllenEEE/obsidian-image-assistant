@@ -91,7 +91,7 @@ describe('LinkFormatter.formatLink', () => {
     expect(out).toBe('![](/img/p%23ic%281%29.png)');
   });
 
-  it('5.9 Resize in wikilink appends |WxH', async () => {
+  it('5.9 Width-only resize in wikilink appends |W', async () => {
     const { formatter, files } = makeFormatterWithFiles(['img/pic.png']);
     const preset: NonDestructiveResizePreset = {
       name: 'Width 50',
@@ -104,10 +104,10 @@ describe('LinkFormatter.formatLink', () => {
     };
     setMockImageSize(100, 100);
     const out = await formatter.formatLink(files[0].path, 'wikilink', 'absolute', null, preset);
-    expect(out).toBe('![[/img/pic.png|50x50]]');
+    expect(out).toBe('![[/img/pic.png|50]]');
   });
 
-  it('5.10 Resize in markdown uses alt text equal to |WxH', async () => {
+  it('5.10 Width-only resize in markdown uses alt text equal to |W', async () => {
     const { formatter, files } = makeFormatterWithFiles(['img/pic.png']);
     const preset: NonDestructiveResizePreset = {
       name: 'Width 40',
@@ -120,7 +120,7 @@ describe('LinkFormatter.formatLink', () => {
     };
     setMockImageSize(100, 100);
     const out = await formatter.formatLink(files[0].path, 'markdown', 'absolute', null, preset);
-    expect(out).toBe('![|40x40](/img/pic.png)');
+    expect(out).toBe('![|40](/img/pic.png)');
   });
 
   it('5.11 No resize => empty alt for markdown', async () => {
@@ -166,6 +166,6 @@ describe('LinkFormatter.formatLink', () => {
 
     const out = await formatter.formatLink(files[0].path, 'markdown', 'absolute', null, preset);
 
-    expect(out).toBe('![|120x80](/img/pic.png)');
+    expect(out).toBe('![|x80](/img/pic.png)');
   });
 });
