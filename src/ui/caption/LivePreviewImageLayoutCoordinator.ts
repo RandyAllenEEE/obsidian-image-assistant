@@ -61,6 +61,7 @@ export class LivePreviewImageLayoutCoordinator {
     private animationFrame: number | null = null;
     private frameCount = 0;
     private stableFrames = 0;
+    private requiredStableFrames = REQUIRED_STABLE_FRAMES;
     private previousSignature = '';
     private destroyed = false;
 
@@ -164,8 +165,12 @@ export class LivePreviewImageLayoutCoordinator {
         }
     }
 
-    schedule(_settleFrames = REQUIRED_STABLE_FRAMES): void {
+    schedule(settleFrames = REQUIRED_STABLE_FRAMES): void {
         if (this.destroyed || this.tracked.size === 0) return;
+        this.requiredStableFrames = Math.max(
+            1,
+            Math.min(MAX_SETTLE_FRAMES, Math.round(settleFrames))
+        );
         this.frameCount = 0;
         this.stableFrames = 0;
         this.requestNextFrame();
@@ -210,13 +215,14 @@ export class LivePreviewImageLayoutCoordinator {
     private flush(): void {
         if (this.destroyed) return;
         const measurements: GeometryMeasurement[] = [];
+        const captionIndex = buildCaptionIndex(this.root);
         for (const [layoutKey, tracked] of [...this.tracked]) {
             if (!tracked.image.isConnected || !this.root.contains(tracked.image)) {
                 this.tracked.delete(layoutKey);
                 this.releaseTrackedImage(tracked, true);
                 continue;
             }
-            measurements.push(this.measure(tracked));
+            measurements.push(this.measure(tracked, captionIndex));
         }
 
         let changed = false;
@@ -235,13 +241,16 @@ export class LivePreviewImageLayoutCoordinator {
         this.frameCount++;
 
         if (this.tracked.size > 0
-            && this.stableFrames < REQUIRED_STABLE_FRAMES
+            && this.stableFrames < this.requiredStableFrames
             && this.frameCount < MAX_SETTLE_FRAMES) {
             this.requestNextFrame();
         }
     }
 
-    private measure(tracked: TrackedImage): GeometryMeasurement {
+    private measure(
+        tracked: TrackedImage,
+        captionIndex: ReadonlyMap<string, HTMLElement>
+    ): GeometryMeasurement {
         const imageRect = tracked.image.getBoundingClientRect();
         const imageValid = isPositiveFinite(imageRect.width) && Number.isFinite(imageRect.left);
         if (imageValid) {
@@ -263,7 +272,7 @@ export class LivePreviewImageLayoutCoordinator {
             ? this.measureOwnerOffset(owner, tracked, imageRect.width, alignment)
             : null;
 
-        const caption = findCaption(this.root, tracked.layoutKey);
+        const caption = captionIndex.get(tracked.layoutKey) ?? null;
         this.trackCaptionElement(tracked.layoutKey, caption);
         const captionEligible = !!caption
             && caption.getAttribute('data-image-assistant-caption-width') === 'auto'
@@ -447,9 +456,18 @@ function findLayoutOwner(image: HTMLImageElement): HTMLElement | null {
 }
 
 function findCaption(root: ParentNode, layoutKey: string): HTMLElement | null {
-    return Array.from(root.querySelectorAll<HTMLElement>(
+    return buildCaptionIndex(root).get(layoutKey) ?? null;
+}
+
+function buildCaptionIndex(root: ParentNode): Map<string, HTMLElement> {
+    const index = new Map<string, HTMLElement>();
+    root.querySelectorAll<HTMLElement>(
         '.image-assistant-live-preview-caption[data-image-assistant-caption-renderer="codemirror"]'
-    )).find(caption => caption.getAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE) === layoutKey) ?? null;
+    ).forEach(caption => {
+        const layoutKey = caption.getAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE);
+        if (layoutKey && !index.has(layoutKey)) index.set(layoutKey, caption);
+    });
+    return index;
 }
 
 function clearLayoutPosition(owner: HTMLElement | null): boolean {

@@ -1,8 +1,9 @@
 import { App, TFile, TFolder, normalizePath, Notice } from "obsidian";
 import ImageConverterPlugin from '../main';
 import { ReferenceLocation as VaultRefLocation } from './VaultReferenceManager';
-import { CanvasFileReference, getCanvasFileReferenceIndexDetailed, getCanvasFileReferences } from './CanvasReferenceUtils';
+import { CanvasFileReference, getCanvasFileReferenceIndexDetailed } from './CanvasReferenceUtils';
 import { ReferenceSafetyService } from './ReferenceSafetyService';
+import { REFERENCE_SAFETY_SCAN_POLICY } from './ReferenceScanPolicy';
 import { getErrorMessage } from './ErrorUtils';
 import { normalizeVaultFolderPath } from './VaultPathUtils';
 
@@ -12,7 +13,7 @@ import { normalizeVaultFolderPath } from './VaultPathUtils';
 export interface FileReferenceInfo {
     file: TFile;                    // 被检查的文件
     isReferenced: boolean;          // 是否被引用
-    references: ReferenceLocation[]; // 引用位置列表
+    references: readonly ReferenceLocation[]; // 引用位置列表
 }
 
 /**
@@ -79,24 +80,40 @@ export class UnusedFileCleaner {
         const total = filesToCheck.length;
         const unreferencedFiles: FileReferenceInfo[] = [];
         const referencedFiles: FileReferenceInfo[] = [];
+        const indexedSnapshots = this.plugin.referenceIndexService
+            ? await this.plugin.referenceIndexService.inspectLocalFiles(
+                filesToCheck,
+                REFERENCE_SAFETY_SCAN_POLICY
+            )
+            : null;
         const imagePaths = filesToCheck.map(file => file.path);
-        const markdownScan = typeof this.plugin.vaultReferenceManager.scanReferencesForTargetsDetailed === 'function'
-            ? await this.plugin.vaultReferenceManager.scanReferencesForTargetsDetailed(imagePaths)
-            : {
-                references: typeof this.plugin.vaultReferenceManager.getFilesReferencingImages === 'function'
-                    ? await this.plugin.vaultReferenceManager.getFilesReferencingImages(imagePaths)
-                    : new Map<string, VaultRefLocation[]>(),
-                complete: true,
-                uncertainFiles: []
-            };
-        const canvasScan = await getCanvasFileReferenceIndexDetailed(this.app, filesToCheck, this.getCanvasScanOptions());
-        const canvasReferenceIndex = canvasScan.references;
+        const markdownScan = indexedSnapshots
+            ? null
+            : await this.plugin.vaultReferenceManager.scanReferencesForTargetsDetailed(
+                imagePaths,
+                REFERENCE_SAFETY_SCAN_POLICY
+            );
+        const canvasScan = indexedSnapshots
+            ? null
+            : await getCanvasFileReferenceIndexDetailed(
+                this.app,
+                filesToCheck,
+                REFERENCE_SAFETY_SCAN_POLICY
+            );
         const noteContentCache = new Map<string, string[]>();
         const unknownFiles: FileReferenceInfo[] = [];
+        const uncertainFiles = new Set<string>();
+        let scanComplete = true;
 
         // 逐个检查文件引用
         for (let i = 0; i < filesToCheck.length; i++) {
             const file = filesToCheck[i];
+            const indexed = indexedSnapshots?.get(normalizePath(file.path));
+            const fileComplete = indexed
+                ? indexed.complete
+                : !!markdownScan?.complete && !!canvasScan?.complete;
+            if (!fileComplete) scanComplete = false;
+            indexed?.uncertainFiles.forEach(path => uncertainFiles.add(path));
 
             // 调用进度回调
             if (progressCallback) {
@@ -106,30 +123,33 @@ export class UnusedFileCleaner {
             // 检查文件引用
             const referenceInfo = await this.checkFileReferences(
                 file,
-                markdownScan.references.get(file.path),
-                canvasReferenceIndex.get(file.path),
+                indexed?.markdown
+                    ?? markdownScan?.references.get(file.path)
+                    ?? [],
+                indexed?.canvas
+                    ?? canvasScan?.references.get(file.path)
+                    ?? [],
                 noteContentCache
             );
 
             if (referenceInfo.isReferenced) {
                 referencedFiles.push(referenceInfo);
-            } else if (!markdownScan.complete || !canvasScan.complete) {
+            } else if (!fileComplete) {
                 unknownFiles.push(referenceInfo);
             } else {
                 unreferencedFiles.push(referenceInfo);
             }
         }
+        markdownScan?.uncertainFiles.forEach(path => uncertainFiles.add(path));
+        canvasScan?.uncertainFiles.forEach(path => uncertainFiles.add(path));
 
         return {
             scannedFiles: total,
             unreferencedFiles,
             referencedFiles,
             unknownFiles,
-            scanComplete: markdownScan.complete && canvasScan.complete,
-            uncertainFiles: Array.from(new Set([
-                ...markdownScan.uncertainFiles,
-                ...canvasScan.uncertainFiles
-            ]))
+            scanComplete,
+            uncertainFiles: [...uncertainFiles]
         };
     }
 
@@ -168,15 +188,14 @@ export class UnusedFileCleaner {
      */
     private async checkFileReferences(
         file: TFile,
-        indexedVaultRefs?: VaultRefLocation[],
-        indexedCanvasRefs?: CanvasFileReference[],
+        indexedVaultRefs: readonly VaultRefLocation[],
+        indexedCanvasRefs: readonly CanvasFileReference[],
         noteContentCache: Map<string, string[]> = new Map()
     ): Promise<FileReferenceInfo> {
         const references: ReferenceLocation[] = []; // Using local interface
 
         // Use VaultReferenceManager for O(1) lookup
-        const vaultRefs = indexedVaultRefs
-            ?? await this.plugin.vaultReferenceManager.getFilesReferencingImage(file.path);
+        const vaultRefs = indexedVaultRefs;
 
         if (vaultRefs.length > 0) {
             // Group by file to read efficienty
@@ -220,9 +239,7 @@ export class UnusedFileCleaner {
             }
         }
 
-        const canvasReferences = indexedCanvasRefs
-            ? this.mapCanvasReferences(indexedCanvasRefs)
-            : await this.getCanvasReferences(file);
+        const canvasReferences = this.mapCanvasReferences(indexedCanvasRefs);
         references.push(...canvasReferences);
 
         return {
@@ -232,12 +249,9 @@ export class UnusedFileCleaner {
         };
     }
 
-    private async getCanvasReferences(file: TFile): Promise<ReferenceLocation[]> {
-        const canvasRefs = await getCanvasFileReferences(this.app, file, this.getCanvasScanOptions());
-        return this.mapCanvasReferences(canvasRefs);
-    }
-
-    private mapCanvasReferences(canvasRefs: CanvasFileReference[]): ReferenceLocation[] {
+    private mapCanvasReferences(
+        canvasRefs: readonly CanvasFileReference[]
+    ): ReferenceLocation[] {
         return canvasRefs.map((ref) => ({
             notePath: ref.canvasFile.path,
             lineNumber: ref.lineNumber,
@@ -261,12 +275,30 @@ export class UnusedFileCleaner {
         const safetyService = new ReferenceSafetyService(
             this.app,
             this.plugin.vaultReferenceManager,
-            this.getCanvasScanOptions()
+            this.plugin.referenceIndexService
         );
+        const referenceIndex = this.plugin.referenceIndexService;
+        let indexedSnapshots = referenceIndex
+            ? await referenceIndex.inspectLocalFiles(
+                files,
+                REFERENCE_SAFETY_SCAN_POLICY
+            )
+            : null;
+        let indexedGeneration = referenceIndex?.getGeneration() ?? -1;
 
-        for (const file of files) {
+        for (let index = 0; index < files.length; index++) {
+            const file = files[index];
             try {
-                const safety = await safetyService.inspectLocalFile(file);
+                if (referenceIndex
+                    && referenceIndex.getGeneration() !== indexedGeneration) {
+                    indexedSnapshots = await referenceIndex.inspectLocalFiles(
+                        files.slice(index),
+                        REFERENCE_SAFETY_SCAN_POLICY
+                    );
+                    indexedGeneration = referenceIndex.getGeneration();
+                }
+                const safety = indexedSnapshots?.get(normalizePath(file.path))
+                    ?? await safetyService.inspectLocalFile(file);
                 if (!safety.safeToDelete) {
                     const reason = safety.complete
                         ? `${safety.referenceCount} reference(s) remain`
@@ -350,12 +382,6 @@ export class UnusedFileCleaner {
 
             await this.app.vault.createFolder(currentPath);
         }
-    }
-
-    private getCanvasScanOptions(): { includeFencedCode: boolean } {
-        return {
-            includeFencedCode: this.plugin.settings?.global?.codeBlockImageLinkIndexing ?? true
-        };
     }
 
     /**

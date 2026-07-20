@@ -23,7 +23,57 @@ export interface EmbedResizeSettings {
     shortestEdge?: number;
     editorMaxWidthValue?: number;
     resizeScaleMode: ResizeScaleMode;
-    respectEditorMaxWidth: boolean;
-    maintainAspectRatio: boolean; // New: Toggle aspect ratio preservation
-    resizeUnits: ResizeUnits; // New: Pixels or percentage
+    resizeUnits: ResizeUnits;
+}
+
+/** Returns a synchronous PipeSyntax size for fixed pixel presets only. */
+export function getFixedPixelResizePipe(
+    settings: EmbedResizeSettings
+): string | null {
+    if (settings.resizeUnits !== "pixels"
+        || settings.resizeScaleMode !== "auto") {
+        return null;
+    }
+    const positive = (value: number | undefined): number | undefined =>
+        typeof value === "number" && Number.isFinite(value) && value > 0
+            ? Math.round(value)
+            : undefined;
+    switch (settings.resizeDimension) {
+        case "none":
+            return "";
+        case "width": {
+            const width = positive(settings.width);
+            return width === undefined ? "" : `|${width}`;
+        }
+        case "height": {
+            const height = positive(settings.height);
+            return height === undefined ? "" : `|x${height}`;
+        }
+        case "both": {
+            const width = positive(settings.width);
+            const height = positive(settings.height);
+            if (width !== undefined && height !== undefined) {
+                return `|${width}x${height}`;
+            }
+            if (width !== undefined) return `|${width}`;
+            if (height !== undefined) return `|x${height}`;
+            if (!settings.customValue) return "";
+            const match = /^\s*(\d+)?x(\d+)?\s*$/.exec(settings.customValue);
+            if (!match) return null;
+            const customWidth = match[1] ? Number(match[1]) : undefined;
+            const customHeight = match[2] ? Number(match[2]) : undefined;
+            if (customWidth !== undefined && customHeight !== undefined) {
+                return `|${customWidth}x${customHeight}`;
+            }
+            if (customWidth !== undefined) return `|${customWidth}x`;
+            if (customHeight !== undefined) return `|x${customHeight}`;
+            return "";
+        }
+        case "editor-max-width": {
+            const value = positive(settings.editorMaxWidthValue);
+            return value === undefined ? "" : `|${value}`;
+        }
+        default:
+            return null;
+    }
 }

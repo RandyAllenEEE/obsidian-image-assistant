@@ -1,12 +1,11 @@
-import { App, Notice, TFile } from 'obsidian';
+import { App, Notice } from 'obsidian';
 import { t } from '../../../lang/helpers';
 import ImageConverterPlugin from '../../../main';
 import { ProcessSingleImageModal } from '../../modals/ProcessSingleImageModal';
 import { Crop } from '../../Crop';
 import { ImageAnnotationModal } from '../../ImageAnnotation';
-import { FolderAndFilenameManagement } from '../../../local/FolderAndFilenameManagement';
-import { isHttpUrl } from '../../../utils/NetworkPolicy';
-import { getCanvasExportMime } from '../../../utils/CanvasImageOutput';
+import { CanvasEditCapabilityService } from '../../../utils/CanvasEditCapability';
+import type { ImageContextMenuContext } from '../types';
 
 /**
  * Handles image processing operations (convert, crop, annotate)
@@ -15,31 +14,21 @@ export class ProcessingHandler {
     constructor(
         private app: App,
         private plugin: ImageConverterPlugin,
-        private folderManagement: FolderAndFilenameManagement
+        private readonly editCapabilities = new CanvasEditCapabilityService(plugin)
     ) { }
 
-    private resolveLocalImageFile(img: HTMLImageElement): TFile | null {
-        const imagePath = this.folderManagement.getImagePath(img);
-        if (!imagePath || isHttpUrl(imagePath)) {
-            return null;
-        }
-
-        const file = this.app.vault.getAbstractFileByPath(imagePath);
-        return file instanceof TFile ? file : null;
-    }
-
-    canEditImage(img: HTMLImageElement): boolean {
-        const file = this.resolveLocalImageFile(img);
-        return !!file && !!getCanvasExportMime(file.extension);
+    canEditImage(context: ImageContextMenuContext): boolean {
+        const file = context.localFile;
+        return !!file && this.editCapabilities.peek(file.extension).encodable;
     }
 
     /**
      * Process/Convert/Compress image
      * @param img - The HTMLImageElement
      */
-    async processImage(img: HTMLImageElement) {
+    async processImage(context: ImageContextMenuContext) {
         try {
-            const file = this.resolveLocalImageFile(img);
+            const file = context.localFile;
             if (!file) {
                 new Notice(t("MSG_RESOLVE_PATH_FAIL"));
                 return;
@@ -58,37 +47,45 @@ export class ProcessingHandler {
      * Crop/Rotate/Flip image
      * @param img - The HTMLImageElement
      */
-    async cropRotateFlip(img: HTMLImageElement) {
-        const file = this.resolveLocalImageFile(img);
+    async cropRotateFlip(context: ImageContextMenuContext) {
+        const file = context.localFile;
         if (!file) {
             new Notice(t("MSG_RESOLVE_PATH_FAIL"));
             return;
         }
-        if (!getCanvasExportMime(file.extension)) {
+        const capability = await this.editCapabilities.get(
+            file.extension,
+            context.ownerDocument
+        );
+        if (!capability.decodable || !capability.encodable) {
             new Notice(t("MSG_IMAGE_EDITOR_FORMAT_UNSUPPORTED", [file.extension]));
             return;
         }
 
-        new Crop(this.app, file).open();
+        new Crop(this.app, file, this.plugin, capability).open();
     }
 
     /**
      * Annotate image
      * @param img - The HTMLImageElement
      */
-    async annotateImage(img: HTMLImageElement) {
+    async annotateImage(context: ImageContextMenuContext) {
         try {
-            const file = this.resolveLocalImageFile(img);
+            const file = context.localFile;
             if (!file) {
                 new Notice(t("MSG_RESOLVE_PATH_FAIL"));
                 return;
             }
-            if (!getCanvasExportMime(file.extension)) {
+            const capability = await this.editCapabilities.get(
+                file.extension,
+                context.ownerDocument
+            );
+            if (!capability.decodable || !capability.encodable) {
                 new Notice(t("MSG_IMAGE_EDITOR_FORMAT_UNSUPPORTED", [file.extension]));
                 return;
             }
 
-            new ImageAnnotationModal(this.app, this.plugin, file).open();
+            new ImageAnnotationModal(this.app, this.plugin, file, capability).open();
         } catch (error) {
             console.error('Image location error:', error);
             new Notice(t("MSG_RESOLVE_PATH_FAIL"));

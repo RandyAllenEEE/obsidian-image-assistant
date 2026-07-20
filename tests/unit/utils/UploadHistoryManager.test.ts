@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { UploadHistoryManager } from "../../../src/utils/UploadHistoryManager";
+import {
+    TEST_PLUGIN_DIRECTORY,
+    TEST_PLUGIN_ID
+} from "../../helpers/plugin-manifest";
 
 function deferred() {
     let resolve!: () => void;
@@ -26,7 +30,7 @@ describe("UploadHistoryManager", () => {
         };
         const manager = new UploadHistoryManager(
             { vault: { adapter, configDir: ".obsidian" } } as any,
-            { manifest: { id: "image-assistant" }, settings: {} } as any
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
         );
 
         await manager.init();
@@ -41,7 +45,7 @@ describe("UploadHistoryManager", () => {
         const adapter = { exists: vi.fn(async () => false), write: vi.fn(async () => undefined) };
         const manager = new UploadHistoryManager(
             { vault: { adapter, configDir: ".obsidian" } } as any,
-            { manifest: { id: "image-assistant" }, settings: {} } as any
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
         );
 
         await manager.addRecord({
@@ -61,7 +65,7 @@ describe("UploadHistoryManager", () => {
         };
         const manager = new UploadHistoryManager(
             { vault: { adapter, configDir: ".obsidian" } } as any,
-            { manifest: { id: "image-assistant" }, settings: {} } as any
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
         );
 
         await manager.init();
@@ -75,19 +79,131 @@ describe("UploadHistoryManager", () => {
             read: vi.fn(async () => { throw new Error("permission denied"); }),
             write: vi.fn(async () => undefined)
         };
-        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const warningSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
         const manager = new UploadHistoryManager(
             { vault: { adapter, configDir: ".obsidian" } } as any,
-            { manifest: { id: "image-assistant" }, settings: {} } as any
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
         );
 
         await expect(manager.init()).resolves.toBeUndefined();
 
         expect(manager.getHistory()).toEqual([]);
-        expect(errorSpy).toHaveBeenCalledWith(
-            "Failed to read upload history; starting with an empty history:",
+        expect(warningSpy).toHaveBeenCalledWith(
+            expect.stringContaining("Failed to read upload history candidate"),
             expect.any(Error)
         );
+    });
+
+    it("recovers upload history from a complete temp file before an older backup", async () => {
+        const historyPath = `${TEST_PLUGIN_DIRECTORY}/upload_history.json`;
+        const files = new Map<string, string>([
+            [`${historyPath}.tmp`, JSON.stringify([
+                { url: "https://cdn.example/from-temp.png" }
+            ])],
+            [`${historyPath}.bak`, JSON.stringify([
+                { url: "https://cdn.example/from-backup.png" }
+            ])]
+        ]);
+        const adapter = {
+            exists: vi.fn(async (path: string) => files.has(path)),
+            read: vi.fn(async (path: string) => files.get(path) ?? ""),
+            write: vi.fn(async () => undefined)
+        };
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const manager = new UploadHistoryManager(
+            { vault: { adapter, configDir: ".obsidian" } } as any,
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
+        );
+
+        await manager.init();
+
+        expect(manager.getHistory().map(record => record.url)).toEqual([
+            "https://cdn.example/from-temp.png"
+        ]);
+    });
+
+    it("recovers upload history from backup when primary and temp are invalid", async () => {
+        const historyPath = `${TEST_PLUGIN_DIRECTORY}/upload_history.json`;
+        const files = new Map<string, string>([
+            [historyPath, "{broken"],
+            [`${historyPath}.tmp`, "{}"],
+            [`${historyPath}.bak`, JSON.stringify([
+                { url: "https://cdn.example/from-backup.png" }
+            ])]
+        ]);
+        const adapter = {
+            exists: vi.fn(async (path: string) => files.has(path)),
+            read: vi.fn(async (path: string) => files.get(path) ?? ""),
+            write: vi.fn(async () => undefined)
+        };
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const manager = new UploadHistoryManager(
+            { vault: { adapter, configDir: ".obsidian" } } as any,
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
+        );
+
+        await manager.init();
+
+        expect(manager.getHistory().map(record => record.url)).toEqual([
+            "https://cdn.example/from-backup.png"
+        ]);
+    });
+
+    it("recovers from backup when a non-empty primary contains no valid records", async () => {
+        const historyPath = `${TEST_PLUGIN_DIRECTORY}/upload_history.json`;
+        const files = new Map<string, string>([
+            [historyPath, JSON.stringify([{ url: "javascript:alert(1)" }, null])],
+            [`${historyPath}.bak`, JSON.stringify([
+                { url: "https://cdn.example/recovered.png" }
+            ])]
+        ]);
+        const adapter = {
+            exists: vi.fn(async (path: string) => files.has(path)),
+            read: vi.fn(async (path: string) => files.get(path) ?? ""),
+            write: vi.fn(async () => undefined)
+        };
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const manager = new UploadHistoryManager(
+            { vault: { adapter, configDir: ".obsidian" } } as any,
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
+        );
+
+        await manager.init();
+
+        expect(manager.getHistory().map(record => record.url)).toEqual([
+            "https://cdn.example/recovered.png"
+        ]);
+    });
+
+    it("keeps a valid primary history authoritative over stale recovery files", async () => {
+        const historyPath = `${TEST_PLUGIN_DIRECTORY}/upload_history.json`;
+        const files = new Map<string, string>([
+            [historyPath, JSON.stringify([
+                { url: "https://cdn.example/current.png" }
+            ])],
+            [`${historyPath}.tmp`, JSON.stringify([
+                { url: "https://cdn.example/stale-temp.png" }
+            ])],
+            [`${historyPath}.bak`, JSON.stringify([
+                { url: "https://cdn.example/stale-backup.png" }
+            ])]
+        ]);
+        const adapter = {
+            exists: vi.fn(async (path: string) => files.has(path)),
+            read: vi.fn(async (path: string) => files.get(path) ?? ""),
+            write: vi.fn(async () => undefined)
+        };
+        const manager = new UploadHistoryManager(
+            { vault: { adapter, configDir: ".obsidian" } } as any,
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
+        );
+
+        await manager.init();
+
+        expect(manager.getHistory().map(record => record.url)).toEqual([
+            "https://cdn.example/current.png"
+        ]);
+        expect(adapter.read).toHaveBeenCalledTimes(1);
     });
 
     it("serializes overlapping writes so records cannot overwrite each other", async () => {
@@ -106,14 +222,18 @@ describe("UploadHistoryManager", () => {
             }),
         };
         const app = { vault: { adapter, configDir: ".obsidian" } } as any;
-        const plugin = { manifest: { id: "image-assistant" }, settings: {}, saveSettings: vi.fn() } as any;
+        const plugin = {
+            manifest: { id: TEST_PLUGIN_ID },
+            settings: {},
+            saveSettings: vi.fn()
+        } as any;
         const manager = new UploadHistoryManager(app, plugin);
 
         const first = manager.addRecord({ url: "https://cdn.example/a.png" });
         const second = manager.addRecord({ url: "https://cdn.example/b.png" });
         await writeStarted.promise;
 
-        expect(adapter.exists).toHaveBeenCalledOnce();
+        expect(adapter.exists).toHaveBeenCalledTimes(3);
         firstWrite.resolve();
         await Promise.all([first, second]);
 
@@ -128,7 +248,7 @@ describe("UploadHistoryManager", () => {
         const adapter = { exists: vi.fn(async () => false), write: vi.fn(async () => undefined) };
         const manager = new UploadHistoryManager(
             { vault: { adapter, configDir: ".obsidian" } } as any,
-            { manifest: { id: "image-assistant" }, settings: {} } as any
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
         );
         await manager.addRecord({ url: "https://cdn.example/a.png" });
 
@@ -145,7 +265,7 @@ describe("UploadHistoryManager", () => {
         };
         const manager = new UploadHistoryManager(
             { vault: { adapter, configDir: ".obsidian" } } as any,
-            { manifest: { id: "image-assistant" }, settings: {} } as any
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
         );
 
         await Promise.all([
@@ -170,7 +290,7 @@ describe("UploadHistoryManager", () => {
         };
         const manager = new UploadHistoryManager(
             { vault: { adapter, configDir: ".obsidian" } } as any,
-            { manifest: { id: "image-assistant" }, settings: {} } as any
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
         );
         await manager.addRecord({ url: "https://cdn.example/a.png", metadata: { nested: true } });
 
@@ -183,7 +303,8 @@ describe("UploadHistoryManager", () => {
     });
 
     it("keeps the committed history in memory when backup cleanup fails after an atomic replace", async () => {
-        const files = new Map<string, string>([[".obsidian/plugins/image-assistant/upload_history.json", JSON.stringify([
+        const historyPath = `${TEST_PLUGIN_DIRECTORY}/upload_history.json`;
+        const files = new Map<string, string>([[historyPath, JSON.stringify([
             { url: "https://cdn.example/old.png" }
         ])]]);
         const adapter = {
@@ -203,7 +324,7 @@ describe("UploadHistoryManager", () => {
         };
         const manager = new UploadHistoryManager(
             { vault: { adapter, configDir: ".obsidian" } } as any,
-            { manifest: { id: "image-assistant" }, settings: {} } as any
+            { manifest: { id: TEST_PLUGIN_ID }, settings: {} } as any
         );
         vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
@@ -214,7 +335,7 @@ describe("UploadHistoryManager", () => {
             "https://cdn.example/old.png",
             "https://cdn.example/new.png"
         ]);
-        expect(JSON.parse(files.get(".obsidian/plugins/image-assistant/upload_history.json") ?? "[]"))
+        expect(JSON.parse(files.get(historyPath) ?? "[]"))
             .toHaveLength(2);
     });
 
@@ -225,7 +346,7 @@ describe("UploadHistoryManager", () => {
             write: vi.fn(async (_path: string, content: string) => { writes.push(content); })
         };
         const plugin = {
-            manifest: { id: "image-assistant" },
+            manifest: { id: TEST_PLUGIN_ID },
             settings: { uploadedImages: [{ imgUrl: "https://cdn.example/legacy.png" }, null] },
             saveSettings: vi.fn(async () => undefined)
         } as any;

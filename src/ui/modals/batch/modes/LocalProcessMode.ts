@@ -4,7 +4,7 @@ import { BatchTask, BatchItemResult, BatchResult, BatchScope, BatchTaskDiscovery
 import { IBatchMode, ReviewAction } from "./IBatchMode";
 import { t } from "../../../../lang/helpers";
 import { ImageFileCollector } from "../../../../utils/batch/ImageFileCollector";
-import { getContextualReferenceLinks } from "../../../../utils/MarkdownSourceContext";
+import { BatchScopeResolver } from "../../../../utils/batch/BatchScopeResolver";
 
 export class LocalProcessMode implements IBatchMode {
     id = "local_process" as const;
@@ -143,75 +143,14 @@ export class LocalProcessMode implements IBatchMode {
             });
     }
 
-    private isFileLike(item: unknown): item is TFile {
-        return item instanceof TFile || (
-            !!item &&
-            typeof (item as any).path === 'string' &&
-            typeof (item as any).name === 'string' &&
-            typeof (item as any).extension === 'string'
-        );
-    }
-
-    private isFolderLike(item: unknown): item is TFolder {
-        return item instanceof TFolder || (
-            !!item &&
-            typeof (item as any).path === 'string' &&
-            Array.isArray((item as any).children)
-        );
-    }
-
     async loadTasks(): Promise<BatchTaskDiscoveryResult> {
         const tasks: BatchTask[] = [];
-        let files: TFile[] = [];
-        const collector = new ImageFileCollector(this.app, this.plugin);
-        const failedFiles: string[] = [];
-        const uncertainFiles: string[] = [];
-
-        try {
-        if (this.scope === "note" && this.isFileLike(this.target)) {
-            if (this.target.extension === "canvas") {
-                const imagePaths = await collector.getImagesFromCanvas(this.target);
-                files = imagePaths
-                    .map(path => this.app.vault.getAbstractFileByPath(path))
-                    .filter((file): file is TFile =>
-                        this.isFileLike(file) &&
-                        this.plugin.supportedImageFormats.isSupported(file.extension, file.name)
-                    );
-            } else {
-                const cache = this.app.metadataCache.getFileCache(this.target);
-                if (cache) {
-                    for (const link of [...(cache.embeds ?? []), ...(cache.links ?? [])]) {
-                        const file = this.app.metadataCache.getFirstLinkpathDest(link.link, this.target.path);
-                        if (this.isFileLike(file) && this.plugin.supportedImageFormats.isSupported(file.extension, file.name)) {
-                            files.push(file);
-                        }
-                    }
-                }
-
-                const content = await this.app.vault.read(this.target);
-                for (const link of getContextualReferenceLinks(content, {
-                    includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
-                })) {
-                    const file = this.app.metadataCache.getFirstLinkpathDest(link.path, this.target.path);
-                    if (this.isFileLike(file) && this.plugin.supportedImageFormats.isSupported(file.extension, file.name)) {
-                        files.push(file);
-                    }
-                }
-            }
-        } else if (this.scope === "folder" && this.isFolderLike(this.target)) {
-            files = collector.getImageFilesInFolder(this.target, true);
-        } else if (this.scope === "vault") {
-            files = this.app.vault.getFiles().filter(f => this.plugin.supportedImageFormats.isSupported(f.extension, f.name));
-        }
-        } catch (error) {
-            const targetPath = this.isFileLike(this.target) || this.isFolderLike(this.target)
-                ? this.target.path
-                : this.scope;
-            failedFiles.push(`${targetPath}: ${error instanceof Error ? error.message : String(error)}`);
-            uncertainFiles.push(targetPath);
-        }
-
-        files = this.filterProcessableFiles([...new Set(files)], collector);
+        const resolver = new BatchScopeResolver(this.app, this.plugin);
+        const discovery = await resolver.collectLocalAssets(this.scope, this.target);
+        const files = this.filterProcessableFiles(
+            discovery.items,
+            resolver.getImageCollector()
+        );
 
         for (const file of files) {
             tasks.push({
@@ -223,7 +162,12 @@ export class LocalProcessMode implements IBatchMode {
                 status: 'pending'
             });
         }
-        return { tasks, complete: failedFiles.length === 0 && uncertainFiles.length === 0, failedFiles, uncertainFiles };
+        return {
+            tasks,
+            complete: discovery.complete,
+            failedFiles: [...discovery.failedFiles],
+            uncertainFiles: [...discovery.uncertainFiles]
+        };
     }
 
     private filterProcessableFiles(files: TFile[], collector: ImageFileCollector): TFile[] {

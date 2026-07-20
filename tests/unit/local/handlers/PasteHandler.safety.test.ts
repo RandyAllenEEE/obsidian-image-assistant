@@ -79,8 +79,8 @@ function createFixture(overrides: { determineDestination?: () => Promise<{ desti
         imageProcessor: {
             processImage: vi.fn(async () => new Uint8Array(1_500).buffer),
         },
-        insertLinkWithInserter: vi.fn(async (inserter, _editor, path: string) => {
-            inserter.insertResponseToEditor(`![[${path}]]`);
+        insertLinkWithInserter: vi.fn(async (inserter, path: string) => {
+            return inserter.insertResponseToEditor(`![[${path}]]`);
         }),
     } as any;
     const app = {
@@ -91,21 +91,33 @@ function createFixture(overrides: { determineDestination?: () => Promise<{ desti
         vault: { adapter: { exists: vi.fn(async () => false) } },
     } as any;
 
-    return { handler: new PasteHandler(app, plugin), editor, source, plugin, createUniqueBinary };
+    return {
+        handler: new PasteHandler(app, plugin),
+        editor,
+        source,
+        plugin,
+        createUniqueBinary,
+        context: {
+            editor,
+            file: activeFile,
+            view: null,
+            ownerDocument: document
+        }
+    };
 }
 
 describe("PasteHandler data safety", () => {
     it("restores the source extension when compression savings are insufficient", async () => {
-        const { handler, editor, source, createUniqueBinary } = createFixture();
+        const { handler, editor, source, createUniqueBinary, context } = createFixture();
 
-        await handler.processFiles([source], editor as any);
+        await handler.processFiles([source], editor as any, context as any);
 
         expect(createUniqueBinary).toHaveBeenCalledWith("assets", "photo.png", expect.any(ArrayBuffer), "increment");
         expect(editor.value).toBe("![[assets/photo.png]]");
     });
 
     it("preserves the pasted extension when processing returns unchanged data", async () => {
-        const { handler, editor, source, plugin, createUniqueBinary } = createFixture();
+        const { handler, editor, source, plugin, createUniqueBinary, context } = createFixture();
         Object.defineProperty(source, "name", { value: "photo.jpeg" });
         plugin.imageProcessor.processImageDetailed = vi.fn(async () => ({
             data: await source.arrayBuffer(),
@@ -114,21 +126,39 @@ describe("PasteHandler data safety", () => {
             outcome: "unchanged",
         }));
 
-        await handler.processFiles([source], editor as any);
+        await handler.processFiles([source], editor as any, context as any);
 
         expect(createUniqueBinary).toHaveBeenCalledWith("assets", "photo.jpeg", expect.any(ArrayBuffer), "increment");
         expect(editor.value).toBe("![[assets/photo.jpeg]]");
     });
 
     it("removes the loading placeholder when destination resolution fails", async () => {
-        const { handler, editor, source, createUniqueBinary } = createFixture({
+        const { handler, editor, source, createUniqueBinary, context } = createFixture({
             determineDestination: vi.fn(async () => { throw new Error("bad template"); }),
         });
         vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-        await handler.processFiles([source], editor as any);
+        await handler.processFiles([source], editor as any, context as any);
 
         expect(createUniqueBinary).not.toHaveBeenCalled();
+        expect(editor.value).toBe("");
+    });
+
+    it("keeps a created attachment and removes its placeholder when link insertion is stale", async () => {
+        const { handler, editor, source, plugin, createUniqueBinary, context } = createFixture();
+        plugin.insertLinkWithInserter = vi.fn(async () => false);
+
+        await handler.processFiles([source], editor as any, context as any);
+
+        expect(createUniqueBinary).toHaveBeenCalledOnce();
+        expect(plugin.insertLinkWithInserter).toHaveBeenCalledWith(
+            expect.anything(),
+            "assets/photo.png",
+            context.file,
+            expect.anything(),
+            expect.anything(),
+            context
+        );
         expect(editor.value).toBe("");
     });
 });

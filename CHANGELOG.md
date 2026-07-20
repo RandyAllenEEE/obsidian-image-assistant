@@ -1,5 +1,50 @@
 # Changelog
 
+## 5.1.0 - 2026-07-20
+
+### Source-Aware Editing and Layout
+
+- Bound paste, drop, OCR, LaTeX, resize, and image-property updates to the originating editor, file, view, document, and tracked source range instead of the active pane.
+- Added CodeMirror-mapped async ranges so edits before a loading placeholder or uploaded URL no longer detach the eventual replacement; user edits inside a managed range are preserved.
+- Made editor mutations transactional with stale-range validation, owner-view saves, conditional rollback, rollback persistence, and explicit uncertain outcomes.
+- Unified single-sided dimensions as `|W` and `|xH`, clearing stale opposite dimensions and preserving the image's intrinsic aspect ratio.
+- Made interactive resize commit once at drag or wheel completion while preserving captions, titles, alignment, wrapping, empty pipes, and existing PipeSyntax ordering.
+- Stabilized Live Preview image and Caption binding across side-panel movement, view changes, duplicate URLs, tabs, lists, callouts, `ad-*` Admonitions, Minimal theme logical margins, and popouts.
+
+### Menus and Reference Workflows
+
+- Rebuilt rendered-image and file-manager context menus around source-first resolution, capability policies, shared handlers, compact action groups, and one lifecycle-managed coordinator.
+- Preserved original URL identity when Obsidian or another plugin renders a proxy, cached, or Blob URL; destructive actions still require an exact source binding.
+- Added the public Obsidian menu bridge needed for Live Preview URL images while keeping Image Assistant actions in one dedicated section.
+- Consolidated note, folder, and vault batch launchers and all nine scope/mode combinations around shared range discovery.
+- Replaced note-local mass actions with a reusable full-vault decision workflow for clicked-reference, mutable-reference, and source-object operations.
+- Split mutable, protected-fence, out-of-boundary, Canvas, failed, and uncertain references so confirmations explain the actual deletion constraint.
+
+### Safety, Performance, and Networking
+
+- Added a persistent, versioned reference index with bounded background construction, dirty-file refresh, open-editor overlays, and generation revalidation before destructive changes.
+- Kept ordinary fenced code in every deletion-safety scan even when code-block mutation is disabled; incomplete Markdown or Canvas scans continue to preserve source objects.
+- Added source-revision and SHA-256 checks plus per-path FIFO commit locks for crop, annotation, conversion, rename, and binary writes.
+- Added compatibility-copy protection when a moved image cannot have every old reference repaired.
+- Added Electron streaming downloads with redirect revalidation, abort support, total and idle timeouts, and a hard 100 MiB chunk limit, with a documented constrained `requestUrl` fallback.
+- Treated extensionless Canvas and Markdown URLs as unverified candidates and created files only after status, MIME, size, and magic-byte validation.
+
+### Naming, Settings, and Maintenance
+
+- Added a tokenized naming engine with one operation snapshot, lazy source evaluation, non-recursive replacement, validated MD5/SHA lengths, Web Crypto randomness, and persistent atomic counters.
+- Centralized path planning, Unicode normalization, reserved-name handling, extension correction, and conflict strategies across paste, drop, rename, and attachment writes.
+- Made local link serialization consistently honor Markdown/Wiki, shortest/relative/absolute, and relative `./` settings while preserving PipeSyntax and quoted titles.
+- Removed the obsolete hidden-folder setting and exposed the independent interactive-resize controls.
+- Hardened modal generation guards, binary resource refresh, upload history validation, popout cleanup, and batch preparation against duplicate starts.
+- Locked the canonical plugin ID to `obsidian-image-assistant` and added manifest-driven local deployment validation.
+
+### Verification
+
+- Added regression coverage for source mapping, async placeholders, save rollback, naming sessions, reference indexing, streaming fetches, context-menu event order, split panes, popouts, batch preparation, and revision-guarded edits.
+- Passed 1,322 tests across 145 files with 80.22% line coverage and 77.88% branch coverage.
+- Passed lint, source and test TypeScript checks, production build validation, release metadata checks, and `npm audit --omit=optional` with zero vulnerabilities.
+- Obsidian runtime smoke was intentionally not executed for this release preparation pass.
+
 ## 5.0.0 - 2026-07-13
 
 ### Major Changes

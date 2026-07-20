@@ -6,7 +6,6 @@ import {
 	ButtonComponent,
 	DropdownComponent,
 	Component,
-	MarkdownView,
 	Scope,
 } from 'obsidian';
 import {
@@ -30,9 +29,19 @@ import { t } from '../lang/helpers';
 
 import { ToolPreset, BlendMode } from "../settings/types";
 import {
-	assertCanvasOutputMatchesExtension,
-	getCanvasExportMime
+	finalizeCanvasImageOutput,
+	getCanvasIntermediateMime
 } from "../utils/CanvasImageOutput";
+import { ModalCommitGuard } from "../utils/ModalCommitGuard";
+import {
+	captureImageFileRevision,
+	type ImageFileRevision
+} from "../utils/ImageFileRevision";
+import { ImageEditCommitService } from "../utils/ImageEditCommitService";
+import {
+	CanvasEditCapabilityService,
+	type CanvasEditCapability
+} from "../utils/CanvasEditCapability";
 
 function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
 	try {
@@ -64,6 +73,9 @@ enum ToolMode {
 export class ImageAnnotationModal extends Modal {
 	private componentContainer = new Component();
 	private openVersion = 0;
+	private readonly commitGuard = new ModalCommitGuard();
+	private readonly commitService: ImageEditCommitService;
+	private sourceRevision: ImageFileRevision | null = null;
 	private closed = true;
 	private loadingImage: HTMLImageElement | null = null;
 	private currentTool: ToolMode = ToolMode.NONE;
@@ -110,6 +122,7 @@ export class ImageAnnotationModal extends Modal {
 	private lastPanPoint: { x: number; y: number } | null = null;
 	private stateCheckInterval: ReturnType<typeof setInterval> | null = null;
 	private saving = false;
+	private saveButton: ButtonComponent | null = null;
 	private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 	private imageBlobUrl: string | null = null;
 
@@ -139,10 +152,21 @@ export class ImageAnnotationModal extends Modal {
 	constructor(
 		app: App,
 		private plugin: ImageConverterPlugin,
-		private file: TFile
+		private file: TFile,
+		private readonly suppliedEditCapability?: CanvasEditCapability
 	) {
 		super(app);
+		this.commitService = new ImageEditCommitService(app);
 		this.setupModal();
+	}
+
+	close(): void {
+		if (this.commitGuard.closeLocked) {
+			new Notice(t("MSG_IMAGE_EDIT_COMMIT_IN_PROGRESS"));
+			return;
+		}
+		this.commitGuard.cancel();
+		super.close();
 	}
 
 	private setupModal() {
@@ -182,6 +206,8 @@ export class ImageAnnotationModal extends Modal {
 
 	async onOpen() {
 		const openVersion = ++this.openVersion;
+		this.commitGuard.reset();
+		this.sourceRevision = null;
 		this.closed = false;
 		this.componentContainer.unload();
 		this.componentContainer = new Component();
@@ -203,6 +229,12 @@ export class ImageAnnotationModal extends Modal {
 
 		try {
 			const arrayBuffer = await this.app.vault.readBinary(this.file);
+			if (!this.isCurrentOpen(openVersion)) return;
+			this.sourceRevision = await captureImageFileRevision(
+				this.app,
+				this.file,
+				arrayBuffer
+			);
 			if (!this.isCurrentOpen(openVersion)) return;
 			const blob = new Blob([arrayBuffer]);
 			const blobUrl = URL.createObjectURL(blob);
@@ -1212,6 +1244,7 @@ export class ImageAnnotationModal extends Modal {
 			.setTooltip(t("TOOLTIP_ANNOTATION_SAVE_HOTKEY"))
 			.setIcon('checkmark')
 			.onClick(() => this.saveAnnotation());
+		this.saveButton = saveBtn;
 
 		saveBtn.buttonEl.addClass('mod-cta');
 
@@ -2691,7 +2724,10 @@ export class ImageAnnotationModal extends Modal {
 	async saveAnnotation() {
 		if (!this.canvas) return;
 		if (this.saving) return;
+		const commitToken = this.commitGuard.beginPreparing();
+		if (!commitToken) return;
 		this.saving = true;
+		this.saveButton?.setDisabled(true);
 		let originalStacking: boolean | null = null;
 		let currentVPT: [number, number, number, number, number, number] | null = null;
 		let shouldClose = false;
@@ -2705,9 +2741,21 @@ export class ImageAnnotationModal extends Modal {
 			this.canvas.preserveObjectStacking = false;
 
 
-			// Get MIME type from the file
-			const mimeType = getCanvasExportMime(this.file.extension);
-			if (!mimeType) throw new Error(`The image editor cannot safely overwrite .${this.file.extension} files`);
+			const editCapability = this.suppliedEditCapability
+				?? await new CanvasEditCapabilityService(this.plugin).get(
+					this.file.extension,
+					this.ownerDocument
+				);
+			if (!this.commitGuard.isCurrent(commitToken)) return;
+			const mimeType = getCanvasIntermediateMime(
+				this.file.extension,
+				editCapability
+			);
+			if (!mimeType || !editCapability.encodable) {
+				throw new Error(t("MSG_IMAGE_EDITOR_FORMAT_UNSUPPORTED", [
+					this.file.extension
+				]));
+			}
 
 			// Determine export format, defaulting to PNG for unsupported types
 			const exportFormat: ExtendedImageFormat = mimeType === 'image/jpeg'
@@ -2723,6 +2771,7 @@ export class ImageAnnotationModal extends Modal {
 			// Force render to ensure all objects are properly positioned
 			this.canvas.renderAll();
 			await new Promise(resolve => setTimeout(resolve, 50));
+			if (!this.commitGuard.isCurrent(commitToken)) return;
 
 			// If no background image is present (test/mocked environments), fall back to full canvas bounds
 			let originalWidth = 0;
@@ -2852,6 +2901,7 @@ export class ImageAnnotationModal extends Modal {
 			// Force another render
 			this.canvas.renderAll();
 			await new Promise(resolve => setTimeout(resolve, 100));
+			if (!this.commitGuard.isCurrent(commitToken)) return;
 
 
 			// Try multiple export methods
@@ -2897,6 +2947,7 @@ export class ImageAnnotationModal extends Modal {
 
 					if (blob) {
 						arrayBuffer = await blob.arrayBuffer();
+						if (!this.commitGuard.isCurrent(commitToken)) return;
 					}
 				}
 			} catch (e) {
@@ -2959,6 +3010,7 @@ export class ImageAnnotationModal extends Modal {
 						});
 						if (blob) {
 							arrayBuffer = await blob.arrayBuffer();
+							if (!this.commitGuard.isCurrent(commitToken)) return;
 						}
 					}
 				} catch (e) {
@@ -2968,35 +3020,57 @@ export class ImageAnnotationModal extends Modal {
 
 			// If all methods failed, bail out without writing
 			if (!arrayBuffer || arrayBuffer.byteLength === 0) {
-				// Restore viewport transform and stacking before exiting
-				new Notice('Failed to export image');
+				new Notice(t("MSG_IMAGE_EXPORT_FAILED"));
 				return;
 			}
 
-			await assertCanvasOutputMatchesExtension(arrayBuffer, this.file.extension);
-
-			await this.app.vault.modifyBinary(this.file, arrayBuffer);
-
-			// Success notification
-			new Notice('Image saved successfully');
-
-			try {
-				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (activeView) {
-					const leaf = this.app.workspace.getMostRecentLeaf();
-					if (leaf) {
-						const currentState = leaf.getViewState();
-						await leaf.setViewState({ type: 'empty', state: {} });
-						await leaf.setViewState(currentState);
-					}
-				}
-			} catch (refreshError) {
-				console.warn('Image was saved, but the preview could not be refreshed', refreshError);
+			arrayBuffer = await finalizeCanvasImageOutput(
+				arrayBuffer,
+				this.file.extension,
+				editCapability,
+				this.plugin
+			);
+			if (!this.commitGuard.isCurrent(commitToken)) return;
+			if (!this.sourceRevision) {
+				throw new Error(t("MSG_IMAGE_SOURCE_REVISION_MISSING"));
 			}
+			if (!this.commitGuard.beginCommitting(commitToken)) return;
+
+			const commitResult = await this.commitService.commit({
+				file: this.file,
+				expectedRevision: this.sourceRevision,
+				data: arrayBuffer
+			});
+			if (!commitResult.success) {
+				this.commitGuard.fail(commitToken);
+				new Notice(commitResult.stale
+					? t("MSG_IMAGE_SOURCE_CHANGED")
+					: t("MSG_ANNOTATION_SAVE_FAIL", [
+						commitResult.error ?? t("MSG_UNKNOWN_ERROR")
+					]));
+				return;
+			}
+			if (commitResult.revision) this.sourceRevision = commitResult.revision;
+
+			let refreshed = true;
+			try {
+				await this.plugin.imageResourceRefreshService.refreshFile(this.file);
+			} catch (refreshError) {
+				refreshed = false;
+				console.warn('Image was saved, but rendered images could not be refreshed', refreshError);
+			}
+			new Notice(refreshed
+				? t("MSG_IMAGE_SAVE_SUCCESS")
+				: t("MSG_IMAGE_SAVED_REFRESH_FAILED"));
+			this.commitGuard.finish(commitToken);
 			shouldClose = true;
 		} catch (error) {
+			if (!this.commitGuard.isCurrent(commitToken)) return;
+			this.commitGuard.fail(commitToken);
 			console.error('Save error:', error);
-			new Notice(error instanceof Error ? `Error saving image: ${error.message}` : 'Error saving image');
+			new Notice(t("MSG_ANNOTATION_SAVE_FAIL", [
+				error instanceof Error ? error.message : String(error)
+			]));
 		} finally {
 			if (currentVPT) {
 				this.canvas.setViewportTransform(currentVPT);
@@ -3007,6 +3081,12 @@ export class ImageAnnotationModal extends Modal {
 				this.canvas.requestRenderAll();
 			}
 			this.saving = false;
+			if (this.commitGuard.phase === 'preparing') {
+				this.commitGuard.fail(commitToken);
+			}
+			if (this.commitGuard.phase === 'idle') {
+				this.saveButton?.setDisabled(false);
+			}
 		}
 		if (shouldClose) this.close();
 	}
@@ -3096,6 +3176,8 @@ export class ImageAnnotationModal extends Modal {
 		this.undoStack = [];
 		this.redoStack = [];
 		this.isUndoRedoAction = false;
+		this.sourceRevision = null;
+		this.saveButton = null;
 
 		this.isArrowMode = false;
 		if (this.arrowButton) {
@@ -3105,6 +3187,7 @@ export class ImageAnnotationModal extends Modal {
 	}
 
 	onClose() {
+		this.commitGuard.cancel();
 		const { contentEl } = this;
 		contentEl.empty();
 		this.cleanup();

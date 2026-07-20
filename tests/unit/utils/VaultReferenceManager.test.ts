@@ -622,6 +622,11 @@ describe('VaultReferenceManager', () => {
 
             expect(scan.complete).toBe(true);
             expect(scan.locations.map(location => location.line)).toEqual([9, 11]);
+
+            const safetyScan = await manager.scanReferencesDetailed(target, {
+                includeFencedCode: true
+            });
+            expect(safetyScan.locations.map(location => location.line)).toEqual([6, 9, 11]);
         });
     });
 });

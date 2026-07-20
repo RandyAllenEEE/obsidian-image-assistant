@@ -1,10 +1,19 @@
-import { App, TFile, Notice, MarkdownView } from "obsidian";
-import { EditorView } from "@codemirror/view";
+import { App, TFile, Notice, type MarkdownView } from "obsidian";
 import { LinkFormat, PathFormat } from "../settings/LinkFormatSettings";
-import { EmbedResizeSettings, ResizeScaleMode, ResizeUnits } from "../settings/NonDestructiveResizeSettings";
+import {
+    EmbedResizeSettings,
+    getFixedPixelResizePipe,
+    ResizeScaleMode,
+    ResizeUnits
+} from "../settings/NonDestructiveResizeSettings";
 import { loadImage } from "./ImageLoadUtils";
 import { LocalImageReferenceSerializer } from "./LocalImageReferenceSerializer";
+import { resolveEditorView } from "./EditorViewResolver";
 
+export interface EditorLayoutContext {
+    readonly view?: MarkdownView | null;
+    readonly contentWidth?: number;
+}
 
 export class LinkFormatter {
     private readonly referenceSerializer: LocalImageReferenceSerializer;
@@ -19,7 +28,8 @@ export class LinkFormatter {
         pathFormat: PathFormat,
         activeFile: TFile | null,
         embedResize?: EmbedResizeSettings | null,
-        prependCurrentDir = true
+        prependCurrentDir = true,
+        layoutContext?: EditorLayoutContext
     ): Promise<string> {
         if (!linkPath) {
             throw new Error("Link path cannot be empty.");
@@ -41,7 +51,8 @@ export class LinkFormatter {
         if (embedResize) {
             resizeParams = await this.getResizeParams(
                 embedResize,
-                file
+                file,
+                layoutContext
             );
         }
 
@@ -57,8 +68,12 @@ export class LinkFormatter {
     // Add helper function to generate resize parameters
     private async getResizeParams(
         embedResize: EmbedResizeSettings,
-        file: TFile
+        file: TFile,
+        layoutContext?: EditorLayoutContext
     ): Promise<string> {
+        const fixedPixels = getFixedPixelResizePipe(embedResize);
+        if (fixedPixels !== null) return fixedPixels;
+
         let resizeParams = "";
         const originalDimensions = await this.getImageDimensions(file);
 
@@ -150,7 +165,7 @@ export class LinkFormatter {
                 height = originalDimensions.height;
                 break;
             case "editor-max-width": {
-                const editorMaxWidth = this.getEditorMaxWidth();
+                const editorMaxWidth = this.getEditorMaxWidth(layoutContext);
 
                 if (!editorMaxWidth || isNaN(editorMaxWidth)) {
                     console.warn("Invalid editorMaxWidth:", editorMaxWidth);
@@ -191,22 +206,7 @@ export class LinkFormatter {
             );
         }
 
-        // 3. Apply Editor Max Width Constraint (if applicable and width is defined)
-        if (embedResize.respectEditorMaxWidth && width !== undefined) {
-            const editorMaxWidth = this.getEditorMaxWidth();
-            if (width > editorMaxWidth) {
-                if (embedResize.maintainAspectRatio && height !== undefined) {
-                    height = Math.round(
-                        editorMaxWidth *
-                        originalDimensions.height /
-                        originalDimensions.width
-                    );
-                }
-                width = editorMaxWidth;
-            }
-        }
-
-        // 4. Build the canonical single- or double-axis PipeSyntax.
+        // 3. Build the canonical single- or double-axis PipeSyntax.
         if (width !== undefined || height !== undefined) {
             const roundedWidth = width !== undefined ? Math.round(width) : undefined;
             const roundedHeight = height !== undefined ? Math.round(height) : undefined;
@@ -291,7 +291,12 @@ export class LinkFormatter {
          * @returns {number} The maximum width available for content in the editor (width of a `cm-line`),
          *                   or 800 as a default if the width cannot be determined.
          */
-    private getEditorMaxWidth(): number {
+    getEditorMaxWidth(layoutContext?: EditorLayoutContext): number {
+        if (layoutContext?.contentWidth
+            && Number.isFinite(layoutContext.contentWidth)
+            && layoutContext.contentWidth > 0) {
+            return layoutContext.contentWidth;
+        }
 
         // -------------------- OPTION 1. ------------------------- 
         // FULL WIDTH OF WHOLE EDITOR ARE
@@ -321,28 +326,9 @@ export class LinkFormatter {
 
         // -------------------- OPTION 2. ------------------------- 
         //ONLY area where we can actually write - USE ONLY WIDTH
-        const activeLeaf = this.app.workspace.getMostRecentLeaf();
-
-        // If no active leaf or view is found, return the default width.
-        if (!activeLeaf || !activeLeaf.view) {
-            return 800;
-        }
-
-        // Ensure the active view is a MarkdownView and has an associated editor.
-        if (
-            !(activeLeaf.view instanceof MarkdownView) ||
-            !activeLeaf.view.editor
-        ) {
-            return 800;
-        }
-
-        const { view } = activeLeaf;
-        const { editor } = view;
-
-        // Access the CodeMirror EditorView through the Obsidian Editor.
-        // We temporarily use `as any` to bypass type checking for the undocumented `.cm` property,
-        // and then immediately cast it to `EditorView` for type safety.
-        const editorView = (editor as any).cm as EditorView;
+        const view = layoutContext?.view;
+        if (!view?.editor || !view.contentEl) return 800;
+        const editorView = resolveEditorView(view.editor, view);
 
         // If we cannot access the CodeMirror EditorView, return the default width.
         if (!editorView) {
@@ -355,8 +341,9 @@ export class LinkFormatter {
         // `clientWidth` provides the inner width of the element, including padding but excluding borders and margins.
         // The optional chaining operator (`?.`) ensures that if `querySelector` returns null (e.g., in an empty editor),
         // we don't throw an error.
-        const contentWidth =
-            editorView.contentDOM.querySelector(".cm-line")?.clientWidth;
+        const contentWidth = editorView.contentDOM.clientWidth
+            || editorView.contentDOM.querySelector(".cm-line")?.clientWidth
+            || view.contentEl.clientWidth;
 
         // If we cannot determine the content width (e.g., the editor is empty), return the default width.
         if (!contentWidth) {

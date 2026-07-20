@@ -111,6 +111,51 @@ describe("UnifiedBatchProcessModal state machine", () => {
         expect((modal as any).state).toBe("review");
     });
 
+    it("ignores duplicate start requests while execution choices are pending", async () => {
+        const preparation = deferred<boolean>();
+        const processTask = vi.fn(async () => ({
+            status: "success",
+            success: true,
+            item: "one"
+        }));
+        const currentMode = mode(
+            "download",
+            async () => [task("one")],
+            processTask
+        );
+        currentMode.prepareExecution = vi.fn(() => preparation.promise);
+        const modal = createModal(currentMode);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const firstRun = (modal as any).executeBatch();
+        const duplicateRun = (modal as any).executeBatch();
+
+        expect((modal as any).state).toBe("preparing");
+        expect(currentMode.prepareExecution).toHaveBeenCalledOnce();
+        expect(processTask).not.toHaveBeenCalled();
+
+        preparation.resolve(true);
+        await Promise.all([firstRun, duplicateRun]);
+
+        expect(processTask).toHaveBeenCalledOnce();
+        expect((modal as any).state).toBe("review");
+    });
+
+    it("restores controls when execution preparation is cancelled", async () => {
+        const currentMode = mode("download", async () => [task("one")]);
+        currentMode.prepareExecution = vi.fn(async () => false);
+        const modal = createModal(currentMode);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        await (modal as any).executeBatch();
+
+        expect((modal as any).state).toBe("ready");
+        expect((modal as any).startButton.buttonEl.disabled).toBe(false);
+        expect(currentMode.processTask).not.toHaveBeenCalled();
+    });
+
     it("locks mode and settings controls for the whole run and review", async () => {
         const pending = deferred<any>();
         const currentMode = mode("local_process", async () => [task("one")], vi.fn(() => pending.promise));

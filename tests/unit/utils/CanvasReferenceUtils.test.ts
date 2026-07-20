@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
     getCanvasFileReferenceIndexDetailed,
     getCanvasUrlReferencesDetailed,
+    removeCanvasFileReferences,
+    removeCanvasUrlReferences,
     replaceCanvasFileReferences,
     replaceCanvasFileReferencesWithUrl,
     replaceCanvasUrlReferencesWithFile
@@ -171,6 +173,39 @@ describe("CanvasReferenceUtils", () => {
         });
         expect(localCanvas.nodes[0]).not.toHaveProperty("url");
         expect(localCanvas.nodes[1].text).toBe(`[[${localFile.path}|Open image]]`);
+    });
+
+    it("removes native Canvas nodes and complete links from text nodes", async () => {
+        const localFile = fakeTFile({ path: "assets/photo.png", extension: "png" });
+        const canvas = fakeTFile({ path: "boards/remove.canvas", extension: "canvas" });
+        const url = "https://cdn.example/photo.png";
+        const contents = new Map([[canvas.path, JSON.stringify({
+            nodes: [
+                { id: "local", type: "file", file: localFile.path },
+                { id: "remote", type: "link", url },
+                {
+                    id: "text",
+                    type: "text",
+                    text: `before ![[${localFile.path}|300]] middle ![alt](${url} "title") after`
+                }
+            ]
+        })]]);
+        const app = fakeApp({
+            vault: fakeVault({ files: [localFile, canvas], fileContents: contents }),
+            metadataCache: fakeMetadataCache()
+        }) as any;
+
+        const localResult = await removeCanvasFileReferences(app, localFile);
+        const remoteResult = await removeCanvasUrlReferences(app, url);
+        const updated = JSON.parse(contents.get(canvas.path) ?? "{}");
+
+        expect(localResult).toMatchObject({ found: 2, replaced: 2, complete: true });
+        expect(remoteResult).toMatchObject({ found: 2, replaced: 2, complete: true });
+        expect(updated.nodes).toHaveLength(1);
+        expect(updated.nodes[0]).toMatchObject({
+            id: "text",
+            text: "before  middle  after"
+        });
     });
 
     it("limits Canvas mutation to explicitly allowed files", async () => {

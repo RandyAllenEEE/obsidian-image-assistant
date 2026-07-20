@@ -34,7 +34,7 @@ export class UnifiedBatchProcessModal extends Modal {
         uncertainFiles: []
     };
     private batchResult: BatchResult | null = null;
-    private state: 'loading' | 'ready' | 'running' | 'review' | 'closed' = 'loading';
+    private state: 'loading' | 'ready' | 'preparing' | 'running' | 'review' | 'closed' = 'loading';
     private loadVersion = 0;
     private executionVersion = 0;
     private cancelRequested = false;
@@ -159,7 +159,10 @@ export class UnifiedBatchProcessModal extends Modal {
     }
 
     private async switchMode(modeId: BatchMode): Promise<boolean> {
-        if (this.state === 'running' || this.state === 'review' || this.state === 'closed') return false;
+        if (this.state === 'preparing'
+            || this.state === 'running'
+            || this.state === 'review'
+            || this.state === 'closed') return false;
         const newMode = this.modeMap.get(modeId);
         if (!newMode) return false;
 
@@ -229,8 +232,44 @@ export class UnifiedBatchProcessModal extends Modal {
             return;
         }
 
-        if (this.currentMode.prepareExecution
-            && !await this.currentMode.prepareExecution(selectedTasks)) {
+        const mode = this.currentMode;
+        const preparationVersion = this.executionVersion;
+        this.state = 'preparing';
+        this.startButton.setDisabled(true);
+        this.setSidebarDisabled(true);
+        try {
+            if (mode.prepareExecution
+                && !await mode.prepareExecution(selectedTasks)) {
+                if (this.executionVersion === preparationVersion
+                    && !this.isClosed()
+                    && this.currentMode === mode) {
+                    this.state = 'ready';
+                    this.startButton.setDisabled(false);
+                    this.setSidebarDisabled(false);
+                }
+                return;
+            }
+        } catch (error) {
+            if (this.executionVersion === preparationVersion
+                && !this.isClosed()
+                && this.currentMode === mode) {
+                const message = error instanceof Error
+                    ? error.message
+                    : String(error);
+                console.error(
+                    `[Image Assistant] Failed to prepare ${mode.id} batch execution:`,
+                    error
+                );
+                this.state = 'ready';
+                this.startButton.setDisabled(false);
+                this.setSidebarDisabled(false);
+                new Notice(t("MSG_BATCH_ERROR", [message]));
+            }
+            return;
+        }
+        if (this.executionVersion !== preparationVersion
+            || this.isClosed()
+            || this.currentMode !== mode) {
             return;
         }
 
@@ -241,8 +280,6 @@ export class UnifiedBatchProcessModal extends Modal {
         this.cancelRequested = false;
         this.startButton.setDisabled(true);
         this.setSidebarDisabled(true);
-        const mode = this.currentMode;
-
         // Transition: Hide Task List, Show Progress
         this.taskListContainer.hide();
 

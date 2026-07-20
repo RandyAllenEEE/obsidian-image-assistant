@@ -38,16 +38,24 @@ function makeUpdateFixture(line: string, src = 'app://local/img.png') {
   const contentEl = document.createElement('div');
   const editor = {
     lineCount: vi.fn(() => lines.length),
+    getValue: vi.fn(() => lines.join('\n')),
     getLine: vi.fn((index: number) => lines[index]),
     replaceRange: vi.fn((replacement: string, from: { line: number; ch: number }, to: { line: number; ch: number }) => {
       lines[from.line] = `${lines[from.line].slice(0, from.ch)}${replacement}${lines[from.line].slice(to.ch)}`;
     })
   };
-  const view = { editor, file, contentEl, getMode: () => 'source' };
+  const view = {
+    editor,
+    file,
+    contentEl,
+    getMode: () => 'source',
+    save: vi.fn().mockResolvedValue(undefined)
+  };
   const app = {
     workspace: {
       getActiveViewOfType: vi.fn(() => view),
       getActiveFile: vi.fn(() => file),
+      getLeavesOfType: vi.fn(() => [{ view }]),
       onLayoutReady: vi.fn((callback: () => void) => callback())
     }
   };
@@ -56,7 +64,7 @@ function makeUpdateFixture(line: string, src = 'app://local/img.png') {
   img.setAttribute('src', src);
   contentEl.appendChild(img);
 
-  return { app, editor, img, lines, manager };
+  return { app, editor, img, lines, manager, view };
 }
 
 describe('ImageStateManager pipe syntax integration', () => {
@@ -614,6 +622,77 @@ describe('ImageStateManager pipe syntax integration', () => {
     expect(lines[0]).toBe('![Caption|x200](img.png)');
   });
 
+  it.each([
+    {
+      name: 'Wiki attributes in arbitrary order with escaped caption pipes',
+      input: '![[img.png|right-wrap|Caption\\|with pipe| 320x200 ]]',
+      changes: { width: 500 },
+      expected: '![[img.png|right-wrap|Caption\\|with pipe| 500x200 ]]'
+    },
+    {
+      name: 'Markdown display-order attributes and an angle-bracketed destination',
+      input: '![right|320|Caption](<img.png> "A title")',
+      changes: { width: 500 },
+      expected: '![right|500|Caption](<img.png> "A title")'
+    },
+    {
+      name: 'Markdown height-only sizes while preserving title and alignment',
+      input: '![Caption\\|tail|left|x200](img.png \'single title\')',
+      changes: { width: 500 },
+      expected: '![Caption\\|tail|left|500x200](img.png \'single title\')'
+    },
+    {
+      name: 'a size-free Markdown link without changing its caption or order',
+      input: '![Caption|center](img.png)',
+      changes: { height: 240 },
+      expected: '![Caption|center|x240](img.png)'
+    }
+  ])('writes only the size segment for $name', async ({ input, changes, expected }) => {
+    const { editor, img, lines, manager } = makeUpdateFixture(input);
+
+    const result = await manager.updateState(img, changes);
+
+    expect(result.status).toBe('saved');
+    expect(editor.replaceRange).toHaveBeenCalledWith(
+      expected,
+      { line: 0, ch: 0 },
+      { line: 0, ch: input.length }
+    );
+    expect(lines[0]).toBe(expected);
+  });
+
+  it.each([
+    '![300|right](img.png)',
+    '![Caption|320|640](img.png)',
+    '![[img.png|Caption|320|640]]'
+  ])('rejects ambiguous size syntax without editing %s', async (input) => {
+    const { editor, img, lines, manager } = makeUpdateFixture(input);
+
+    const result = await manager.updateState(img, { width: 500 });
+
+    expect(result.status).toBe('failed');
+    expect(result.complete).toBe(false);
+    expect(result.error).toContain('ambiguous size fields');
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+    expect(lines[0]).toBe(input);
+  });
+
+  it('conditionally rolls a source-preserving size write back when saving fails', async () => {
+    const input = '![right|320|Caption](img.png "A title")';
+    const { editor, img, lines, manager, view } = makeUpdateFixture(input);
+    view.save
+      .mockRejectedValueOnce(new Error('first save failed'))
+      .mockResolvedValueOnce(undefined);
+
+    const result = await manager.updateState(img, { width: 500 });
+
+    expect(result.status).toBe('rolledBack');
+    expect(result.complete).toBe(false);
+    expect(editor.replaceRange).toHaveBeenCalledTimes(2);
+    expect(lines[0]).toBe(input);
+    expect(view.save).toHaveBeenCalledTimes(2);
+  });
+
   it('updates the exact matched range when same-basename links share one line', async () => {
     const originalLine = '![[other/pic.png|Other|100]] and ![[assets/pic.png|Target|200]]';
     const { editor, img, lines, manager } = makeUpdateFixture(originalLine, 'app://local/assets/pic.png');
@@ -631,54 +710,48 @@ describe('ImageStateManager pipe syntax integration', () => {
   });
 
   it('does not write a stale image into a different active view', async () => {
-    const { editor, img, manager } = makeUpdateFixture('![[img.png|Caption|200]]');
+    const { app, editor, img, manager } = makeUpdateFixture('![[img.png|Caption|200]]');
     const otherView = document.createElement('div');
     ((manager as any).app.workspace.getActiveViewOfType as ReturnType<typeof vi.fn>)
       .mockReturnValue({ editor, contentEl: otherView });
+    app.workspace.getLeavesOfType.mockReturnValue([
+      { view: { editor, contentEl: otherView } as any }
+    ]);
 
     await manager.updateState(img, { width: 320 });
 
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('abandons a deferred write when the source link changed before layout became ready', async () => {
-    const { app, editor, img, lines, manager } = makeUpdateFixture('![[img.png|Caption|200]]');
-    let deferredWrite: (() => void) | undefined;
-    app.workspace.onLayoutReady.mockImplementation((callback: () => void) => {
-      deferredWrite = callback;
-    });
-
-    await manager.updateState(img, { width: 320 });
+  it('updates the current exact source link after an earlier user edit', async () => {
+    const { editor, img, lines, manager } = makeUpdateFixture('![[img.png|Caption|200]]');
     lines[0] = '![[img.png|User edit|640]]';
-    deferredWrite?.();
 
-    expect(editor.replaceRange).not.toHaveBeenCalled();
-    expect(lines[0]).toBe('![[img.png|User edit|640]]');
+    const result = await manager.updateState(img, { width: 320 });
+
+    expect(result.status).toBe('saved');
+    expect(editor.replaceRange).toHaveBeenCalledOnce();
+    expect(lines[0]).toBe('![[img.png|User edit|320]]');
   });
 
   it('keeps writing to the owning view after an active-view change and abandons after unload', async () => {
     const { app, editor, img, manager } = makeUpdateFixture('![[img.png|Caption|200]]');
     const originalView = app.workspace.getActiveViewOfType();
-    let deferredWrite: (() => void) | undefined;
-    app.workspace.onLayoutReady.mockImplementation((callback: () => void) => {
-      deferredWrite = callback;
-    });
-
-    await manager.updateState(img, { width: 320 });
     app.workspace.getActiveViewOfType.mockReturnValue({
       editor,
       file: originalView.file,
       contentEl: document.createElement('div'),
       getMode: () => 'source'
-    });
-    deferredWrite?.();
+    } as any);
+    const firstResult = await manager.updateState(img, { width: 320 });
+    expect(firstResult.complete).toBe(true);
     expect(editor.replaceRange).toHaveBeenCalledOnce();
 
     editor.replaceRange.mockClear();
     app.workspace.getActiveViewOfType.mockReturnValue(originalView);
-    await manager.updateState(img, { width: 360 });
     manager.onunload();
-    deferredWrite?.();
+    const secondResult = await manager.updateState(img, { width: 360 });
+    expect(secondResult.status).toBe('stale');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 });

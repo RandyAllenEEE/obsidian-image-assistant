@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CaptionDomRenderer } from '../../../../src/ui/caption/CaptionDomRenderer';
 import { ResolvedCaptionState } from '../../../../src/ui/caption/CaptionResolver';
 
@@ -174,5 +174,30 @@ describe('CaptionDomRenderer', () => {
     expect(caption?.getAttribute('data-image-assistant-caption-standalone')).toBe('true');
     expect(caption?.getAttribute('data-image-assistant-source-key')).toBe('10:40:0:image.png');
     expect(embed.getAttribute('data-image-assistant-caption-align')).toBe('right');
+  });
+
+  it('tracks popout image widths with the owner window ResizeObserver', () => {
+    const popoutDocument = document.implementation.createHTMLDocument('popout');
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    const OwnerResizeObserver = vi.fn(function () {
+      return { observe, disconnect };
+    });
+    Object.defineProperty(popoutDocument, 'defaultView', {
+      configurable: true,
+      value: { ResizeObserver: OwnerResizeObserver }
+    });
+    const img = popoutDocument.createElement('img');
+    popoutDocument.body.appendChild(img);
+
+    renderer.render(img, state('Popout caption'), {
+      document: popoutDocument
+    });
+
+    expect(OwnerResizeObserver).toHaveBeenCalledOnce();
+    expect(observe).toHaveBeenCalledWith(img);
+
+    renderer.cleanup(popoutDocument);
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 });

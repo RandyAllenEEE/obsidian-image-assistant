@@ -97,7 +97,7 @@ describe('BatchImageProcessor orchestration', () => {
 
     const result = await bip.batchProcess([imgA, imgB]);
 
-    expect(processedPaths(imageProcessor)).toEqual(['images/a.png', 'images/b.jpg']);
+    expect(processedPaths(imageProcessor)).toEqual(['a.png', 'b.jpg']);
     expect(result.successful.map((item: any) => item.item.path)).toEqual(['images/a.png', 'images/b.jpg']);
   });
 
@@ -109,7 +109,7 @@ describe('BatchImageProcessor orchestration', () => {
     await bip.batchProcess([imgA]);
 
     expect(imageProcessor.processImageDetailed).toHaveBeenCalledWith(
-      imgA,
+      expect.objectContaining({ name: 'a.png' }),
       'JPEG',
       expect.any(Number),
       expect.any(Number),

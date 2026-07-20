@@ -1,136 +1,203 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Modal } from "obsidian";
 import { SingleUploadHandler } from "../../../../src/cloud/handlers/SingleUploadHandler";
-import { CloudImageDeleter } from "../../../../src/cloud/CloudImageDeleter";
-import { fakeApp, fakeTFile, fakeVault } from "../../../factories/obsidian";
+import { UploaderManager } from "../../../../src/cloud/uploader";
+import { DEFAULT_SETTINGS } from "../../../../src/settings/defaults";
+import { VaultReferenceManager } from "../../../../src/utils/VaultReferenceManager";
+import {
+    fakeApp,
+    fakeMetadataCache,
+    fakeTFile,
+    fakeVault
+} from "../../../factories/obsidian";
 
-function createFixture() {
-    const file = fakeTFile({ path: "attachments/photo.png", name: "photo.png", extension: "png" });
-    const app = fakeApp({ vault: fakeVault({ files: [file] }) }) as any;
-    app.vault.trash = vi.fn(async () => undefined);
-    const referenceManager = {
-        scanReferencesDetailed: vi.fn(async () => ({
-            locations: [] as any[], complete: true, uncertainFiles: [] as string[]
-        })),
-        updateReferenceLocationsDetailed: vi.fn(async (locations: any[]) => ({
-            found: locations.length,
-            replaced: locations.length,
-            complete: true,
-            files: [],
-            failedFiles: [],
-            uncertainFiles: []
-        })),
-        getFilesReferencingImage: vi.fn(async () => []),
-        getFilesReferencingUrl: vi.fn(async () => [])
-    };
+const CLOUD_URL = "https://cdn.example/photo.png";
+
+function createFixture(options: {
+    noteContent?: string;
+    canvasContent?: string;
+    failReadPath?: string;
+}) {
+    const image = fakeTFile({ path: "attachments/photo.png", extension: "png" });
+    const note = options.noteContent !== undefined
+        ? fakeTFile({ path: "notes/current.md", extension: "md" })
+        : null;
+    const canvas = options.canvasContent !== undefined
+        ? fakeTFile({ path: "boards/media.canvas", extension: "canvas" })
+        : null;
+    const locked = options.failReadPath
+        ? fakeTFile({ path: options.failReadPath, extension: "md" })
+        : null;
+    const files = [image, note, canvas, locked].filter(Boolean) as any[];
+    const contents = new Map<string, string>();
+    if (note) contents.set(note.path, options.noteContent!);
+    if (canvas) contents.set(canvas.path, options.canvasContent!);
+    const vault = fakeVault({ files, fileContents: contents }) as any;
+    if (locked) {
+        const read = vault.read;
+        vault.read = vi.fn(async (file: any) => {
+            if (file.path === locked.path) throw new Error("locked");
+            return read(file);
+        });
+    }
+    const app = fakeApp({
+        vault,
+        metadataCache: fakeMetadataCache()
+    }) as any;
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.global.codeBlockImageLinkIndexing = false;
     const plugin = {
-        settings: {
-            captions: { enabled: false },
-            pasteHandling: { cloud: { uploader: "PicList" } }
+        settings,
+        historyManager: {
+            isUrlUploaded: vi.fn(() => false),
+            getRecord: vi.fn(),
+            removeRecord: vi.fn()
         },
-        vaultReferenceManager: referenceManager
+        imageStateManager: { refreshAllImages: vi.fn() },
+        imageCaption: { refreshAllViews: vi.fn() }
     } as any;
+    plugin.vaultReferenceManager = new VaultReferenceManager(app, plugin);
     const handler = new SingleUploadHandler(app, plugin);
-    return { app, file, handler, referenceManager };
+    return { app, plugin, handler, image, note, canvas, contents };
 }
 
-describe("SingleUploadHandler no-reference deletion safety", () => {
-    it("keeps both copies when a fresh scan finds a reference after the dialog was shown", async () => {
-        const { app, file, handler, referenceManager } = createFixture();
-        referenceManager.scanReferencesDetailed.mockResolvedValueOnce({
-            locations: [{ file, start: 0, end: 1, original: "![[attachments/photo.png]]", link: file.path, line: 0 }],
-            complete: true,
-            uncertainFiles: []
+function captureModals() {
+    return vi.spyOn(Modal.prototype, "open").mockImplementation(function (this: Modal) {
+        this.onOpen();
+    });
+}
+
+describe("SingleUploadHandler reference workflow", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.spyOn(UploaderManager.prototype, "upload").mockResolvedValue({
+            success: true,
+            result: [CLOUD_URL],
+            msg: ""
+        } as any);
+    });
+
+    it("performs zero reference mutation before confirmation, then replaces all eligible links", async () => {
+        const source = "![[attachments/photo.png|Caption|center|300]]";
+        const fixture = createFixture({ noteContent: source });
+        const open = captureModals();
+
+        await fixture.handler.uploadSingleFile(fixture.image);
+
+        expect(fixture.contents.get(fixture.note!.path)).toBe(source);
+        expect(fixture.app.vault.trash).not.toHaveBeenCalled();
+        const modal = open.mock.instances[0] as unknown as Modal;
+        [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
+            .find(button => button.textContent?.includes("eligible vault"))
+            ?.click();
+
+        await vi.waitFor(() => {
+            expect(fixture.contents.get(fixture.note!.path)).toBe(
+                `![[${CLOUD_URL}|Caption|center|300]]`
+            );
         });
-
-        await (handler as any).handleNoReferenceChoice("keep-cloud", file, "https://cdn.example/photo.png");
-
-        expect(app.vault.trash).not.toHaveBeenCalled();
+        expect(fixture.app.vault.trash).not.toHaveBeenCalled();
     });
 
-    it("rechecks after cloud deletion and keeps the local file when a reference appears", async () => {
-        const { app, file, handler, referenceManager } = createFixture();
-        referenceManager.scanReferencesDetailed
-            .mockResolvedValueOnce({ locations: [], complete: true, uncertainFiles: [] })
-            .mockResolvedValueOnce({
-                locations: [{ file, start: 0, end: 1, original: "![[attachments/photo.png]]", link: file.path, line: 0 }],
-                complete: true,
-                uncertainFiles: []
-            });
-        const deleteCloudImage = vi.spyOn(handler as any, "deleteCloudImage").mockResolvedValue(true);
-
-        await (handler as any).handleNoReferenceChoice("delete-all", file, "https://cdn.example/photo.png");
-
-        expect(deleteCloudImage).toHaveBeenCalledOnce();
-        expect(app.vault.trash).not.toHaveBeenCalled();
-    });
-
-    it("rechecks immediately before keep-cloud deletes the local file", async () => {
-        const { app, file, handler, referenceManager } = createFixture();
-        referenceManager.scanReferencesDetailed
-            .mockResolvedValueOnce({ locations: [], complete: true, uncertainFiles: [] })
-            .mockResolvedValueOnce({
-                locations: [{ file, start: 0, end: 1, original: "![[attachments/photo.png]]", link: file.path, line: 0 }],
-                complete: true,
-                uncertainFiles: []
-            });
-
-        await (handler as any).handleNoReferenceChoice("keep-cloud", file, "https://cdn.example/photo.png");
-
-        expect(referenceManager.scanReferencesDetailed).toHaveBeenCalledTimes(2);
-        expect(app.vault.trash).not.toHaveBeenCalled();
-    });
-
-    it("keeps the cloud object when undo finds a URL reference", async () => {
-        const { file, handler, referenceManager } = createFixture();
-        const url = "https://cdn.example/photo.png";
-        referenceManager.scanReferencesDetailed.mockResolvedValue({
-            locations: [{ file, start: 0, end: 1, original: `![](${url})`, link: url, line: 0 }],
-            complete: true,
-            uncertainFiles: []
-        });
-        const deleteSpy = vi.spyOn(CloudImageDeleter.prototype, "deleteImage");
-
-        await expect((handler as any).deleteCloudImage(url)).resolves.toBe(false);
-
-        expect(deleteSpy).not.toHaveBeenCalled();
-    });
-
-    it("replaces Canvas references before deleting the uploaded local file", async () => {
-        const file = fakeTFile({ path: "attachments/photo.png", name: "photo.png", extension: "png" });
-        const canvas = fakeTFile({ path: "boards/media.canvas", name: "media.canvas", extension: "canvas" });
-        const url = "https://cdn.example/photo.png";
-        const contents = new Map([[canvas.path, JSON.stringify({
+    it("replaces Markdown and Canvas references before deleting the local source", async () => {
+        const source = "![[attachments/photo.png|Caption]]";
+        const canvasContent = JSON.stringify({
             nodes: [
-                { id: "native", type: "file", file: file.path },
-                { id: "text", type: "text", text: `![[${file.path}|300]]` }
+                { id: "native", type: "file", file: "attachments/photo.png" },
+                {
+                    id: "text",
+                    type: "text",
+                    text: "![[attachments/photo.png|Canvas|200]]"
+                }
             ]
-        })]]);
-        const app = fakeApp({ vault: fakeVault({ files: [file, canvas], fileContents: contents }) }) as any;
-        const referenceManager = {
-            scanReferencesDetailed: vi.fn(async () => ({
-                locations: [], complete: true, uncertainFiles: []
-            })),
-            updateReferenceLocationsDetailed: vi.fn(async () => ({
-                found: 0, replaced: 0, complete: true,
-                files: [], failedFiles: [], uncertainFiles: []
-            })),
-            getFilesReferencingImage: vi.fn(async () => []),
-            getFilesReferencingUrl: vi.fn(async () => [])
-        };
-        const plugin = {
-            settings: {
-                captions: { enabled: false },
-                pasteHandling: { cloud: { uploader: "PicList" } }
-            },
-            vaultReferenceManager: referenceManager
-        } as any;
-        const handler = new SingleUploadHandler(app, plugin);
+        });
+        const fixture = createFixture({ noteContent: source, canvasContent });
+        const open = captureModals();
 
-        await (handler as any).replaceAllLinksAndDelete(file, url);
-        const updated = JSON.parse(contents.get(canvas.path) ?? "{}");
+        await fixture.handler.uploadSingleFile(fixture.image);
+        const modal = open.mock.instances[0] as unknown as Modal;
+        [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
+            .find(button => button.textContent?.includes("delete source"))
+            ?.click();
 
-        expect(updated.nodes[0]).toMatchObject({ id: "native", type: "link", url });
-        expect(updated.nodes[1].text).toBe(`![[${url}|300]]`);
-        expect(app.vault.trash).toHaveBeenCalledWith(file, true);
+        await vi.waitFor(() => {
+            expect(fixture.app.vault.trash).toHaveBeenCalledWith(fixture.image, true);
+        });
+        expect(fixture.contents.get(fixture.note!.path)).toBe(
+            `![[${CLOUD_URL}|Caption]]`
+        );
+        const updatedCanvas = JSON.parse(fixture.contents.get(fixture.canvas!.path) ?? "{}");
+        expect(updatedCanvas.nodes[0]).toMatchObject({
+            id: "native",
+            type: "link",
+            url: CLOUD_URL
+        });
+        expect(updatedCanvas.nodes[1].text).toBe(
+            `![[${CLOUD_URL}|Canvas|200]]`
+        );
+    });
+
+    it("offers source-only deletion for an unreferenced upload and rescans before trashing", async () => {
+        const fixture = createFixture({});
+        const open = captureModals();
+
+        await fixture.handler.uploadSingleFile(fixture.image);
+        const modal = open.mock.instances[0] as unknown as Modal;
+        [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
+            .find(button => button.textContent?.includes("unreferenced source"))
+            ?.click();
+
+        await vi.waitFor(() => {
+            expect(fixture.app.vault.trash).toHaveBeenCalledWith(fixture.image, true);
+        });
+    });
+
+    it("keeps both transfer results when the user cancels", async () => {
+        const source = "![[attachments/photo.png]]";
+        const fixture = createFixture({ noteContent: source });
+        const open = captureModals();
+
+        await fixture.handler.uploadSingleFile(fixture.image);
+        const modal = open.mock.instances[0] as unknown as Modal;
+        [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
+            .find(button => button.textContent?.includes("Keep transfer"))
+            ?.click();
+
+        await vi.waitFor(() => {
+            expect(fixture.plugin.imageStateManager.refreshAllImages).not.toHaveBeenCalled();
+        });
+        expect(fixture.contents.get(fixture.note!.path)).toBe(source);
+        expect(fixture.app.vault.trash).not.toHaveBeenCalled();
+    });
+
+    it("refreshes the decision inventory when references change before execution", async () => {
+        const source = "![[attachments/photo.png]]";
+        const fixture = createFixture({ noteContent: source });
+        const open = captureModals();
+
+        await fixture.handler.uploadSingleFile(fixture.image);
+        fixture.contents.set(fixture.note!.path, `${source}\n${source}`);
+        const firstModal = open.mock.instances[0] as unknown as Modal;
+        [...firstModal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
+            .find(button => button.textContent?.includes("eligible vault"))
+            ?.click();
+
+        await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(2));
+        expect(fixture.contents.get(fixture.note!.path)).toBe(`${source}\n${source}`);
+        expect(fixture.app.vault.trash).not.toHaveBeenCalled();
+    });
+
+    it("allows only keeping the transfer when a no-context scan is incomplete", async () => {
+        const fixture = createFixture({ failReadPath: "notes/locked.md" });
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const open = captureModals();
+
+        await fixture.handler.uploadSingleFile(fixture.image);
+        const modal = open.mock.instances[0] as unknown as Modal;
+
+        expect(modal.contentEl.textContent).toContain("notes/locked.md");
+        expect(modal.contentEl.querySelectorAll("button")).toHaveLength(2);
+        expect([...modal.contentEl.querySelectorAll("button")]
+            .some(button => button.textContent?.includes("delete source"))).toBe(false);
     });
 });

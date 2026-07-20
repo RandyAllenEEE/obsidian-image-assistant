@@ -180,6 +180,121 @@ describe('PipeSyntaxParser Exhaustive Tests', () => {
         });
     });
 
+    describe('Source-preserving size updates', () => {
+        it.each([
+            {
+                name: 'keeps Wiki attributes in their original order',
+                input: '![[assets/image.png|right-wrap|Caption\\|with pipe| 320x200 ]]',
+                update: { width: 500 },
+                expected: '![[assets/image.png|right-wrap|Caption\\|with pipe| 500x200 ]]'
+            },
+            {
+                name: 'keeps a Wiki size before its caption and alignment',
+                input: '![[assets/image.png|320x|Caption|left]]',
+                update: { width: 500 },
+                expected: '![[assets/image.png|500|Caption|left]]'
+            },
+            {
+                name: 'appends a Wiki height without changing existing attributes',
+                input: '![[assets/image.png|Caption|center]]',
+                update: { height: 240 },
+                expected: '![[assets/image.png|Caption|center|x240]]'
+            },
+            {
+                name: 'keeps Markdown display-order attributes and its quoted title',
+                input: '![right|320|Caption](<images/a b.png> "A title")',
+                update: { width: 500 },
+                expected: '![right|500|Caption](<images/a b.png> "A title")'
+            },
+            {
+                name: 'keeps escaped Markdown caption pipes and updates the missing width',
+                input: '![Caption\\|with pipe|right-wrap|x200](https://example.com/image?x=1#part \'single title\')',
+                update: { width: 500 },
+                expected: '![Caption\\|with pipe|right-wrap|500x200](https://example.com/image?x=1#part \'single title\')'
+            },
+            {
+                name: 'preserves a numeric one-part Markdown caption and appends a size',
+                input: '![300](img.png)',
+                update: { width: 500 },
+                expected: '![300|500](img.png)'
+            },
+            {
+                name: 'removes only the existing size segment',
+                input: '![Caption | 320x200 |right](img.png "Title")',
+                update: { width: null, height: null },
+                expected: '![Caption |right](img.png "Title")'
+            }
+        ])('$name', ({ input, update, expected }) => {
+            const result = parser.updateSizePreservingSyntax(input, update);
+
+            expect(result).toEqual({ status: 'updated', linkText: expected });
+        });
+
+        it.each([
+            ['![[img.png|Caption|left|320]]', '![[img.png|Caption|left|500]]'],
+            ['![[img.png|320|left|Caption]]', '![[img.png|500|left|Caption]]'],
+            ['![[img.png|Caption|320x200|right]]', '![[img.png|Caption|500x200|right]]'],
+            ['![[img.png|right|x200|Caption]]', '![[img.png|right|500x200|Caption]]'],
+            ['![Caption|left|320](img.png)', '![Caption|left|500](img.png)'],
+            ['![Caption|320|right](img.png)', '![Caption|500|right](img.png)'],
+            ['![Caption|320x200|right](img.png)', '![Caption|500x200|right](img.png)'],
+            ['![Caption|right|x200](img.png)', '![Caption|right|500x200](img.png)']
+        ])('updates width across supported attribute positions: %s', (input, expected) => {
+            expect(parser.updateSizePreservingSyntax(input, { width: 500 })).toEqual({
+                status: 'updated',
+                linkText: expected
+            });
+        });
+
+        it.each([
+            ['![[img.png|Caption|320x200|right]]', '![[img.png|Caption|320|right]]'],
+            ['![Caption|right|320x200](img.png)', '![Caption|right|320](img.png)'],
+            ['![[img.png|Caption|320]]', '![[img.png|Caption|x240]]'],
+            ['![Caption|320](img.png)', '![Caption|x240](img.png)']
+        ])('handles single-side dimension transitions without retaining stale values: %s', (input, expected) => {
+            const updates = expected.includes('x240')
+                ? { width: null, height: 240 }
+                : { height: null };
+
+            expect(parser.updateSizePreservingSyntax(input, updates)).toEqual({
+                status: 'updated',
+                linkText: expected
+            });
+        });
+
+        it('does not mistake a numeric Wiki target path for a size attribute', () => {
+            const result = parser.updateSizePreservingSyntax('![[300|Caption]]', { width: 500 });
+
+            expect(result).toEqual({
+                status: 'updated',
+                linkText: '![[300|Caption|500]]'
+            });
+        });
+
+        it.each([
+            '![300|right](img.png)',
+            '![Caption|320|640](img.png)',
+            '![[img.png|Caption|320|640]]'
+        ])('refuses ambiguous size syntax without changing %s', (input) => {
+            const result = parser.updateSizePreservingSyntax(input, { width: 500 });
+
+            expect(result).toEqual({ status: 'ambiguous', linkText: input });
+        });
+
+        it('rejects invalid dimensions without changing the link', () => {
+            const input = '![[img.png|Caption|320]]';
+
+            expect(parser.updateSizePreservingSyntax(input, { width: 0 })).toEqual({
+                status: 'invalid',
+                linkText: input
+            });
+            expect(parser.updateSizePreservingSyntax(input, { height: 12.5 })).toEqual({
+                status: 'invalid',
+                linkText: input
+            });
+        });
+    });
+
     describe('5. Markdown destinations', () => {
         it('should parse angle-bracketed paths with spaces', () => {
             const res = parser.parsePipeSyntax('![Caption](<images/my photo.png>)');

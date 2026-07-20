@@ -135,6 +135,23 @@ describe('CaptionRenderCoordinator', () => {
     expect(resolved.get(expected)?.name).toBe('Caption');
   });
 
+  it('does not order-fallback a proxy image across a conflicting direct match', () => {
+    const coordinator = new CaptionRenderCoordinator(fakeApp() as any);
+    const binding = coordinator.createSectionBinding([
+      '![First](https://cdn.example.com/first.png)',
+      '![Second](https://cdn.example.com/second.png)'
+    ].join('\n'), 'notes/current.md')!;
+    const proxy = document.createElement('img');
+    proxy.src = 'blob:https://obsidian.local/proxy';
+    const directlyMatchedFirst = document.createElement('img');
+    directlyMatchedFirst.src = 'https://cdn.example.com/first.png';
+
+    const resolved = binding.resolveImages([proxy, directlyMatchedFirst]);
+
+    expect(resolved.has(proxy)).toBe(false);
+    expect(resolved.get(directlyMatchedFirst)?.name).toBe('First');
+  });
+
   it('releases removed images from the binding and renderer callback', async () => {
     const coordinator = new CaptionRenderCoordinator(fakeApp() as any);
     const binding = coordinator.createSectionBinding(

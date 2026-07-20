@@ -1,104 +1,89 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProcessingHandler } from '../../../../src/ui/contextMenu/handlers/ProcessingHandler';
-import { ProcessSingleImageModal } from '../../../../src/ui/modals/ProcessSingleImageModal';
-import { Crop } from '../../../../src/ui/Crop';
-import { ImageAnnotationModal } from '../../../../src/ui/ImageAnnotation';
-import { fakeApp, fakeTFile, fakeVault, fakeWorkspace } from '../../../factories/obsidian';
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ProcessingHandler } from "../../../../src/ui/contextMenu/handlers/ProcessingHandler";
+import { ProcessSingleImageModal } from "../../../../src/ui/modals/ProcessSingleImageModal";
+import { Crop } from "../../../../src/ui/Crop";
+import { ImageAnnotationModal } from "../../../../src/ui/ImageAnnotation";
+import { fakeApp, fakeTFile } from "../../../factories/obsidian";
 
-describe('ProcessingHandler', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+describe("ProcessingHandler", () => {
+    beforeEach(() => vi.clearAllMocks());
 
-  function makeFixture() {
-    const note = fakeTFile({ path: 'notes/current.md', name: 'current.md', extension: 'md' });
-    const wrongDuplicate = fakeTFile({ path: 'other/pic.png', name: 'pic.png', extension: 'png' });
-    const resolvedImage = fakeTFile({ path: 'assets/pic.png', name: 'pic.png', extension: 'png' });
-    const app = fakeApp({
-      vault: fakeVault({ files: [note, wrongDuplicate, resolvedImage] }),
-      workspace: fakeWorkspace({
-        activeFile: note,
-        activeView: {
-          file: note,
-          getViewType: () => 'markdown',
-          contentEl: document.body,
-          containerEl: document.body,
-          editor: {}
-        }
-      })
-    }) as any;
-    const folderManagement = {
-      getImagePath: vi.fn(() => resolvedImage.path)
-    };
-    const plugin = {
-      settings: { operationDefaults: {} },
-      getDefaultSingleImageOperationSettings: vi.fn(() => ({
-        outputFormat: 'NONE', quality: 0.8, colorDepth: 1, resizeMode: 'None',
-        desiredWidth: 0, desiredHeight: 0, desiredLongestEdge: 0,
-        enlargeOrReduce: 'Auto', allowLargerFiles: true
-      }))
-    } as any;
-    const handler = new ProcessingHandler(app, plugin, folderManagement as any);
-    const img = document.createElement('img');
-    img.setAttribute('src', 'app://local/pic.png');
+    function makeFixture(extension = "png") {
+        const file = fakeTFile({
+            path: `assets/pic.${extension}`,
+            name: `pic.${extension}`,
+            extension
+        });
+        const app = fakeApp() as any;
+        const plugin = {
+            settings: { operationDefaults: {} },
+            getDefaultSingleImageOperationSettings: vi.fn(() => ({
+                outputFormat: "NONE",
+                quality: 0.8,
+                colorDepth: 1,
+                resizeMode: "None",
+                desiredWidth: 0,
+                desiredHeight: 0,
+                desiredLongestEdge: 0,
+                enlargeOrReduce: "Auto",
+                allowLargerFiles: true
+            }))
+        } as any;
+        const image = document.createElement("img");
+        const context = {
+            image,
+            ownerDocument: document,
+            ownerWindow: window,
+            renderedSrc: "app://local/assets/pic.png",
+            sourceKind: "local",
+            resolution: "resolved",
+            owner: null,
+            viewContext: null,
+            descriptor: null,
+            localFile: file,
+            url: null,
+            dataReference: null
+        } as const;
+        return {
+            handler: new ProcessingHandler(app, plugin),
+            context,
+            file
+        };
+    }
 
-    return { app, folderManagement, handler, img, resolvedImage };
-  }
+    it("only exposes in-place editors for formats with verified canvas encoders", () => {
+        expect(makeFixture("png").handler.canEditImage(makeFixture("png").context)).toBe(true);
+        expect(makeFixture("webp").handler.canEditImage(makeFixture("webp").context)).toBe(true);
+        expect(makeFixture("gif").handler.canEditImage(makeFixture("gif").context)).toBe(false);
+        expect(makeFixture("tiff").handler.canEditImage(makeFixture("tiff").context)).toBe(false);
+    });
 
-  it('resolves the image by exact vault path instead of the first duplicate filename', () => {
-    const { app, folderManagement, handler, img, resolvedImage } = makeFixture();
-    const getFilesSpy = vi.spyOn(app.vault, 'getFiles');
+    it("opens every tool for the exact file supplied by the menu context", async () => {
+        const { handler, context, file } = makeFixture();
+        const processOpen = vi.spyOn(ProcessSingleImageModal.prototype, "open");
+        const cropOpen = vi.spyOn(Crop.prototype, "open");
+        const annotationOpen = vi.spyOn(ImageAnnotationModal.prototype, "open");
 
-    const result = (handler as any).resolveLocalImageFile(img);
+        await handler.processImage(context);
+        await handler.cropRotateFlip(context);
+        await handler.annotateImage(context);
 
-    expect(folderManagement.getImagePath).toHaveBeenCalledWith(img);
-    expect(app.vault.getAbstractFileByPath).toHaveBeenCalledWith(resolvedImage.path);
-    expect(getFilesSpy).not.toHaveBeenCalled();
-    expect(result).toBe(resolvedImage);
-  });
+        expect(processOpen).toHaveBeenCalledOnce();
+        expect(cropOpen).toHaveBeenCalledOnce();
+        expect(annotationOpen).toHaveBeenCalledOnce();
+        expect((processOpen.mock.instances[0] as any).imageFile).toBe(file);
+        expect((cropOpen.mock.instances[0] as any).imageFile).toBe(file);
+        expect((annotationOpen.mock.instances[0] as any).file).toBe(file);
+    });
 
-  it('does not resolve network images for local processing actions', () => {
-    const { folderManagement, handler, img } = makeFixture();
-    folderManagement.getImagePath.mockReturnValue('https://example.com/pic.png');
-
-    expect((handler as any).resolveLocalImageFile(img)).toBeNull();
-  });
-
-  it('returns null when the resolved vault path no longer exists', () => {
-    const { folderManagement, handler, img } = makeFixture();
-    folderManagement.getImagePath.mockReturnValue('missing/pic.png');
-
-    expect((handler as any).resolveLocalImageFile(img)).toBeNull();
-  });
-
-  it('only exposes in-place editors for formats with verified canvas encoders', () => {
-    const { handler, img, resolvedImage } = makeFixture();
-
-    expect(handler.canEditImage(img)).toBe(true);
-    (resolvedImage as any).extension = 'gif';
-    expect(handler.canEditImage(img)).toBe(false);
-    (resolvedImage as any).extension = 'tiff';
-    expect(handler.canEditImage(img)).toBe(false);
-    (resolvedImage as any).extension = 'webp';
-    expect(handler.canEditImage(img)).toBe(true);
-  });
-
-  it('opens image tools even when another non-Markdown leaf is active', async () => {
-    const { app, handler, img, resolvedImage } = makeFixture();
-    app.workspace.getActiveViewOfType = vi.fn(() => null);
-    const processOpen = vi.spyOn(ProcessSingleImageModal.prototype, 'open');
-    const cropOpen = vi.spyOn(Crop.prototype, 'open');
-    const annotationOpen = vi.spyOn(ImageAnnotationModal.prototype, 'open');
-
-    await handler.processImage(img);
-    await handler.cropRotateFlip(img);
-    await handler.annotateImage(img);
-
-    expect(processOpen).toHaveBeenCalledOnce();
-    expect(cropOpen).toHaveBeenCalledOnce();
-    expect(annotationOpen).toHaveBeenCalledOnce();
-    expect((processOpen.mock.instances[0] as any).imageFile).toBe(resolvedImage);
-    expect((cropOpen.mock.instances[0] as any).imageFile).toBe(resolvedImage);
-    expect((annotationOpen.mock.instances[0] as any).file).toBe(resolvedImage);
-  });
+    it("does not open a local tool when the shared context has no file", async () => {
+        const fixture = makeFixture();
+        const processOpen = vi.spyOn(ProcessSingleImageModal.prototype, "open");
+        await fixture.handler.processImage({
+            ...fixture.context,
+            resolution: "unresolved",
+            localFile: null
+        });
+        expect(processOpen).not.toHaveBeenCalled();
+    });
 });

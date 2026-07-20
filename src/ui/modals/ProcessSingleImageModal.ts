@@ -10,6 +10,10 @@ import { OperationResultModal } from "./OperationResultModal";
 import { getErrorMessage } from "../../utils/ErrorUtils";
 import { detectImageBinaryType } from "../../utils/ImageBinaryType";
 import { resolveProcessedImageFilename } from "../../utils/ProcessedImageFilename";
+import { createReferenceMutationScanPolicy } from "../../utils/ReferenceScanPolicy";
+import { ImageResourceRefreshService } from "../../utils/ImageResourceRefreshService";
+import { ModalCommitGuard } from "../../utils/ModalCommitGuard";
+import { captureImageFileRevision } from "../../utils/ImageFileRevision";
 
 export interface SingleImageModalSettings extends SingleImageOperationDefaults {
     outputFormat: OutputFormat;
@@ -38,6 +42,7 @@ export class ProcessSingleImageModal extends Modal {
     private previewVersion = 0;
     private closed = false;
     private processing = false;
+    private readonly commitGuard = new ModalCommitGuard();
 
     // --- Dedicated containers for each section ---
     private conversionSettingsContainer: HTMLDivElement;
@@ -49,6 +54,15 @@ export class ProcessSingleImageModal extends Modal {
         this.imageFile = file;
         this.loadModalSettings();
         this.titleEl.setText(t("MODAL_SINGLE_IMG_TITLE") + file.name);
+    }
+
+    close(): void {
+        if (this.commitGuard.closeLocked) {
+            new Notice(t("MSG_IMAGE_EDIT_COMMIT_IN_PROGRESS"));
+            return;
+        }
+        this.commitGuard.cancel();
+        super.close();
     }
 
     private loadModalSettings() {
@@ -66,6 +80,7 @@ export class ProcessSingleImageModal extends Modal {
     }
 
     async onOpen() {
+        this.commitGuard.reset();
         this.closed = false;
         this.contentEl.empty();
         this.contentEl.addClass("process-single-image-modal");
@@ -459,15 +474,26 @@ export class ProcessSingleImageModal extends Modal {
     }
     private async processImage() {
         if (this.processing) return;
+        const commitToken = this.commitGuard.beginPreparing();
+        if (!commitToken) return;
         this.processing = true;
+        this.setActionButtonsDisabled(true);
         try {
             const fileBuffer = await this.app.vault.readBinary(this.imageFile);
+            if (!this.commitGuard.isCurrent(commitToken)) return;
+            const sourceRevision = await captureImageFileRevision(
+                this.app,
+                this.imageFile,
+                fileBuffer
+            );
+            if (!this.commitGuard.isCurrent(commitToken)) return;
             const detected = await detectImageBinaryType(fileBuffer);
             const imageFile = new File([fileBuffer], this.imageFile.name, { type: detected?.mime ?? 'application/octet-stream' });
 
             // Skip if the conversion is not needed
             if (this.modalSettings.outputFormat === "NONE" && this.modalSettings.resizeMode === "None") {
-                new Notice(`No processing needed for "${this.imageFile.name}".`, 1000);
+                new Notice(t("MSG_PROCESS_NOT_NEEDED", [this.imageFile.name]), 1000);
+                this.commitGuard.fail(commitToken);
                 this.close();
                 return;
             }
@@ -496,19 +522,24 @@ export class ProcessSingleImageModal extends Modal {
                 } : undefined,
                 this.plugin.settings
             );
+            if (!this.commitGuard.isCurrent(commitToken)) return;
 
             if (processedImage.outcome !== "converted") {
-                new Notice(processedImage.reason ?? `No processing needed for "${this.imageFile.name}".`, 1500);
+                new Notice(
+                    processedImage.reason ?? t("MSG_PROCESS_NOT_NEEDED", [this.imageFile.name]),
+                    1500
+                );
                 return;
             }
 
             const newFilename = await resolveProcessedImageFilename(this.imageFile, fileBuffer, processedImage);
+            if (!this.commitGuard.isCurrent(commitToken)) return;
 
 
             // --- File Creation/Replacement ---
             if (!this.modalSettings.allowLargerFiles && processedImage.data.byteLength > originalSize) {
                 this.plugin.showSizeComparisonNotification(originalSize, processedImage.data.byteLength);
-                new Notice(`Using original image for "${this.imageFile.name}" as processed image is larger.`, 1000);
+                new Notice(t("MSG_PROCESS_USING_ORIGINAL_LARGER", [this.imageFile.name]), 1000);
                 return;
             } else {
                 this.plugin.showSizeComparisonNotification(originalSize, processedImage.data.byteLength);
@@ -516,17 +547,31 @@ export class ProcessSingleImageModal extends Modal {
                     this.app,
                     this.plugin.folderAndFilenameManagement,
                     this.plugin.vaultReferenceManager,
-                    { includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing },
-                    () => this.plugin.settings.localProcessing.link
+                    createReferenceMutationScanPolicy(
+                        this.plugin.settings.global.codeBlockImageLinkIndexing
+                    ),
+                    () => this.plugin.settings.localProcessing.link,
+                    this.plugin.referenceIndexService
                 );
-                this.imageFile = await committer.commit(this.imageFile, newFilename, processedImage.data);
+                if (!this.commitGuard.beginCommitting(commitToken)) return;
+                this.imageFile = await committer.commit(
+                    this.imageFile,
+                    newFilename,
+                    processedImage.data,
+                    sourceRevision
+                );
             }
 
-            await this.refreshActiveNote();
-            new Notice(`Image "${this.imageFile.name}" processed`, 1000);
+            const refreshed = await this.refreshActiveNote();
+            new Notice(refreshed
+                ? t("MSG_PROCESS_SUCCESS", [this.imageFile.name])
+                : t("MSG_IMAGE_SAVED_REFRESH_FAILED"), 1000);
+            this.commitGuard.finish(commitToken);
             this.close();
 
         } catch (error) {
+            if (!this.commitGuard.isCurrent(commitToken)) return;
+            this.commitGuard.fail(commitToken);
             console.error("Error processing image:", error);
             if (error instanceof ImageConversionCommitError) {
                 const completed = [
@@ -546,47 +591,48 @@ export class ProcessSingleImageModal extends Modal {
                         .map(file => `${file.filePath}: ${file.error ?? `${file.replaced}/${file.found} updated`}`)
                 ];
                 new OperationResultModal(this.app, {
-                    title: "Image conversion was only partially committed",
-                    summary: `Stage: ${error.report.stage}. The source was preserved${error.report.targetPath ? ` and the target remains at ${error.report.targetPath}` : ""}.`,
+                    title: t("MSG_PROCESS_PARTIAL_TITLE"),
+                    summary: t("MSG_PROCESS_PARTIAL_SUMMARY", [
+                        error.report.stage,
+                        error.report.targetPath ?? t("MSG_PROCESS_NO_TARGET")
+                    ]),
                     successful: completed,
                     failed,
                     uncertain: error.report.uncertainFiles
                 }).open();
             }
-            new Notice(`Failed to process image: ${getErrorMessage(error)}`, 2000);
+            new Notice(t("MSG_PROCESS_FAILED", [getErrorMessage(error)]), 2000);
         } finally {
             this.processing = false;
+            if (this.commitGuard.phase === "preparing") {
+                this.commitGuard.fail(commitToken);
+            }
+            if (this.commitGuard.phase === "idle") {
+                this.setActionButtonsDisabled(false);
+            }
         }
     }
 
-    async refreshActiveNote() {
-        const leaf = this.app.workspace.getMostRecentLeaf();
-        if (!leaf) {
-            this.plugin.imageStateManager?.refreshAllImages();
-            return;
-        }
+    private setActionButtonsDisabled(disabled: boolean): void {
+        this.buttonContainer?.querySelectorAll("button").forEach(button => {
+            button.disabled = disabled;
+        });
+    }
 
-        const currentState = leaf.getViewState();
-        let restoreNeeded = false;
+    async refreshActiveNote(): Promise<boolean> {
         try {
-            await leaf.setViewState({ type: 'empty', state: {} });
-            restoreNeeded = true;
-            await leaf.setViewState(currentState);
-            restoreNeeded = false;
+            const service = this.plugin.imageResourceRefreshService
+                ?? new ImageResourceRefreshService(this.app, this.plugin);
+            await service.refreshFile(this.imageFile);
+            return true;
         } catch (error) {
-            console.warn("Image was processed, but the active note could not be refreshed:", error);
-            if (restoreNeeded) {
-                try {
-                    await leaf.setViewState(currentState);
-                } catch (restoreError) {
-                    console.error("Failed to restore the active note view:", restoreError);
-                }
-            }
-        } finally {
+            console.warn("Image was processed, but rendered images could not be refreshed:", error);
             this.plugin.imageStateManager?.refreshAllImages();
+            return false;
         }
     }
     onClose() {
+        this.commitGuard.cancel();
         this.closed = true;
         this.previewVersion++;
         this.saveModalSettings();

@@ -1,21 +1,33 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PasteHandler } from '../../../../src/cloud/handlers/PasteHandler';
 import { fakeTFile } from '../../../factories/obsidian';
 
 const uploadByClipboardMock = vi.hoisted(() => vi.fn());
+const uploadMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../../../src/cloud/uploader/index', () => ({
   UploaderManager: class {
     uploadByClipboard = uploadByClipboardMock;
+    upload = uploadMock;
   }
 }));
 
 class MemoryEditor {
   value = '';
   cursor = { line: 0, ch: 0 };
+  selectionFrom: { line: number; ch: number } | null = null;
+  selectionTo: { line: number; ch: number } | null = null;
 
-  getCursor() { return { ...this.cursor }; }
-  setCursor(position: { line: number; ch: number }) { this.cursor = { ...position }; }
+  getCursor(which?: "from" | "to") {
+    if (which === "from" && this.selectionFrom) return { ...this.selectionFrom };
+    if (which === "to" && this.selectionTo) return { ...this.selectionTo };
+    return { ...this.cursor };
+  }
+  setCursor(position: { line: number; ch: number }) {
+    this.cursor = { ...position };
+    this.selectionFrom = null;
+    this.selectionTo = null;
+  }
   lineCount() { return this.value.split('\n').length; }
   getLine(line: number) { return this.value.split('\n')[line] ?? ''; }
   posToOffset(position: { line: number; ch: number }) {
@@ -88,7 +100,25 @@ function makeWritableApp() {
   } as any;
 }
 
+function makeContext(editor: unknown) {
+  return {
+    editor,
+    file: fakeTFile({
+      path: 'notes/owner.md',
+      name: 'owner.md',
+      extension: 'md'
+    }),
+    view: null,
+    ownerDocument: document
+  } as any;
+}
+
 describe('Cloud PasteHandler applyImage behavior', () => {
+  beforeEach(() => {
+    uploadByClipboardMock.mockReset();
+    uploadMock.mockReset();
+  });
+
   it('ignores paste events already handled by another plugin', async () => {
     const handler = new PasteHandler(makeWritableApp(), makePlugin(true));
     const processFiles = vi.spyOn(handler, 'processFiles').mockResolvedValue(undefined);
@@ -97,7 +127,8 @@ describe('Cloud PasteHandler applyImage behavior', () => {
       defaultPrevented: true
     } as any as ClipboardEvent;
 
-    await handler.handlePaste(evt, {} as any);
+    const editor = {} as any;
+    await handler.handlePaste(evt, editor, makeContext(editor));
 
     expect(evt.preventDefault).not.toHaveBeenCalled();
     expect(processFiles).not.toHaveBeenCalled();
@@ -135,8 +166,9 @@ describe('Cloud PasteHandler applyImage behavior', () => {
     const handler = new PasteHandler(makeWritableApp(), makePlugin(true));
     const processFiles = vi.spyOn(handler, 'processFiles').mockResolvedValue(undefined);
     const evt = makeClipboardEvent('plain text next to image');
+    const editor = {} as any;
 
-    await handler.handlePaste(evt, {} as any);
+    await handler.handlePaste(evt, editor, makeContext(editor));
 
     expect(evt.preventDefault).toHaveBeenCalledTimes(1);
     expect(processFiles).toHaveBeenCalledTimes(1);
@@ -156,6 +188,97 @@ describe('Cloud PasteHandler applyImage behavior', () => {
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
+  it('inserts network Markdown immediately and replaces it after upload', async () => {
+    let finishUpload!: (value: unknown) => void;
+    uploadMock.mockReturnValueOnce(new Promise(resolve => {
+      finishUpload = resolve;
+    }));
+    const editor = new MemoryEditor();
+    const plugin = makePlugin(true, { workOnNetWork: true });
+    const handler = new PasteHandler(makeWritableApp(), plugin);
+    const source = 'Before ![caption|500](https://example.com/image.png "Title") after';
+    const evt = { defaultPrevented: false, preventDefault: vi.fn() } as any as ClipboardEvent;
+
+    const pending = handler.handlePasteText(
+      source,
+      editor as any,
+      { line: 0, ch: 0 },
+      evt,
+      makeContext(editor)
+    );
+
+    expect(evt.preventDefault).toHaveBeenCalledOnce();
+    expect(editor.value).toBe(source);
+
+    finishUpload({
+      success: true,
+      result: ['https://cdn.example.com/uploaded.webp']
+    });
+    await pending;
+
+    expect(editor.value).toBe(
+      'Before ![caption|500](https://cdn.example.com/uploaded.webp "Title") after'
+    );
+  });
+
+  it('replaces the current selection before tracking uploaded network links', async () => {
+    uploadMock.mockResolvedValueOnce({
+      success: true,
+      result: ['https://cdn.example.com/uploaded.webp']
+    });
+    const editor = new MemoryEditor();
+    editor.value = 'Before remove-me after';
+    editor.selectionFrom = { line: 0, ch: 7 };
+    editor.selectionTo = { line: 0, ch: 16 };
+    editor.cursor = { line: 0, ch: 16 };
+    const plugin = makePlugin(true, { workOnNetWork: true });
+    const handler = new PasteHandler(makeWritableApp(), plugin);
+    const source = '![caption](https://example.com/image.png)';
+    const evt = {
+      defaultPrevented: false,
+      preventDefault: vi.fn()
+    } as any as ClipboardEvent;
+
+    await handler.handlePasteText(
+      source,
+      editor as any,
+      editor.getCursor(),
+      evt,
+      makeContext(editor)
+    );
+
+    expect(editor.value).toBe(
+      'Before ![caption](https://cdn.example.com/uploaded.webp) after'
+    );
+  });
+
+  it('keeps failed network links while replacing other occurrences in order', async () => {
+    uploadMock
+      .mockResolvedValueOnce({
+        success: true,
+        result: ['https://cdn.example.com/first.webp']
+      })
+      .mockRejectedValueOnce(new Error('second failed'));
+    const editor = new MemoryEditor();
+    const plugin = makePlugin(true, { workOnNetWork: true });
+    const handler = new PasteHandler(makeWritableApp(), plugin);
+    const first = '![first|left|320](https://example.com/same.png)';
+    const second = '![second](https://example.com/same.png "Keep title")';
+    const evt = { defaultPrevented: false, preventDefault: vi.fn() } as any as ClipboardEvent;
+
+    await handler.handlePasteText(
+      `${first}\n${second}`,
+      editor as any,
+      { line: 0, ch: 0 },
+      evt,
+      makeContext(editor)
+    );
+
+    expect(editor.value).toBe(
+      `![first|left|320](https://cdn.example.com/first.webp)\n${second}`
+    );
+  });
+
   it('returns without throwing when there is an active file but no Markdown view', async () => {
     const app = {
       workspace: {
@@ -167,7 +290,7 @@ describe('Cloud PasteHandler applyImage behavior', () => {
     const file = new File(['image'], 'image.png', { type: 'image/png' });
 
     await expect(handler.processFiles([file], {} as any)).resolves.toBeUndefined();
-    expect(app.workspace.getActiveViewOfType).toHaveBeenCalled();
+    expect(app.workspace.getActiveViewOfType).not.toHaveBeenCalled();
   });
 
   it('inserts multiple uploaded links in clipboard order without nesting placeholders', async () => {
@@ -190,7 +313,11 @@ describe('Cloud PasteHandler applyImage behavior', () => {
       new File(['second'], 'second.png', { type: 'image/png' })
     ];
 
-    await new PasteHandler(app, plugin).processFiles(files, editor as any);
+    await new PasteHandler(app, plugin).processFiles(
+      files,
+      editor as any,
+      makeContext(editor)
+    );
 
     expect(editor.value).toBe('![ ](https://cdn.example/first.png)![ ](https://cdn.example/second.png)');
     expect(editor.cursor.ch).toBe(editor.value.length);
@@ -215,7 +342,7 @@ describe('Cloud PasteHandler applyImage behavior', () => {
     await new PasteHandler(app, plugin).processFiles([
       new File(['first'], 'first.png', { type: 'image/png' }),
       new File(['second'], 'second.png', { type: 'image/png' })
-    ], editor as any);
+    ], editor as any, makeContext(editor));
 
     expect(editor.value).toBe('![ ](https://cdn.example/second.png)');
     expect(editor.cursor.ch).toBe(editor.value.length);

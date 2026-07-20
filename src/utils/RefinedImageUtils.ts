@@ -1,4 +1,4 @@
-import { App, MarkdownView, Editor, TFile, normalizePath } from 'obsidian';
+import { Editor, normalizePath } from 'obsidian';
 import { type ImageLink } from './RegexPatterns';
 import {
     getImageLayoutKey,
@@ -36,29 +36,6 @@ export type ImageResolutionResult =
 const SHARED_SOURCE_INDEX_CACHE = new WeakMap<Editor, ImageSourceIndex>();
 
 export class RefinedImageUtils {
-    constructor(private app: App) { }
-
-    /**
-     * Extracts the full link text for an image from the editor content.
-     * Attempts to find the specific instance of the image if possible, 
-     * but currently defaults to finding the first match for the filename.
-     * 
-     * @param img - The HTMLImageElement in the DOM.
-     * @param file - The file containing the image.
-     * @returns The full link text (e.g. "![[image.png]]") or null if not found.
-     */
-    public getImageLinkText(img: HTMLImageElement, file: TFile): string | null {
-        // Try getting it from the active editor if we are in one
-        const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (markdownView && markdownView.file && markdownView.file.path === file.path) {
-            return this.getImageLinkTextFromEditor(img, markdownView.editor);
-        }
-
-        // This synchronous API intentionally resolves only live editor content.
-        // File-backed callers use the asynchronous source-context scanner instead.
-        return null;
-    }
-
     /**
      * Extracts link text using the Editor instance.
      * 
@@ -96,11 +73,41 @@ export class RefinedImageUtils {
             const src = img.getAttribute('src');
             if (!src) return { status: 'absent' };
 
+            const sourceIndex = preparedIndex ?? this.getImageSourceIndex(editor);
+            const editorOffset = this.getEditorOffset(img, editor);
+            if (editorOffset !== null) {
+                const positioned = this.selectDescriptorAtOffset(
+                    sourceIndex.descriptors.map(descriptor => ({ descriptor, score: 4 })),
+                    editorOffset,
+                    sourceIndex
+                );
+                if (positioned) {
+                    img.setAttribute(
+                        IMAGE_SOURCE_KEY_ATTRIBUTE,
+                        getImageSourceKey(positioned.descriptor)
+                    );
+                    return { status: 'resolved', match: this.toImageLinkMatch(positioned, sourceIndex) };
+                }
+                return { status: 'pending' };
+            }
+
+            const sourceKey = img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
+            if (sourceKey) {
+                const keyed = sourceIndex.descriptors.find(descriptor =>
+                    getImageSourceKey(descriptor) === sourceKey
+                );
+                if (keyed) {
+                    return {
+                        status: 'resolved',
+                        match: this.toImageLinkMatch({ descriptor: keyed, score: 4 }, sourceIndex)
+                    };
+                }
+            }
+
             const isNetwork = isHttpUrl(src);
             const candidates = this.buildSourceCandidates(src, isNetwork);
             if (candidates.length === 0) return { status: 'absent' };
 
-            const sourceIndex = preparedIndex ?? this.getImageSourceIndex(editor);
             const scored: ScoredDescriptor[] = [];
             let bestScore = 0;
 
@@ -116,29 +123,6 @@ export class RefinedImageUtils {
             }
 
             if (scored.length === 0) return { status: 'absent' };
-
-            const editorOffset = this.getEditorOffset(img, editor);
-            if (editorOffset !== null) {
-                const positioned = this.selectDescriptorAtOffset(scored, editorOffset, sourceIndex);
-                if (positioned) {
-                    img.setAttribute(
-                        IMAGE_SOURCE_KEY_ATTRIBUTE,
-                        getImageSourceKey(positioned.descriptor)
-                    );
-                    return { status: 'resolved', match: this.toImageLinkMatch(positioned, sourceIndex) };
-                }
-                return { status: 'pending' };
-            }
-
-            const sourceKey = img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
-            if (sourceKey) {
-                const keyed = scored.find(({ descriptor }) =>
-                    getImageSourceKey(descriptor) === sourceKey
-                );
-                if (keyed) {
-                    return { status: 'resolved', match: this.toImageLinkMatch(keyed, sourceIndex) };
-                }
-            }
 
             // Without a source position, repeated targets are ambiguous under
             // CodeMirror virtualization. Only a document-wide unique target is safe.
@@ -164,36 +148,6 @@ export class RefinedImageUtils {
         };
         SHARED_SOURCE_INDEX_CACHE.set(editor, index);
         return index;
-    }
-
-    /**
-     * Finds the line number where the linkText appears.
-     * Supports attempting to find the Nth occurrence if we could determine identifying info.
-     * For now, it finds the first occurrence or iterates if we add more logic.
-     * 
-     * @param editor 
-     * @param linkText 
-     * @returns 
-     */
-    public findLinkLineNumber(editor: Editor, linkText: string): number {
-        const range = this.findLinkRange(editor, linkText);
-        return range ? range.line : -1;
-    }
-
-    public findLinkRange(editor: Editor, linkText: string): { line: number, start: number, end: number } | null {
-        try {
-            const lineCount = editor.lineCount();
-            for (let i = 0; i < lineCount; i++) {
-                const line = editor.getLine(i);
-                const index = line.indexOf(linkText);
-                if (index !== -1) {
-                    return { line: i, start: index, end: index + linkText.length };
-                }
-            }
-        } catch (error) {
-            console.warn("RefinedImageUtils: Error finding link range:", error);
-        }
-        return null;
     }
 
     private buildSourceCandidates(src: string, isNetwork: boolean): SourceCandidate[] {

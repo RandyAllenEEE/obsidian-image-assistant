@@ -11,6 +11,12 @@ export interface UploadRecord {
     [key: string]: unknown;
 }
 
+interface HistoryReadResult {
+    readonly exists: boolean;
+    readonly valid: boolean;
+    readonly records: UploadRecord[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -88,28 +94,60 @@ export class UploadHistoryManager {
     }
 
     private async loadHistory(): Promise<void> {
-        const adapter = this.getAdapter();
         const filePath = this.getHistoryFilePath();
-        let parsed: unknown = [];
+        const primary = await this.readHistoryCandidate(filePath);
+        let selected = primary;
+        let recoveredFrom: string | null = null;
 
-        try {
-            if (await adapter.exists(filePath)) {
-                parsed = JSON.parse(await adapter.read(filePath)) as unknown;
+        if (!primary.valid) {
+            for (const recoveryPath of [`${filePath}.tmp`, `${filePath}.bak`]) {
+                const candidate = await this.readHistoryCandidate(recoveryPath);
+                if (!candidate.valid) continue;
+                selected = candidate;
+                recoveredFrom = recoveryPath;
+                break;
             }
-        } catch (error) {
-            console.error("Failed to read upload history; starting with an empty history:", error);
-            parsed = [];
         }
 
-        const records = Array.isArray(parsed)
-            ? parsed.map(value => this.normalizeRecord(value)).filter((value): value is UploadRecord => !!value)
-            : [];
-        if (!Array.isArray(parsed)) {
-            console.warn("Upload history did not contain an array and was ignored.");
+        if (recoveredFrom) {
+            console.warn(
+                `[Image Assistant] Upload history recovered from ${recoveredFrom}.`
+            );
+        } else if (primary.exists && !primary.valid) {
+            console.warn(
+                "Upload history was invalid and no valid recovery file was available."
+            );
         }
 
-        this.history = this.dedupe(records);
+        this.history = this.dedupe(selected.valid ? selected.records : []);
         this.loaded = true;
+    }
+
+    private async readHistoryCandidate(path: string): Promise<HistoryReadResult> {
+        const adapter = this.getAdapter();
+        try {
+            if (!await adapter.exists(path)) {
+                return { exists: false, valid: false, records: [] };
+            }
+            const parsed = JSON.parse(await adapter.read(path)) as unknown;
+            if (!Array.isArray(parsed)) {
+                return { exists: true, valid: false, records: [] };
+            }
+            const records = parsed
+                .map(value => this.normalizeRecord(value))
+                .filter((value): value is UploadRecord => !!value);
+            return {
+                exists: true,
+                valid: parsed.length === 0 || records.length > 0,
+                records
+            };
+        } catch (error) {
+            console.warn(
+                `[Image Assistant] Failed to read upload history candidate ${path}:`,
+                error
+            );
+            return { exists: true, valid: false, records: [] };
+        }
     }
 
     private async saveHistory(records: UploadRecord[]): Promise<void> {
@@ -125,13 +163,15 @@ export class UploadHistoryManager {
         }
 
         if (await adapter.exists(tempPath)) await adapter.remove(tempPath);
-        if (await adapter.exists(backupPath)) await adapter.remove(backupPath);
         await adapter.write(tempPath, content);
 
         let movedExisting = false;
         let committed = false;
         try {
             if (await adapter.exists(filePath)) {
+                if (await adapter.exists(backupPath)) {
+                    await adapter.remove(backupPath);
+                }
                 await adapter.rename(filePath, backupPath);
                 movedExisting = true;
             }

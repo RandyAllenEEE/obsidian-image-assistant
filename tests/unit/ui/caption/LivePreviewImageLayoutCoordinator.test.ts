@@ -212,4 +212,43 @@ describe("LivePreviewImageLayoutCoordinator", () => {
         coordinator.destroy();
         root.remove();
     });
+
+    it("builds the caption lookup index once per geometry frame", () => {
+        const root = document.createElement("div");
+        document.body.appendChild(root);
+        for (let index = 0; index < 100; index++) {
+            const image = root.createEl("img");
+            image.setAttribute("data-image-assistant-layout-owner", "true");
+            vi.spyOn(image, "getBoundingClientRect").mockReturnValue(rect(index, 100));
+            const caption = root.createSpan({
+                cls: "image-assistant-live-preview-caption"
+            });
+            caption.setAttribute(
+                "data-image-assistant-caption-renderer",
+                "codemirror"
+            );
+            caption.setAttribute("data-image-assistant-layout-key", `key-${index}`);
+            caption.setAttribute("data-image-assistant-caption-width", "auto");
+            caption.setAttribute("data-image-assistant-caption-wrap", "false");
+        }
+        const images = Array.from(root.querySelectorAll("img"));
+        const coordinator = new LivePreviewImageLayoutCoordinator(root);
+        images.forEach((image, index) => coordinator.registerImage(
+            image,
+            `key-${index}`,
+            { standalone: true, scope: "root" }
+        ));
+        const query = vi.spyOn(root, "querySelectorAll");
+
+        (coordinator as any).flush();
+
+        const captionQueries = query.mock.calls.filter(
+            ([selector]) => String(selector).includes(
+                "image-assistant-live-preview-caption"
+            )
+        );
+        expect(captionQueries).toHaveLength(1);
+        coordinator.destroy();
+        root.remove();
+    });
 });

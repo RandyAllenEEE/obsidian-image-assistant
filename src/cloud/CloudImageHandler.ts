@@ -9,6 +9,9 @@ import { DropHandler } from "./handlers/DropHandler";
 import { SingleUploadHandler } from "./handlers/SingleUploadHandler";
 import { BatchItemResult, BatchResult } from "../types/BatchTypes";
 import { NetworkImageDownloader, type DownloadResult } from "./NetworkImageDownloader";
+import type { ClickedImageReferenceContext } from "../utils/ImageReferenceWorkflowCoordinator";
+import type { EditorImageInsertionContext } from "../core/EditorImageInsertionContext";
+import type { FolderAndFilenameManagement } from "../local/FolderAndFilenameManagement";
 
 export class CloudImageHandler implements ImageHandler {
     private app: App;
@@ -26,7 +29,7 @@ export class CloudImageHandler implements ImageHandler {
      * Initialize the network downloader after dependent components are ready.
      * Called from main.ts initializeComponents() after folderAndFilenameManagement is created.
      */
-    initializeDownloader(folderAndFilenameManagement: any): void {
+    initializeDownloader(folderAndFilenameManagement: FolderAndFilenameManagement): void {
         this.networkDownloader = new NetworkImageDownloader(
             this.app,
             this.plugin,
@@ -58,28 +61,46 @@ export class CloudImageHandler implements ImageHandler {
         this.singleUploadHandler = new SingleUploadHandler(app, plugin);
     }
 
-    async handlePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
-        return this.pasteHandler.handlePaste(evt, editor);
+    async handlePaste(
+        evt: ClipboardEvent,
+        editor: Editor,
+        context: EditorImageInsertionContext
+    ): Promise<void> {
+        return this.pasteHandler.handlePaste(evt, editor, context);
     }
 
-    async handleDrop(evt: DragEvent, editor: Editor): Promise<void> {
-        return this.dropHandler.handleDrop(evt, editor);
+    async handleDrop(
+        evt: DragEvent,
+        editor: Editor,
+        context: EditorImageInsertionContext
+    ): Promise<void> {
+        return this.dropHandler.handleDrop(evt, editor, context);
     }
 
     /* Delegates for Context Menu / Command Palette */
 
     // Public method for Context Menu usage
-    async uploadSingleFile(file: TFile): Promise<void> {
-        return this.singleUploadHandler.uploadSingleFile(file);
+    async uploadSingleFile(
+        file: TFile,
+        clickedContext?: ClickedImageReferenceContext
+    ): Promise<void> {
+        return this.singleUploadHandler.uploadSingleFile(file, clickedContext);
     }
 
     async handlePasteText(
         clipboardText: string,
         editor: Editor,
         cursor: EditorPosition,
-        evt: ClipboardEvent
+        evt: ClipboardEvent,
+        context: EditorImageInsertionContext
     ): Promise<void> {
-        return this.pasteHandler.handlePasteText(clipboardText, editor, cursor, evt);
+        return this.pasteHandler.handlePasteText(
+            clipboardText,
+            editor,
+            cursor,
+            evt,
+            context
+        );
     }
 
     async batchUpload(files: TFile[]): Promise<BatchResult> {
@@ -149,14 +170,6 @@ export class CloudImageHandler implements ImageHandler {
 
     /* Download delegation methods */
 
-    async downloadSingleImage(url: string, activeFile: TFile, editor: Editor): Promise<boolean> {
-        return this.ensureDownloader().downloadSingleImage(url, activeFile, editor);
-    }
-
-    async downloadSingleImageDetailed(url: string, activeFile: TFile): Promise<DownloadResult> {
-        return this.ensureDownloader().downloadSingleImageDetailed(url, activeFile);
-    }
-
     async downloadSingleImageFile(url: string, activeFile: TFile): Promise<DownloadResult> {
         return this.ensureDownloader().downloadSingleImageFile(url, activeFile);
     }
@@ -168,10 +181,6 @@ export class CloudImageHandler implements ImageHandler {
         sourceFile: TFile
     ): Promise<DownloadResult> {
         return this.ensureDownloader().downloadSingleImageInternal(url, targetFolder, suggestedName, sourceFile);
-    }
-
-    async batchDownload(tasks: any[]): Promise<any> {
-        return this.ensureDownloader().batchDownload(tasks);
     }
 
     async undoDownload(result: DownloadResult): Promise<boolean> {

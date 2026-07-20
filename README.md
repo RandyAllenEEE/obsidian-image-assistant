@@ -21,25 +21,24 @@
 
 ---
 
-## What's New in v5.0.0
+## What's New in v5.1.0
 
-Version 5.0.0 is the delivery-hardening release. It keeps the full note/folder/vault by local/upload/download matrix while making destructive operations fail closed.
+Version 5.1.0 focuses on source-aware interaction, fast reference safety, and consistent behavior across split panes, popouts, Reading Mode, and Live Preview.
 
-1. **Safe conversion commits**: Output bytes are verified by magic bytes, reference changes are reported per file, and source images are deleted only after complete Markdown and Canvas replacement.
-2. **Reliable paste and replacement**: Paste/drop handlers claim events only after accepting the image, while OCR, LaTeX, and upload placeholders share a guarded editor replacement utility.
-3. **Unified cancellable batch processing**: All nine scope/mode combinations use bounded concurrency, stable result ordering, cancellation, duplicate-action protection, and detailed partial-failure review.
-4. **Format-aware network downloads**: PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, AVIF, HEIC, HEIF, and SVG downloads are named from verified bytes and support safe conflict handling and Undo.
-5. **Reference-safe deletion**: Markdown, Wiki, URL, code-block, and Canvas references participate in deletion checks; incomplete scans preserve local and cloud sources.
-6. **Consistent captions**: Live Preview, Reading Mode, local files, network URLs, Markdown links, Wiki links, and flexible pipe ordering share one idempotent renderer.
-7. **Settings and lifecycle hardening**: Existing caption, cleaner, paste, resize, external-tool, OCR Basic Auth, and concurrency settings are exposed and validated; corrupt settings/history and popout cleanup no longer disable the plugin.
-8. **Fabric 7 and delivery tooling**: Annotation now targets Fabric 7.4.0, the runtime targets ES2022 and Obsidian 1.11.4+, and CI enforces lint, two TypeScript checks, coverage, production build, release metadata consistency, and dependency audit.
+1. **Stable captions and layout**: Local and network images now share source-aware alignment, width, wrapping, and caption geometry. Callouts and `ad-*` Admonitions are supported without treating ordinary code blocks as rendered content.
+2. **Transactional editing**: Paste, drop, OCR, LaTeX, properties, and interactive resize use owner-view contexts and tracked ranges. Async work no longer targets the active pane by accident, and failed saves are conditionally rolled back.
+3. **Reference-safe workflows**: Upload, download, rename, conversion, cleanup, Undo, and deletion share full-vault Markdown/Canvas safety checks. A persistent incremental index keeps destructive confirmation responsive while remaining fail closed.
+4. **Compact source-first menus**: Rendered-image and file-manager actions are coordinated through one menu architecture. URL images retain their original source identity even when Obsidian renders proxy or Blob URLs.
+5. **Predictable naming and downloads**: Naming templates use one evaluation snapshot, validated hash sources, persistent counters, atomic conflict handling, and safe path normalization. Downloads verify actual image bytes and support dynamic or extensionless URLs.
+6. **Safer image editing**: Crop, annotation, conversion, and resize validate source revisions and output formats before committing. Single-sided dimensions preserve aspect ratio and PipeSyntax attributes.
+7. **Delivery quality**: The release includes 1,322 passing tests across 145 files, 80.22% global line coverage, production metadata validation, and a zero-vulnerability non-optional dependency audit.
 
 Upgrade notes:
 
 - Obsidian 1.11.4 or newer is required, and the plugin remains desktop-only.
-- Legacy cloud upload concurrency migrates to `global.batchConcurrency`.
-- Legacy Pix2Tex/Texify plaintext passwords migrate to Obsidian Secret Storage.
-- Undocumented duplicate batch backends and legacy multi-preset settings are no longer part of the supported runtime surface.
+- The canonical plugin ID remains `obsidian-image-assistant`.
+- Existing links, PipeSyntax, caption settings, and attachment names require no migration.
+- The global Caption alignment is now a fallback; explicit image alignment and the configured image default take precedence.
 
 > **🚀 v4.0.0 Major Update**:
 > 1. **Modular Architecture**: Complete refactoring of core handlers and UI modals for better performance and extensibility.
@@ -59,9 +58,23 @@ Offline-first, optimizes your vault archive.
 
 - **Auto-convert**: Convert to WebP, JPEG, PNG, or AVIF.
 - **Auto-compress**: Reduce file size with quality control, pngquant, or FFmpeg.
-- **Auto-rename**: Rename using templates like `{notename}-{timestamp}` or `{MD5}`.
+- **Auto-rename**: Rename using templates like `{notename}-{timestamp}`, `{MD5:time}`, or `{sha256:image:12}`.
 - **Non-destructive resize**: Auto-calculate and inject width/height pipe syntax (`|300`).
 - **Smart conflict resolution**: Skip, reuse, increment, or overwrite duplicates.
+
+Naming templates are evaluated once per paste/drop operation. Date variables,
+`{timestamp}`, random values, folder templates, and filename templates share the
+same operation snapshot. `{MD5:time}` and `{sha256:time}` hash Unix milliseconds;
+path conflicts are still resolved atomically, so two operations in the same
+millisecond cannot overwrite each other. Hash sources are case-insensitive, while
+custom hash text preserves its original case, spaces, and punctuation. Unknown or
+malformed tokens stop the write instead of becoming a literal filename.
+
+`{imagename}` is the source stem, `{filetype}` has no leading dot,
+`{notepath}` includes `.md`, `{imagepath}`/`{fullpath}` use the vault path for
+vault files, `{rootfolder}` is the vault name, and `{vaultpath}` is the desktop
+vault base path. Counters are persistent and isolated by target folder and
+template; validation and preview do not consume them.
 
 ### Paste Mode: Cloud
 
@@ -187,24 +200,29 @@ Scans any attachment folder for files not referenced anywhere in your vault.
 
 - Configurable scan path, file types, and delete mode (system trash / Obsidian trash / custom folder)
 - Preview list before deleting
-- Always tracks rendered Obsidian callouts and legacy Admonition `ad-*` blocks; ordinary fenced-code references remain optional for safety scans
+- Always includes Obsidian callouts, legacy Admonition `ad-*` blocks, ordinary fenced code, and Canvas in deletion-safety scans. The fenced-code setting controls mutation eligibility only.
 
 ---
 
 ## 6. Right-Click Context Menu
 
-Right-click any image in the editor for quick access to:
+Image Assistant appends capability-appropriate actions to Obsidian's official
+editor, file, and URL menus. It does not suppress the native menu or create a
+separate fallback menu when Obsidian emits no menu event.
 
-- **Rename** — rename file and update all references across the vault
-- **Cut / Copy / Copy as Base64**
-- **Convert / Compress** — single image processing modal
-- **Crop / Rotate / Flip**
-- **Annotate** — open annotation editor
-- **Align** (left / center / right / wrap submenu)
-- **Upload & Replace** (cloud mode)
-- **Auto Delete** (file + link)
-- **Show in explorer / navigation**
-- **Sidebar file menu**: Process single image, upload, or process all images in note/folder
+- **Resolved local images**: edit properties, open, cut/copy, copy as Base64,
+  convert/compress, crop, annotate, upload, delete references or source, and
+  reveal in Obsidian or the system explorer.
+- **Resolved network images**: edit properties, open, cut, download to the
+  vault, and inspect deletion choices.
+- **Data, Blob, or unresolved images**: only non-destructive actions supported
+  by the resolved source context.
+- **File explorer**: process or upload an image file, or launch local/upload/
+  download batch processing for a note, Canvas, folder, or the whole vault.
+
+Destructive actions scan the full vault, including Canvas and ordinary fenced
+code. References outside the selected mutation scope or protected by the
+fenced-code setting keep the source object.
 
 ---
 
@@ -239,6 +257,17 @@ Enable/disable individually in Settings. Caption mode, inline, width, and line-l
 
 *Or install via BRAT: search for `RandyAllenEEE/obsidian-image-assistant` in BRAT.*
 
+For local development, build and deploy with the manifest ID as the target
+directory:
+
+```powershell
+npm run deploy:local -- --vault="E:\path\to\vault"
+```
+
+The deploy command preserves plugin data, atomically replaces the three release
+artifacts, removes the legacy `image-assistant` enablement entries, and enables
+`obsidian-image-assistant`. Add `--dry-run` to validate without writing.
+
 ---
 
 ## 🔧 Tech Stack
@@ -253,14 +282,26 @@ Enable/disable individually in Settings. Caption mode, inline, width, and line-l
 Release candidates can be checked against a running desktop Obsidian instance started with a local DevTools port:
 
 ```bash
-npm run smoke:obsidian -- --port=9229 --version=5.0.0 --note=Acceptance.md
+npm run smoke:obsidian -- --port=9229 --version=5.1.0 --note=Acceptance.md
 ```
+
+Start Obsidian with an isolated Electron profile before running the command. On Windows, for example:
+
+```powershell
+& "$env:LOCALAPPDATA\Obsidian\Obsidian.exe" `
+  --user-data-dir="$env:TEMP\obsidian-image-assistant-smoke" `
+  --remote-debugging-port=9229
+```
+
+The harness waits up to 30 seconds for CDP by default. Use `--cdp-wait-ms=60000` for slower startup and `--cdp-request-timeout-ms=90000` for extended checks on slower machines; `--help` lists all options.
 
 The smoke test verifies plugin loading, command registration, settings navigation, local and network captions in Reading Mode and Live Preview, repeated-network-URL alignment and bounds, Source Mode cleanup, and unload/reload cleanup. Use `--enable-community-plugins=true` only with an isolated Obsidian profile; it explicitly disables Restricted Mode for that profile.
 
 Obsidian 1.11.4 does not reliably acknowledge the CDP `Runtime.enable` request. Add `--runtime-events=false` for that version; all state, DOM, command, and lifecycle assertions still run.
 
 Add `--extended=true` only for a disposable vault. Extended smoke creates local paste/drop fixtures, opens and closes all nine scope/mode batch entries, and verifies that Fabric annotation renders a non-empty canvas and releases its modal state.
+
+Network downloads prefer Electron's streaming network stack, which enforces the byte limit while data arrives and validates every redirect target. If that API is unavailable, Image Assistant uses a restricted `requestUrl` fallback that requires `Content-Length`; the fallback cannot abort the underlying transfer or verify the final redirect URL.
 
 ---
 

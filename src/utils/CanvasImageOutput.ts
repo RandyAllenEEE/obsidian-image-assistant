@@ -1,4 +1,6 @@
 import imageType from "image-type";
+import type ImageConverterPlugin from "../main";
+import type { CanvasEditCapability } from "./CanvasEditCapability";
 
 const MIME_BY_EXTENSION: Record<string, string> = {
     jpg: "image/jpeg",
@@ -39,4 +41,50 @@ export async function assertCanvasOutputMatchesExtension(
     if (detectedMime !== expectedMime) {
         throw new Error(`The image editor produced ${detectedMime}, not ${expectedMime}`);
     }
+}
+
+export function getCanvasIntermediateMime(
+    extension: string,
+    capability: CanvasEditCapability
+): string | undefined {
+    const expected = getCanvasExportMime(extension);
+    if (!expected) return undefined;
+    return expected === "image/avif" && capability.encoder === "avif-external"
+        ? "image/png"
+        : expected;
+}
+
+export async function finalizeCanvasImageOutput(
+    data: ArrayBuffer,
+    extension: string,
+    capability: CanvasEditCapability,
+    plugin?: ImageConverterPlugin
+): Promise<ArrayBuffer> {
+    if (getCanvasExportMime(extension) === "image/avif"
+        && capability.encoder === "avif-external") {
+        if (!plugin) throw new Error("AVIF encoding requires the plugin image processor");
+        const tools = plugin.settings.localProcessing.externalTools;
+        const processed = await plugin.imageProcessor.processImageDetailed(
+            new Blob([data], { type: "image/png" }),
+            "AVIF",
+            1,
+            1,
+            "None",
+            0,
+            0,
+            0,
+            "Auto",
+            true,
+            tools,
+            plugin.settings
+        );
+        if (processed.outcome !== "converted") {
+            throw new Error(processed.reason ?? "AVIF encoder did not produce an image");
+        }
+        await assertCanvasOutputMatchesExtension(processed.data, extension);
+        return processed.data;
+    }
+
+    await assertCanvasOutputMatchesExtension(data, extension);
+    return data;
 }

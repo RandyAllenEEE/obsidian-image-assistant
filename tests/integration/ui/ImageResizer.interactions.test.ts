@@ -108,8 +108,11 @@ function makeResizer({ viewMode = 'source', overrides = {}, workspaceOverride }:
   const resizer = new ImageResizer(plugin);
   const markdownView = {
     containerEl: document.body,
+    contentEl: document.body,
+    file: note,
     editor: { getValue: () => '', getCursor: () => ({ line: 0, ch: 0 }), getLine: () => '', lastLine: () => 0, transaction: () => {}, setCursor: () => {} },
-    getState: () => ({ mode: viewMode })
+    getState: () => ({ mode: viewMode }),
+    getMode: () => viewMode
   } as any;
   resizer.onload(markdownView);
   activeResizers.push(resizer);
@@ -293,21 +296,10 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
     expect(parseInt(img.style.width || '0', 10)).toBeGreaterThan(0);
   });
 
-  it('13.9 Edit mode updates: editor.transaction is called during drag (live) and on mouseup', () => {
-    const lines = ['![|100x100](imgs/pic.jpg)'];
-    const editor = {
-      getValue: () => lines.join('\n'),
-      getCursor: () => ({ line: 0, ch: 0 }),
-      lineCount: () => lines.length,
-      getLine: (i: number) => lines[i] || '',
-      lastLine: () => lines.length - 1,
-      transaction: vi.fn(),
-      setCursor: vi.fn()
-    };
-
-    const { resizer, markdownView } = makeResizer({ viewMode: 'source' });
-    (markdownView as any).editor = editor;
-    (resizer as any).editor = editor;
+  it('13.9 Edit mode commits once on mouseup and never during drag', async () => {
+    const updateState = vi.fn().mockResolvedValue({ status: 'saved', complete: true });
+    const { resizer, plugin } = makeResizer({ viewMode: 'source' });
+    (plugin as any).imageStateManager = { updateState };
 
     const { container } = setupView();
     const img = addInternalImage(container);
@@ -318,11 +310,12 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
 
     se.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: 40, clientY: 30, bubbles: true }));
+    expect(updateState).not.toHaveBeenCalled();
 
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await Promise.resolve();
 
-    // Current implementation writes the final dimensions at drag end.
-    expect(editor.transaction).toHaveBeenCalled();
+    expect(updateState).toHaveBeenCalledOnce();
   });
 
   it('13.10 Cursor placement variants: front/back/below/none', () => {
@@ -395,7 +388,7 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
   });
 
   it('13.13 Alignment cache update on drag-resize when enabled', async () => {
-    const updateState = vi.fn();
+    const updateState = vi.fn().mockResolvedValue({ status: 'saved', complete: true });
     const { resizer, plugin } = makeResizer({ overrides: { alignmentEnabled: true } });
     (plugin as any).imageStateManager = { updateState };
 
@@ -411,10 +404,18 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
 
     await Promise.resolve();
-    expect(updateState).toHaveBeenCalledWith(img, expect.objectContaining({
-      width: expect.any(Number),
-      height: null
-    }));
+    expect(updateState).toHaveBeenCalledWith(
+      img,
+      expect.objectContaining({
+        width: expect.any(Number),
+        height: null
+      }),
+      expect.objectContaining({
+        file: expect.any(Object),
+        view: expect.any(Object),
+        editor: expect.any(Object)
+      })
+    );
   });
 
   it('13.14 Excalidraw images are skipped (no handles)', () => {
@@ -432,15 +433,26 @@ describe('ImageResizer additional behaviors (13.4–13.6, 13.7–13.14, 13.19, 1
     const { containerA, containerB } = setupContainers();
 
     const workspace = fakeWorkspace({});
-    (workspace as any).getActiveViewOfType = vi.fn(() => ({ contentEl: containerA, containerEl: containerA, editor: { getValue: () => '', getCursor: () => ({ line: 0, ch: 0 }), getLine: () => '', lastLine: () => 0, transaction: () => {}, setCursor: () => {} }, getState: () => ({ mode: 'preview' }) }));
-    const { resizer } = makeResizer({ viewMode: 'preview', workspaceOverride: workspace });
+    const { resizer, markdownView } = makeResizer({ viewMode: 'preview', workspaceOverride: workspace });
+    const editor = markdownView.editor;
+    resizer.attachView({
+      ...markdownView,
+      containerEl: containerA,
+      contentEl: containerA,
+      editor
+    } as any);
 
     const imgInB = addInternalImage(containerB);
 
     (resizer as any).handleImageHover({ target: imgInB } as any);
     expect((imgInB as any).matchParent('.image-resize-container')).toBeNull();
 
-    (workspace as any).getActiveViewOfType = vi.fn(() => ({ contentEl: containerB, containerEl: containerB, editor: { getValue: () => '', getCursor: () => ({ line: 0, ch: 0 }), getLine: () => '', lastLine: () => 0, transaction: () => {}, setCursor: () => {} }, getState: () => ({ mode: 'preview' }) }));
+    resizer.attachView({
+      ...markdownView,
+      containerEl: containerB,
+      contentEl: containerB,
+      editor
+    } as any);
 
     (resizer as any).handleImageHover({ target: imgInB } as any);
     expect((imgInB as any).matchParent('.image-resize-container')).not.toBeNull();
@@ -475,7 +487,13 @@ describe('ImageResizer lifecycle and wheel behaviors (13.15–13.16, 13.17–13.
     const { container } = setupView();
     const img = addInternalImage(container);
 
-    resizer.onload({ containerEl: document.body, editor: (resizer as any).editor, getState: () => ({ mode: 'preview' }) } as any);
+    resizer.onload({
+      ...(resizer as any).markdownView,
+      containerEl: document.body,
+      contentEl: document.body,
+      editor: (resizer as any).editor,
+      getState: () => ({ mode: 'preview' })
+    } as any);
 
     const scope: any = (resizer as any).eventScope;
     expect(Array.isArray(scope?.disposables)).toBe(true);
@@ -507,19 +525,18 @@ describe('ImageResizer lifecycle and wheel behaviors (13.15–13.16, 13.17–13.
     expect(spyMove).not.toHaveBeenCalled();
   });
 
-  it('clears pending throttle timers on unload', () => {
+  it('clears a pending wheel commit timer on unload', () => {
     vi.useFakeTimers();
     const { resizer } = makeResizer();
     const callback = vi.fn();
-    const throttled = (resizer as any).throttle(callback, 100);
-
-    throttled();
-    expect((resizer as any).throttleTimers.size).toBe(1);
+    (resizer as any).scrollTimeout = window.setTimeout(callback, 100);
+    expect(vi.getTimerCount()).toBe(1);
 
     resizer.onunload();
     vi.runAllTimers();
 
-    expect((resizer as any).throttleTimers.size).toBe(0);
+    expect(callback).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
     vi.useRealTimers();
   });
 
@@ -608,42 +625,67 @@ describe('ImageResizer lifecycle and wheel behaviors (13.15–13.16, 13.17–13.
     }
   });
 
-  it('13.23 Debounce/throttle for scroll: debouncedSaveDimensions fires once per debounce window (tail simulated)', () => {
-    const { resizer, plugin } = makeResizer({ viewMode: 'source', overrides: { isScrollResizeEnabled: true, scrollwheelModifier: 'None', alignmentEnabled: true } });
+  it('13.23 A wheel burst commits once after the debounce window', async () => {
+    const { resizer } = makeResizer({ viewMode: 'source', overrides: { isScrollResizeEnabled: true, scrollwheelModifier: 'None', alignmentEnabled: true } });
     const { container } = setupView();
     const img = addInternalImage(container);
-    // Avoid positional classes so this test validates debounced scroll-link update wiring.
     (resizer as any).handleImageHover({ target: img, clientX: 5, clientY: 5 } as any);
 
-    const spyDebounced = vi.fn();
-    (resizer as any).debouncedSaveDimensions = ((..._args: any[]) => { spyDebounced(); }) as any;
-
     const timers = setupFakeTimers();
-
-    let inWindow = false;
-    (resizer as any).debouncedSaveDimensions = ((..._args: any[]) => {
-      if (!inWindow) {
-        spyDebounced();
-        inWindow = true;
-        setTimeout(() => { inWindow = false; }, 300);
-      }
-    }) as any;
+    const save = vi.spyOn(resizer as any, 'saveDimensionsToLink').mockResolvedValue(undefined);
 
     for (let i = 0; i < 5; i++) {
       img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true, cancelable: true }));
       timers.advance(50);
     }
 
-    // Simulate tail-only by letting window elapse
+    expect(save).not.toHaveBeenCalled();
     timers.advance(400);
+    await Promise.resolve();
 
-    expect(spyDebounced).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(1);
     timers.restore();
+  });
+
+  it('keeps the first visual rollback context for an entire wheel burst', () => {
+    const { resizer } = makeResizer({
+      viewMode: 'source',
+      overrides: { isScrollResizeEnabled: true, scrollwheelModifier: 'None' }
+    });
+    const { container } = setupView();
+    const img = addInternalImage(container);
+    img.style.width = '200px';
+    img.style.height = '100px';
+    (resizer as any).handleImageHover({ target: img, clientX: 5, clientY: 5 } as any);
+
+    img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true, cancelable: true }));
+    const firstContext = (resizer as any).operationContexts.get(img);
+    img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true, cancelable: true }));
+
+    expect((resizer as any).operationContexts.get(img)).toBe(firstContext);
+    expect(firstContext.originalWidthStyle).toBe('200px');
+    expect(firstContext.originalHeightStyle).toBe('100px');
+  });
+
+  it('releases scrolling state when no reliable image dimensions are available', () => {
+    const { resizer } = makeResizer({
+      viewMode: 'source',
+      overrides: { isScrollResizeEnabled: true, scrollwheelModifier: 'None' }
+    });
+    const { container } = setupView();
+    const img = addInternalImage(container);
+    (resizer as any).handleImageHover({ target: img, clientX: 5, clientY: 5 } as any);
+    vi.spyOn(resizer as any, 'readPositiveDimensions').mockReturnValue(null);
+
+    img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true, cancelable: true }));
+
+    expect(resizer.resizeState.isScrolling).toBe(false);
+    expect((resizer as any).activeImage).toBeNull();
   });
 });
 
 // Throttle policy when alignment disabled
-describe('ImageResizer throttle policy when alignment disabled (13.23 variant)', () => {
+describe('ImageResizer wheel commit policy when alignment is disabled (13.23 variant)', () => {
   function localMakeResizer(overrides: Partial<any> = {}) {
     const tfile = fakeTFile({ path: 'Notes/n1.md', name: 'n1.md', extension: 'md' });
     const vault = fakeVault({ files: [tfile] });
@@ -654,13 +696,20 @@ describe('ImageResizer throttle policy when alignment disabled (13.23 variant)',
     plugin.supportedImageFormats = { isExcalidrawImage: () => false } as any;
     plugin.settings = makeResizeSettings(overrides) as any;
     const resizer = new ImageResizer(plugin);
-    const markdownView = { containerEl: document.body, editor: { getValue: () => '', getCursor: () => ({ line: 0, ch: 0 }), getLine: () => '', lastLine: () => 0, transaction: () => {}, setCursor: () => {} }, getState: () => ({ mode: 'source' }) } as any;
+    const markdownView = {
+      containerEl: document.body,
+      contentEl: document.body,
+      file: tfile,
+      editor: { getValue: () => '', getCursor: () => ({ line: 0, ch: 0 }), getLine: () => '', lastLine: () => 0, transaction: () => {}, setCursor: () => {} },
+      getState: () => ({ mode: 'source' }),
+      getMode: () => 'source'
+    } as any;
     resizer.onload(markdownView);
     activeResizers.push(resizer);
     return { app, plugin, resizer };
   }
 
-  it('throttledUpdateImageLink invoked at least once during a burst of wheel events; also when no positional class', () => {
+  it('still commits only once at the tail of a wheel burst', async () => {
     const { resizer, plugin } = localMakeResizer({ isScrollResizeEnabled: true, scrollwheelModifier: 'None' });
     const { container } = setupView();
     const img = addInternalImage(container);
@@ -668,7 +717,8 @@ describe('ImageResizer throttle policy when alignment disabled (13.23 variant)',
     // Explicitly disable alignment so wheel path always uses throttled link update
     plugin.settings.alignment.enabled = false;
 
-    const spy = vi.spyOn(resizer as any, 'throttledUpdateImageLink');
+    vi.useFakeTimers();
+    const save = vi.spyOn(resizer as any, 'saveDimensionsToLink').mockResolvedValue(undefined);
 
     (resizer as any).handleImageHover({ target: img, clientX: 5, clientY: 5 } as any);
 
@@ -676,14 +726,11 @@ describe('ImageResizer throttle policy when alignment disabled (13.23 variant)',
       img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true, cancelable: true }));
     }
 
-    expect(spy).toHaveBeenCalled();
-
-    // Also assert when image has no positional class (simulated by ensuring none applied)
-    spy.mockClear();
-    for (let i = 0; i < 3; i++) {
-      img.dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true, cancelable: true }));
-    }
-    expect(spy).toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(300);
+    await Promise.resolve();
+    expect(save).toHaveBeenCalledOnce();
+    vi.useRealTimers();
   });
 });
 
@@ -692,19 +739,14 @@ describe('ImageResizer view transitions', () => {
     vi.useFakeTimers();
     try {
       const { resizer } = makeResizer();
-      const cancel = vi.fn();
-      (resizer as any).debouncedSaveDimensions = Object.assign(vi.fn(), { cancel });
       (resizer as any).resizeRetryTimers = { pending: window.setTimeout(vi.fn(), 1000) };
-      (resizer as any).resizeBuffer = { pending: { width: 320, height: 200 } };
       (resizer as any).scrollTimeout = window.setTimeout(vi.fn(), 1000);
       resizer.resizeState.isScrolling = true;
 
       resizer.detachView();
 
-      expect(cancel).toHaveBeenCalledOnce();
       expect(vi.getTimerCount()).toBe(0);
       expect((resizer as any).resizeRetryTimers).toEqual({});
-      expect((resizer as any).resizeBuffer).toEqual({});
       expect(resizer.resizeState.isScrolling).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -725,8 +767,10 @@ describe('ImageResizer upstream A1 lifecycle guards', () => {
       activeView: {
         containerEl: container,
         contentEl: container,
+        file: fakeTFile({ path: 'Notes/n1.md', name: 'n1.md', extension: 'md' }),
         editor: { getValue: () => '', getCursor: () => ({ line: 0, ch: 0 }), getLine: () => '', lastLine: () => 0, transaction: () => {}, setCursor: () => {} },
-        getState: () => ({ mode: 'preview' })
+        getState: () => ({ mode: 'preview' }),
+        getMode: () => 'preview'
       }
     });
     const { resizer } = makeResizer({ viewMode: 'preview', workspaceOverride: workspace });
@@ -834,7 +878,7 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
     };
   }
 
-  it('Given live updates during drag, Then the final state matches expected and multiple undos restore the original, with redos reapplying', () => {
+  it('commits one history entry at drag end so one undo restores the original', async () => {
     // Arrange an editor with two identical image links on separate lines
     const doc = [
       'Text before',
@@ -845,7 +889,6 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
     const editor: any = makeEditorWithHistory(doc);
 
     const { resizer, markdownView, plugin } = makeResizer({ viewMode: 'source' });
-    (plugin as any).imageStateManager = null;
     (markdownView as any).editor = editor;
     (resizer as any).editor = editor;
 
@@ -857,6 +900,19 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
         ? doc.slice(0, 3).join('\n').length + 1
         : 0)
     };
+    (plugin as any).imageStateManager = {
+      updateState: vi.fn().mockImplementation(() => {
+        const original = editor.getLine(3);
+        editor.transaction({
+          changes: [{
+            from: { line: 3, ch: 0 },
+            to: { line: 3, ch: original.length },
+            text: '![|220](imgs/pic.jpg)'
+          }]
+        });
+        return Promise.resolve({ status: 'saved', complete: true });
+      })
+    };
 
     // Act: perform a resize to trigger a single transaction that updates the matched link
     (resizer as any).handleImageHover({ target: img } as any);
@@ -865,31 +921,24 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
     se.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 10, bubbles: true }));
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await Promise.resolve();
 
     const after = editor.getValue();
     expect((after.match(/!\[\|100x100\]\(imgs\/pic\.jpg\)/g) || []).length).toBe(1);
     expect(after).toMatch(/!\[\|\d+\]\(imgs\/pic\.jpg\)/);
 
-    // With live updates, more than one transaction may have occurred during drag.
-    // Perform up to two undos to restore original sizes.
     editor.undo();
-    let undone = editor.getValue();
-    if (!(/!\[\|100x100\]\(imgs\/pic\.jpg\)/.test(undone))) {
-      editor.undo();
-      undone = editor.getValue();
-    }
+    const undone = editor.getValue();
     const matches = undone.match(/!\[\|100x100\]\(imgs\/pic\.jpg\)/g) || [];
-    expect(matches.length).toBeGreaterThanOrEqual(1);
+    expect(matches.length).toBe(2);
 
-    // Redo the same number of times to reapply the resized dimensions
-    editor.redo();
     editor.redo();
     const redone = editor.getValue();
     expect(redone).toMatch(/!\[\|\d+\]\(imgs\/pic\.jpg\)/);
     expect((redone.match(/!\[\|100x100\]\(imgs\/pic\.jpg\)/g) || []).length).toBe(1);
   });
 
-  it('Given fallback markdown update, Then only the exact same-basename target is changed', async () => {
+  it('fails closed when the image state manager is unavailable', async () => {
     const doc = [
       '![[other/pic.jpg|100]] and ![[imgs/pic.jpg|100]]'
     ];
@@ -902,32 +951,47 @@ describe('ImageResizer undo/redo after live updates (13.11)', () => {
     const { container } = setupView();
     const img = addInternalImage(container, 'app://vault/imgs/pic.jpg');
 
-    await (resizer as any).updateMarkdownLink(img, 320, 160, 'se');
+    const result = await (resizer as any).updateMarkdownLink(img, 320, 160, 'se');
 
-    expect(editor.getValue()).toBe('![[other/pic.jpg|100]] and ![[imgs/pic.jpg|320]]');
+    expect(result.status).toBe('failed');
+    expect(editor.getValue()).toBe('![[other/pic.jpg|100]] and ![[imgs/pic.jpg|100]]');
   });
 
   it('serializes locked interactive resize as one axis through ImageStateManager', async () => {
     const { resizer, plugin } = makeResizer({ overrides: { aspectRatioLocked: true } });
-    const updateState = vi.fn().mockResolvedValue(undefined);
+    const updateState = vi.fn().mockResolvedValue({ status: 'saved', complete: true });
     (plugin as any).imageStateManager = { updateState };
     const image = document.createElement('img');
+    document.body.appendChild(image);
 
     await (resizer as any).updateMarkdownLink(image, 500.4, 300.4, 'e');
-    expect(updateState).toHaveBeenLastCalledWith(image, { width: 500, height: null });
+    expect(updateState).toHaveBeenLastCalledWith(
+      image,
+      { width: 500, height: null },
+      expect.objectContaining({ file: expect.any(Object), view: expect.any(Object) })
+    );
 
     await (resizer as any).updateMarkdownLink(image, 500.4, 300.4, 's');
-    expect(updateState).toHaveBeenLastCalledWith(image, { width: null, height: 300 });
+    expect(updateState).toHaveBeenLastCalledWith(
+      image,
+      { width: null, height: 300 },
+      expect.objectContaining({ file: expect.any(Object), view: expect.any(Object) })
+    );
   });
 
   it('serializes unlocked interactive resize as an explicit two-axis size', async () => {
     const { resizer, plugin } = makeResizer({ overrides: { aspectRatioLocked: false } });
-    const updateState = vi.fn().mockResolvedValue(undefined);
+    const updateState = vi.fn().mockResolvedValue({ status: 'saved', complete: true });
     (plugin as any).imageStateManager = { updateState };
     const image = document.createElement('img');
+    document.body.appendChild(image);
 
     await (resizer as any).updateMarkdownLink(image, 500.4, 300.4, 'se');
 
-    expect(updateState).toHaveBeenCalledWith(image, { width: 500, height: 300 });
+    expect(updateState).toHaveBeenCalledWith(
+      image,
+      { width: 500, height: 300 },
+      expect.objectContaining({ file: expect.any(Object), view: expect.any(Object) })
+    );
   });
 });

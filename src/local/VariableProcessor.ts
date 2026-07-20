@@ -3,6 +3,13 @@ import { App, TFile } from "obsidian";
 import { ImageAssistantSettings } from "../settings/types";
 import { loadImage } from "../utils/ImageLoadUtils";
 import { detectImageBinaryType } from "../utils/ImageBinaryType";
+import { sha256Hex } from "../utils/BinaryHash";
+import {
+    NamingTemplateEngine,
+    TemplateEvaluationError,
+    type TemplateToken
+} from "./NamingTemplateEngine";
+import { NamingCounterStore } from "./NamingCounterStore";
 
 
 export interface VariableContext {
@@ -10,11 +17,63 @@ export interface VariableContext {
     activeFile: TFile;
 }
 
+export interface NamingOperationContext extends VariableContext {
+    readonly nowMs?: number;
+    readonly quality?: number;
+}
+
+export interface NamingEvaluationOptions {
+    readonly counterScope?: string;
+}
+
+interface NamingSessionState {
+    readonly context: NamingOperationContext;
+    readonly nowMs: number;
+    readonly cache: Map<string, Promise<string>>;
+    metadata?: Promise<Record<string, string>>;
+    fileStats?: Promise<{ size: number }>;
+    fileContent?: Promise<ArrayBuffer>;
+    momentValue?: any;
+}
+
 // --- Variable List ---
 export interface VariableInfo {
     name: string;
     description: string;
     example: string;
+}
+
+export class NamingEvaluationSession {
+    private readonly state: NamingSessionState;
+
+    constructor(
+        private readonly processor: VariableProcessor,
+        context: NamingOperationContext
+    ) {
+        const { moment } = window as typeof window & {
+            moment?: (value?: number) => { valueOf?: () => number };
+        };
+        const momentValue = moment?.(context.nowMs);
+        const momentTime = Number(momentValue?.valueOf?.());
+        this.state = {
+            context,
+            nowMs: context.nowMs
+                ?? (Number.isFinite(momentTime) ? momentTime : Date.now()),
+            cache: new Map(),
+            momentValue
+        };
+    }
+
+    evaluate(
+        template: string,
+        options: NamingEvaluationOptions = {}
+    ): Promise<string> {
+        return this.processor.evaluateSessionTemplate(
+            template,
+            this.state,
+            options
+        );
+    }
 }
 
 /**
@@ -83,8 +142,8 @@ function md5(string: string): string {
         return addUnsigned(rotateLeft(a, s), b);
     }
 
-    function convertToWordArray(str: string): number[] {
-        const lMessageLength = str.length;
+    function convertToWordArray(bytes: Uint8Array): number[] {
+        const lMessageLength = bytes.length;
         const lNumberOfWordsTemp1 = lMessageLength + 8;
         const lNumberOfWordsTemp2 = (lNumberOfWordsTemp1 - (lNumberOfWordsTemp1 % 64)) / 64;
         const lNumberOfWords = (lNumberOfWordsTemp2 + 1) * 16;
@@ -95,7 +154,8 @@ function md5(string: string): string {
         while (lByteCount < lMessageLength) {
             const lWordCount = (lByteCount - (lByteCount % 4)) / 4;
             lBytePosition = (lByteCount % 4) * 8;
-            lWordArray[lWordCount] = (lWordArray[lWordCount] || 0) | (str.charCodeAt(lByteCount) << lBytePosition);
+            lWordArray[lWordCount] = (lWordArray[lWordCount] || 0)
+                | (bytes[lByteCount] << lBytePosition);
             lByteCount++;
         }
 
@@ -121,7 +181,7 @@ function md5(string: string): string {
         return wordToHexValue;
     }
 
-    const x = convertToWordArray(string);
+    const x = convertToWordArray(new TextEncoder().encode(string));
     let k, AA, BB, CC, DD, a, b, c, d;
     const S11 = 7, S12 = 12, S13 = 17, S14 = 22;
     const S21 = 5, S22 = 9, S23 = 14, S24 = 20;
@@ -218,13 +278,15 @@ function md5(string: string): string {
 }
 
 export class VariableProcessor {
-
-    private counters: Map<string, number> = new Map();
+    private readonly templateEngine = new NamingTemplateEngine();
+    private readonly counterStore: NamingCounterStore;
 
     constructor(
         private app: App,
         private settings: ImageAssistantSettings
-    ) { }
+    ) {
+        this.counterStore = new NamingCounterStore(app);
+    }
 
     // Updated list of all available variables
     private allVariables: VariableInfo[] = [
@@ -510,8 +572,23 @@ export class VariableProcessor {
         },
         {
             name: "{notepath}",
-            description: "The full path of the current note.",
-            example: "Project/MeetingNotes",
+            description: "The vault path of the current note, including .md.",
+            example: "Project/MeetingNotes.md",
+        },
+        {
+            name: "{rootfolder}",
+            description: "The vault name.",
+            example: "MyVault",
+        },
+        {
+            name: "{imagepath}",
+            description: "The source image vault path, or relative File path when available.",
+            example: "Project/assets/image.png",
+        },
+        {
+            name: "{fullpath}",
+            description: "Alias for {imagepath}.",
+            example: "Project/assets/image.png",
         },
 
         // Image Metadata
@@ -640,18 +717,18 @@ export class VariableProcessor {
             example: "{randomHex:8} -> 3e4a7f9b",
         },
         {
-            name: "{counter:00X}",
-            description: "An auto-incrementing counter (padded with zeros) for the folder. X determines the padding.",
-            example: "{counter:001} -> 005 (if it's the fifth image in the folder)",
+            name: "{counter:000}",
+            description: "A persistent folder-and-template counter. The number of zeros determines padding.",
+            example: "{counter:000} -> 005",
         },
         {
             name: "{MD5:type}",
-            description: "The first 8 characters of the MD5 hash of the specified type. Supports: filename, fullpath, parentfolder, rootfolder, extension, notename, notefolder, notepath.",
-            example: "{MD5:filename} -> 7a3b9e2c",
+            description: "The full MD5 hash of a named source such as filename, time, fullpath, notename, or notepath.",
+            example: "{MD5:time} -> 32-character digest",
         },
         {
             name: "{MD5:type:X}",
-            description: "The first X characters of the MD5 hash of the specified type. Supports the same types as {MD5:type}.",
+            description: "The first X characters of an MD5 digest; X must be 1-32.",
             example: "{MD5:fullpath:10} -> 7a3b9e2c1d",
         },
         {
@@ -676,7 +753,7 @@ export class VariableProcessor {
         },
         {
             name: "{sha256:type:X}",
-            description: "The first X characters of the SHA-256 hash of the specified type. Supports the same types as {sha256:type}.",
+            description: "The first X characters of a SHA-256 digest; X must be 1-64.",
             example: "{sha256:fullpath:10} -> e3b0c44298",
         },
         {
@@ -688,18 +765,389 @@ export class VariableProcessor {
 
     async processTemplate(
         template: string,
-        context: VariableContext
+        context: NamingOperationContext
     ): Promise<string> {
-        // Pass the template to getAvailableVariables
-        const variables = await this.getAvailableVariables(context, template);
-        let result = template;
+        return this.createSession(context).evaluate(template);
+    }
 
-        for (const [key, value] of Object.entries(variables)) {
-            const regex = new RegExp(this.escapeRegExp(key), "g");
-            result = result.replace(regex, value);
+    createSession(context: NamingOperationContext): NamingEvaluationSession {
+        return new NamingEvaluationSession(this, context);
+    }
+
+    async processTemplates(
+        templates: readonly string[],
+        context: NamingOperationContext,
+        options: readonly NamingEvaluationOptions[] = []
+    ): Promise<readonly string[]> {
+        const session = this.createSession(context);
+        const results: string[] = [];
+        for (let index = 0; index < templates.length; index++) {
+            results.push(await session.evaluate(
+                templates[index],
+                options[index] ?? {}
+            ));
+        }
+        return Object.freeze(results);
+    }
+
+    async evaluateSessionTemplate(
+        template: string,
+        state: NamingSessionState,
+        options: NamingEvaluationOptions
+    ): Promise<string> {
+        return this.templateEngine.evaluate(template, token =>
+            this.resolveToken(token, template, state, options)
+        );
+    }
+
+    private resolveToken(
+        token: TemplateToken,
+        template: string,
+        state: NamingSessionState,
+        options: NamingEvaluationOptions
+    ): Promise<string | null> {
+        const counter = /^counter:(0+)$/i.exec(token.body);
+        const counterLike = /^counter:/i.test(token.body);
+        if (counterLike && !counter) {
+            throw tokenError(token, "Counter syntax must be {counter:000}.");
+        }
+        if (counter) {
+            const scope = options.counterScope
+                ?? state.context.activeFile.parent?.path
+                ?? "/";
+            const key = `${token.source}:${scope}:${template}`;
+            return this.getCached(state, key, () =>
+                this.counterStore.reserve(scope, template, counter[1].length)
+            );
         }
 
-        return result;
+        return this.getCachedNullable(state, token.source, async () => {
+            const direct = await this.resolveDirectToken(token.body, state);
+            if (direct !== null) return direct;
+
+            const randomHex = /^randomHex:(\d+)$/i.exec(token.body);
+            if (/^randomHex:/i.test(token.body) && !randomHex) {
+                throw tokenError(token, "randomHex length must be an integer from 1 to 128.");
+            }
+            if (randomHex) {
+                const length = Number(randomHex[1]);
+                if (!Number.isInteger(length) || length < 1 || length > 128) {
+                    throw tokenError(token, "randomHex length must be from 1 to 128.");
+                }
+                return this.generateRandomHex(length);
+            }
+
+            const size = /^size:(MB|KB|B):(\d+)$/i.exec(token.body);
+            if (/^size:/i.test(token.body) && !size) {
+                throw tokenError(token, "Size syntax must be {size:B|KB|MB:DECIMALS}.");
+            }
+            if (size) {
+                const decimals = Number(size[2]);
+                if (decimals < 0 || decimals > 10) {
+                    throw tokenError(token, "Size decimals must be from 0 to 10.");
+                }
+                const stats = await this.getFileStats(state);
+                return this.formatSize(stats.size, size[1].toUpperCase(), decimals);
+            }
+
+            if (/^(?:MD5|sha256):/i.test(token.body)) {
+                return this.resolveHashToken(token, state);
+            }
+            if (/^(?:MD5|sha256)$/i.test(token.body)) {
+                throw tokenError(token, "Hash syntax requires a source, for example {MD5:time}.");
+            }
+            return null;
+        });
+    }
+
+    private async resolveDirectToken(
+        body: string,
+        state: NamingSessionState
+    ): Promise<string | null> {
+        const { file, activeFile } = state.context;
+        const key = `{${body}}`;
+        const filename = file.name;
+        const fileParts = splitFilename(filename);
+        const imagePath = file instanceof TFile
+            ? file.path
+            : (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+        const parent = activeFile.parent;
+        const grandparent = parent?.parent;
+        const { moment } = window as typeof window & { moment?: (value?: number) => any };
+        state.momentValue ??= moment?.();
+        const now = state.momentValue;
+
+        const staticValues: Record<string, string | undefined> = {
+            imagename: fileParts.stem,
+            notename: activeFile.basename,
+            notename_nospaces: activeFile.basename.replace(/\s+/g, "_"),
+            notepath: activeFile.path,
+            parentfolder: parent?.name ?? "",
+            grandparentfolder: grandparent && grandparent.path !== "/"
+                ? grandparent.name
+                : "",
+            notefolder: parent?.name ?? "",
+            vaultname: this.app.vault.getName(),
+            rootfolder: this.app.vault.getName(),
+            vaultpath: (this.app.vault.adapter as {
+                getBasePath?: () => string;
+                basePath?: string;
+            }).getBasePath?.()
+                ?? (this.app.vault.adapter as { basePath?: string }).basePath
+                ?? this.app.vault.getRoot().path,
+            imagepath: imagePath,
+            fullpath: imagePath,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            locale: navigator.language,
+            platform: navigator.platform,
+            useragent: navigator.userAgent,
+            timestamp: state.nowMs.toString()
+        };
+        if (Object.prototype.hasOwnProperty.call(staticValues, body)) {
+            return staticValues[body] ?? "";
+        }
+        if (body === "random") return this.generateRandomString();
+        if (body === "uuid") return crypto.randomUUID();
+
+        if (body === "filetype") {
+            if (fileParts.extension) return fileParts.extension;
+            const detected = await this.getDetectedFileType(state);
+            if (!detected) {
+                throw new Error("The source image type could not be detected.");
+            }
+            return detected;
+        }
+
+        if (["sizeb", "sizekb", "sizemb"].includes(body)) {
+            const { size } = await this.getFileStats(state);
+            if (body === "sizeb") return size.toString();
+            if (body === "sizekb") return (size / 1024).toFixed(2);
+            return (size / (1024 * 1024)).toFixed(2);
+        }
+
+        const dateValue = this.resolveDateToken(key, body, now);
+        if (dateValue !== null) return dateValue;
+
+        const dateFormat = /^date:(.+)$/.exec(body);
+        if (dateFormat) {
+            if (!now) throw new Error("Moment.js is unavailable.");
+            return now.format(dateFormat[1]);
+        }
+        if (body.startsWith("date:")) {
+            throw new Error("Date format cannot be empty.");
+        }
+
+        if (isImageMetadataToken(key)) {
+            const metadata = await this.getSessionMetadata(state);
+            const value = metadata[key];
+            if (value === undefined) {
+                throw new Error(`Image metadata for ${key} is unavailable.`);
+            }
+            return value;
+        }
+        if (body === "quality") {
+            return (state.context.quality
+                ?? this.settings.localProcessing.conversion.quality).toString();
+        }
+        return null;
+    }
+
+    private resolveDateToken(
+        token: string,
+        body: string,
+        now: any
+    ): string | null {
+        const formats: Record<string, string> = {
+            YYYY: "YYYY",
+            MM: "MM",
+            DD: "DD",
+            HH: "HH",
+            mm: "mm",
+            ss: "ss",
+            date: "YYYY-MM-DD",
+            weekday: "dddd",
+            month: "MMMM",
+            today: "YYYY-MM-DD",
+            "YYYY-MM-DD": "YYYY-MM-DD",
+            week: "w",
+            w: "w",
+            quarter: "Q",
+            Q: "Q",
+            dayofyear: "DDD",
+            DDD: "DDD",
+            monthname: "MMMM",
+            MMMM: "MMMM",
+            dayname: "dddd",
+            dddd: "dddd",
+            dateordinal: "Do",
+            Do: "Do",
+            currentdate: "YYYY-MM-DD",
+            yyyy: "YYYY",
+            time: "HH-mm-ss"
+        };
+        if (Object.prototype.hasOwnProperty.call(formats, body)) {
+            if (!now) throw new Error(`Moment.js is unavailable for ${token}.`);
+            return now.format(formats[body]);
+        }
+        if (!now) {
+            return [
+                "calendar", "tomorrow", "yesterday", "startofweek", "endofweek",
+                "startofmonth", "endofmonth", "nextweek", "lastweek",
+                "nextmonth", "lastmonth", "daysinmonth", "weekofyear",
+                "quarterofyear", "relativetime"
+            ].includes(body)
+                ? (() => { throw new Error(`Moment.js is unavailable for ${token}.`); })()
+                : null;
+        }
+        switch (body) {
+            case "calendar": return now.calendar();
+            case "tomorrow": return cloneMoment(now).add(1, "day").format("YYYY-MM-DD");
+            case "yesterday": return cloneMoment(now).subtract(1, "day").format("YYYY-MM-DD");
+            case "startofweek": return cloneMoment(now).startOf("week").format("YYYY-MM-DD");
+            case "endofweek": return cloneMoment(now).endOf("week").format("YYYY-MM-DD");
+            case "startofmonth": return cloneMoment(now).startOf("month").format("YYYY-MM-DD");
+            case "endofmonth": return cloneMoment(now).endOf("month").format("YYYY-MM-DD");
+            case "nextweek": return cloneMoment(now).add(1, "week").format("YYYY-MM-DD");
+            case "lastweek": return cloneMoment(now).subtract(1, "week").format("YYYY-MM-DD");
+            case "nextmonth": return cloneMoment(now).add(1, "month").format("YYYY-MM-DD");
+            case "lastmonth": return cloneMoment(now).subtract(1, "month").format("YYYY-MM-DD");
+            case "daysinmonth": return now.daysInMonth().toString();
+            case "weekofyear": return now.week().toString();
+            case "quarterofyear": return now.quarter().toString();
+            case "relativetime": return now.fromNow();
+            default: return null;
+        }
+    }
+
+    private async resolveHashToken(
+        token: TemplateToken,
+        state: NamingSessionState
+    ): Promise<string> {
+        const separator = token.body.indexOf(":");
+        const algorithm = token.body.slice(0, separator).toLowerCase();
+        let source = token.body.slice(separator + 1);
+        let length: number | undefined;
+        const lengthMatch = /:(\d+)$/.exec(source);
+        if (lengthMatch) {
+            length = Number(lengthMatch[1]);
+            source = source.slice(0, -lengthMatch[0].length);
+        }
+        const maxLength = algorithm === "md5" ? 32 : 64;
+        if (!source) throw tokenError(token, "Hash source cannot be empty.");
+        if (length !== undefined
+            && (!Number.isInteger(length) || length < 1 || length > maxLength)) {
+            throw tokenError(
+                token,
+                `${algorithm.toUpperCase()} length must be from 1 to ${maxLength}.`
+            );
+        }
+
+        let digest: string;
+        if (algorithm === "sha256" && source.toLowerCase() === "image") {
+            digest = await sha256Hex(await this.getFileContent(state));
+        } else {
+            const text = await this.resolveHashSource(source, state);
+            digest = algorithm === "md5"
+                ? md5(text)
+                : await this.generateSHA256(text);
+        }
+        return length === undefined ? digest : digest.slice(0, length);
+    }
+
+    private async resolveHashSource(
+        source: string,
+        state: NamingSessionState
+    ): Promise<string> {
+        const normalized = source.toLowerCase();
+        const aliases: Record<string, string> = {
+            filename: "imagename",
+            extension: "filetype",
+            time: "timestamp"
+        };
+        const canonical = aliases[normalized] ?? normalized;
+        const reserved = new Set([
+            "imagename", "filetype", "imagepath", "fullpath",
+            "parentfolder", "grandparentfolder", "rootfolder",
+            "notename", "notename_nospaces", "notefolder", "notepath",
+            "vaultname", "vaultpath", "timestamp", "date"
+        ]);
+        if (canonical === "rootfolder") return this.app.vault.getName();
+        if (reserved.has(canonical)) {
+            const value = await this.resolveDirectToken(canonical, state);
+            if (value === null) {
+                throw new Error(`Hash source '${source}' is unavailable.`);
+            }
+            return value;
+        }
+        return source;
+    }
+
+    private getCached(
+        state: NamingSessionState,
+        key: string,
+        factory: () => Promise<string>
+    ): Promise<string> {
+        const cached = state.cache.get(key);
+        if (cached) return cached;
+        const value = factory();
+        state.cache.set(key, value);
+        return value;
+    }
+
+    private async getCachedNullable(
+        state: NamingSessionState,
+        key: string,
+        factory: () => Promise<string | null>
+    ): Promise<string | null> {
+        const cached = state.cache.get(key);
+        if (cached) return cached;
+        const value = await factory();
+        if (value !== null) state.cache.set(key, Promise.resolve(value));
+        return value;
+    }
+
+    private getSessionMetadata(
+        state: NamingSessionState
+    ): Promise<Record<string, string>> {
+        state.metadata ??= state.context.file instanceof TFile
+            ? Promise.all([
+                this.getFileContent(state),
+                this.getFileStats(state)
+            ]).then(([content, stats]) =>
+                this.getImageMetadata(state.context.file, content, stats.size)
+            )
+            : this.getImageMetadata(state.context.file);
+        return state.metadata;
+    }
+
+    private getFileStats(state: NamingSessionState): Promise<{ size: number }> {
+        state.fileStats ??= (async () => {
+            const { file } = state.context;
+            if (!(file instanceof TFile)) return { size: file.size };
+            const stats = await this.app.vault.adapter.stat(file.path);
+            if (!stats) throw new Error(`File stats are unavailable for ${file.path}.`);
+            return { size: stats.size };
+        })();
+        return state.fileStats;
+    }
+
+    private getFileContent(state: NamingSessionState): Promise<ArrayBuffer> {
+        state.fileContent ??= state.context.file instanceof TFile
+            ? this.app.vault.readBinary(state.context.file)
+            : state.context.file.arrayBuffer();
+        return state.fileContent;
+    }
+
+    private async getDetectedFileType(state: NamingSessionState): Promise<string | null> {
+        const detected = await detectImageBinaryType(await this.getFileContent(state));
+        return detected?.ext ?? null;
+    }
+
+    private generateRandomString(): string {
+        const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
+        const bytes = new Uint8Array(6);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes, byte => alphabet[byte % alphabet.length]).join("");
     }
 
     /**
@@ -711,6 +1159,20 @@ export class VariableProcessor {
     validateTemplate(template: string, context: VariableContext): { valid: boolean; errors: string[] } {
         const { activeFile } = context;
         const errors: string[] = [];
+        try {
+            for (const token of this.templateEngine.parse(template)) {
+                const tokenErrorMessage = validateTemplateTokenBody(token.body);
+                if (tokenErrorMessage) {
+                    errors.push(`${token.source}: ${tokenErrorMessage}`);
+                }
+            }
+        } catch (error) {
+            if (error instanceof TemplateEvaluationError) {
+                errors.push(...error.diagnostics.map(diagnostic => diagnostic.message));
+            } else {
+                errors.push(error instanceof Error ? error.message : String(error));
+            }
+        }
 
         // Check for {grandparentfolder} usage
         if (template.includes("{grandparentfolder}")) {
@@ -780,347 +1242,11 @@ export class VariableProcessor {
         return categorized;
     }
 
-    private async getAvailableVariables(
-        context: VariableContext,
-        template: string
+    private async getImageMetadata(
+        file: TFile | File,
+        providedContent?: ArrayBuffer,
+        providedSize?: number
     ): Promise<Record<string, string>> {
-        const { file, activeFile } = context;
-        const { moment } = window as any;
-        let variables: Record<string, string> = {};
-
-        // --- Static Variables ---
-        variables["{random}"] = Math.random().toString(36).substring(2, 8);
-        variables["{uuid}"] = crypto.randomUUID();
-
-        // Handle both TFile and File types
-        if (file instanceof TFile) {
-            // File is a TFile (in the vault)
-            variables["{imagename}"] = file.basename;
-            variables["{filetype}"] = file.extension;
-
-            // Get file size using app.vault.adapter.stat for TFile
-            try {
-                const fileStats = await this.app.vault.adapter.stat(file.path);
-                if (fileStats) {
-                    variables["{sizeb}"] = fileStats.size.toString();
-                    variables["{sizekb}"] = (fileStats.size / 1024).toFixed(2);
-                    variables["{sizemb}"] = (fileStats.size / (1024 * 1024)).toFixed(2);
-                } else {
-                    throw new Error("File stats not available");
-                }
-            } catch (error) {
-                console.error("Error getting file stats:", error);
-                variables["{sizeb}"] = "unknown";
-                variables["{sizekb}"] = "unknown";
-                variables["{sizemb}"] = "unknown";
-            }
-            // --- Image Metadata (for TFile) ---
-            // ADD THIS CHECK HERE:
-            if (!['heic', 'heif', 'tiff', 'tif'].includes(file.extension.toLowerCase())) {
-                try {
-                    const imgData = await this.getImageMetadata(file);
-                    Object.assign(variables, imgData);
-                } catch (error) {
-                    console.debug("Image metadata extraction failed:", error);
-                }
-            }
-        } else {
-            // File is a File object (dragged/pasted)
-            variables["{imagename}"] = file.name.substring(0, file.name.lastIndexOf("."));
-            variables["{filetype}"] = file.name.substring(file.name.lastIndexOf(".") + 1);
-
-            // Get file size directly from the File object
-            variables["{sizeb}"] = file.size.toString();
-            variables["{sizekb}"] = (file.size / 1024).toFixed(2);
-            variables["{sizemb}"] = (file.size / (1024 * 1024)).toFixed(2);
-
-            // --- Image Metadata (for File) ---
-            // ADD THIS CHECK HERE:
-            const fileExtension = file.name.split('.').pop()?.toLowerCase() || '';
-            if (!['heic', 'heif', 'tiff', 'tif'].includes(fileExtension)) {
-                try {
-                    const imgData = await this.getImageMetadata(file);
-                    Object.assign(variables, imgData);
-                } catch (error) {
-                    console.debug("Image metadata extraction failed:", error);
-                }
-            }
-        }
-
-        variables["{notename}"] = activeFile.basename;
-        variables["{notename_nospaces}"] = activeFile.basename.replace(/\s+/g, "_");
-        variables["{notepath}"] = activeFile.parent ? `${activeFile.parent.path}/${activeFile.basename}` : activeFile.basename;
-        variables["{parentfolder}"] = activeFile.parent?.name || "";
-        variables["{grandparentfolder}"] = (activeFile.parent?.parent?.path == "/" ? activeFile.parent?.name : activeFile.parent?.parent?.name) || "";
-        variables["{notefolder}"] = activeFile.parent?.name || "";
-        variables["{vaultname}"] = this.app.vault.getName();
-        variables["{vaultpath}"] = (this.app.vault.adapter as any).basePath || this.app.vault.getRoot().path;
-        variables["{timezone}"] = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        variables["{locale}"] = navigator.language;
-        variables["{platform}"] = navigator.platform;
-        variables["{useragent}"] = navigator.userAgent;
-
-        // --- Date, Time, and Calendar Variables ---
-        variables["{YYYY}"] = moment().format("YYYY");
-        variables["{MM}"] = moment().format("MM");
-        variables["{DD}"] = moment().format("DD");
-        variables["{HH}"] = moment().format("HH");
-        variables["{mm}"] = moment().format("mm");
-        variables["{ss}"] = moment().format("ss");
-        variables["{date}"] = moment().format("YYYY-MM-DD");
-        variables["{weekday}"] = moment().format("dddd");
-        variables["{month}"] = moment().format("MMMM");
-        variables["{calendar}"] = moment().calendar();
-        variables["{today}"] = moment().format('YYYY-MM-DD');
-        variables["{YYYY-MM-DD}"] = moment().format('YYYY-MM-DD');
-        variables["{tomorrow}"] = moment().add(1, 'day').format('YYYY-MM-DD');
-        variables["{yesterday}"] = moment().subtract(1, 'day').format('YYYY-MM-DD');
-        variables["{startofweek}"] = moment().startOf('week').format('YYYY-MM-DD');
-        variables["{endofweek}"] = moment().endOf('week').format('YYYY-MM-DD');
-        variables["{startofmonth}"] = moment().startOf('month').format('YYYY-MM-DD');
-        variables["{endofmonth}"] = moment().endOf('month').format('YYYY-MM-DD');
-        variables["{nextweek}"] = moment().add(1, 'week').format('YYYY-MM-DD');
-        variables["{lastweek}"] = moment().subtract(1, 'week').format('YYYY-MM-DD');
-        variables["{nextmonth}"] = moment().add(1, 'month').format('YYYY-MM-DD');
-        variables["{lastmonth}"] = moment().subtract(1, 'month').format('YYYY-MM-DD');
-        variables["{daysinmonth}"] = moment().daysInMonth().toString();
-        variables["{weekofyear}"] = moment().week().toString();
-        variables["{quarterofyear}"] = moment().quarter().toString();
-        variables["{week}"] = moment().format('w');
-        variables["{w}"] = moment().format('w');
-        variables["{quarter}"] = moment().format('Q');
-        variables["{Q}"] = moment().format('Q');
-        variables["{dayofyear}"] = moment().format('DDD');
-        variables["{DDD}"] = moment().format('DDD');
-        variables["{monthname}"] = moment().format('MMMM');
-        variables["{MMMM}"] = moment().format('MMMM');
-        variables["{dayname}"] = moment().format('dddd');
-        variables["{dddd}"] = moment().format('dddd');
-        variables["{dateordinal}"] = moment().format('Do');
-        variables["{Do}"] = moment().format('Do');
-        variables["{relativetime}"] = moment().fromNow();
-        variables["{currentdate}"] = moment().format('YYYY-MM-DD');
-        variables["{yyyy}"] = moment().format('YYYY');
-        variables["{time}"] = moment().format('HH-mm-ss');
-        variables["{timestamp}"] = Date.now().toString();
-
-
-        // --- Dynamic Variables ---
-        variables = await this.processDynamicVariables(template, context, variables);
-
-        // --- Image Metadata ---
-        try {
-            const imgData = await this.getImageMetadata(file);
-            Object.assign(variables, imgData);
-        } catch (error) {
-            console.debug("Image metadata extraction failed:", error);
-        }
-
-        return variables;
-    }
-
-
-    private async processDynamicVariables(
-        template: string,
-        context: VariableContext,
-        variables: Record<string, string>
-    ): Promise<Record<string, string>> {
-        const { file, activeFile } = context;
-        const { moment } = window as any;
-
-        // Handle {randomHex:X}
-        const hexPattern = /{randomHex:(\d+)}/g;
-        let hexMatch;
-        while ((hexMatch = hexPattern.exec(template)) !== null) {
-            const size = parseInt(hexMatch[1]);
-            variables[hexMatch[0]] = this.generateRandomHex(size);
-        }
-
-        // Handle {counter:00X}
-        const counterPattern = /{counter:(\d+)}/g;
-        let counterMatch;
-        while ((counterMatch = counterPattern.exec(template)) !== null) {
-            const padding = counterMatch[1].length;
-            variables[counterMatch[0]] = await this.getNextCounter(
-                activeFile.parent?.path || "",
-                padding
-            );
-        }
-
-        // --- Handle {date:FORMAT} and basic date/time variables ---
-        const dateAndTimePattern = /{date:(.*?)}/g;
-        let dateAndTimeMatch;
-        while ((dateAndTimeMatch = dateAndTimePattern.exec(template)) !== null) {
-            const [full, format] = dateAndTimeMatch;
-            if (format) {
-                // It's a {date:FORMAT} pattern
-                try {
-                    variables[full] = moment().format(format);
-                } catch (error) {
-                    console.error(`Invalid date format: ${format}`, error);
-                    variables[full] = moment().format("YYYY-MM-DD"); // Default format on error
-                }
-            }
-        }
-
-        // Handle {size:UNIT:DECIMALS}
-        const sizePattern = /{size:(MB|KB|B):(\d+)}/g;
-        let sizeMatch;
-        let fileSize: number;
-
-        if (file instanceof TFile) {
-            try {
-                const fileStats = await this.app.vault.adapter.stat(file.path);
-                if (fileStats) {
-                    fileSize = fileStats.size;
-                } else {
-                    throw new Error("File stats not available for size variables");
-                }
-            } catch (error) {
-                console.error("Error getting file stats for size variables:", error);
-                fileSize = 0; // Default value if file stats are unavailable
-            }
-        } else {
-            fileSize = file.size;
-        }
-
-        while ((sizeMatch = sizePattern.exec(template)) !== null) {
-            const [full, unit, decimalsStr] = sizeMatch;
-            const decimals = parseInt(decimalsStr, 10);
-            variables[full] = this.formatSize(fileSize, unit, decimals);
-        }
-
-        // --- Handle MD5 Hashes ---
-        // Allow user to specify what they want to hashe.g. filename, fodlerpaht , any name etc.
-        // {MD5:filename} -> full MD5 hash of filename
-        // {MD5:filename:8} -> first 8 characters of MD5 hash
-        // {MD5:path} -> hash of file path
-        // {MD5:fullpath} -> hash of complete path including filename
-        // {MD5:parentfolder} -> hash of immediate parent folder name
-        // {MD5:rootfolder} -> hash of root folder name
-        // {MD5:extension} -> hash of file extension
-        // {MD5:notename} -> hash of current note name
-        // {MD5:notefolder} -> hash of current note's folder
-        // {MD5:notepath} -> hash of current note's full path
-        // {MD5:custom text} -> hash of custom text
-        const md5Pattern = /{MD5:([\w\-./]+?)(?::(\d+))?}/g;
-        let md5Match;
-        while ((md5Match = md5Pattern.exec(template)) !== null) {
-            const hashType = md5Match[1].toLowerCase();
-            const length = md5Match[2] ? parseInt(md5Match[2]) : undefined;
-            let textToHash = "";
-
-            switch (hashType) {
-                case "filename":
-                    textToHash = file.name.substring(0, file.name.lastIndexOf("."));
-                    break;
-                case "imagepath":
-                case "fullpath": {
-                    // Get the relative path of the image
-                    const relativeImagePath = file.name;
-                    textToHash = relativeImagePath;
-                    break;
-                }
-                case "parentfolder":
-                    textToHash = activeFile.parent?.name || "";
-                    break;
-                case "grandparentfolder":
-                    textToHash = (activeFile.parent?.parent?.path == "/" ? activeFile.parent?.name : activeFile.parent?.parent?.name) || "";
-                    break;
-                case "rootfolder":
-                    textToHash = this.app.vault.getRoot().path;
-                    break;
-                case "extension":
-                    textToHash = file.name.substring(file.name.lastIndexOf(".") + 1);
-                    break;
-                case "notename":
-                    textToHash = activeFile.basename;
-                    break;
-                case "notename_nospaces":
-                    textToHash = activeFile.basename.replace(/\s+/g, "_");
-                    break;
-                case "notefolder":
-                    textToHash = activeFile.parent?.name || "";
-                    break;
-                case "notepath":
-                    textToHash = activeFile.path;
-                    break;
-                default:
-                    textToHash = hashType;
-            }
-
-            let md5Hash = await this.generateMD5(textToHash);
-            if (length) {
-                md5Hash = md5Hash.substring(0, length);
-            }
-            variables[`{MD5:${hashType}${(length ? `:${length}` : "")}}`] = md5Hash;
-        }
-
-        // Handle SHA-256 hashes
-        const sha256Pattern = /{sha256:([\w\-./]+?)(?::(\d+))?}/g;
-        let sha256Match;
-        while ((sha256Match = sha256Pattern.exec(template)) !== null) {
-            const hashType = sha256Match[1].toLowerCase();
-            const length = sha256Match[2] ? parseInt(sha256Match[2]) : undefined;
-            let sha256Hash: string;
-
-            if (hashType === "image") {
-                // Handle image content hash
-                sha256Hash = await this.generateFileContentSHA256(file);
-            } else {
-                // Handle other hash types (filename, path, etc.)
-                let textToHash = "";
-                switch (hashType) {
-                    case "filename":
-                        textToHash = file.name.substring(0, file.name.lastIndexOf("."));
-                        break;
-                    case "imagepath":
-                    case "fullpath": {
-                        const relativeImagePath = file.name;
-                        textToHash = relativeImagePath;
-                        break;
-                    }
-                    case "parentfolder":
-                        textToHash = activeFile.parent?.name || "";
-                        break;
-                    case "grandparentfolder":
-                        textToHash = (activeFile.parent?.parent?.path == "/" ? activeFile.parent?.name : activeFile.parent?.parent?.name) || "";
-                        break;
-                    case "rootfolder":
-                        textToHash = this.app.vault.getRoot().path;
-                        break;
-                    case "extension":
-                        textToHash = file.name.substring(file.name.lastIndexOf(".") + 1);
-                        break;
-                    case "notename":
-                        textToHash = activeFile.basename;
-                        break;
-                    case "notename_nospaces":
-                        textToHash = activeFile.basename.replace(/\s+/g, "_");
-                        break;
-                    case "notefolder":
-                        textToHash = activeFile.parent?.name || "";
-                        break;
-                    case "notepath":
-                        textToHash = activeFile.path;
-                        break;
-                    default:
-                        textToHash = hashType;
-                }
-                sha256Hash = await this.generateSHA256(textToHash);
-            }
-
-            if (length) {
-                sha256Hash = sha256Hash.substring(0, length);
-            }
-            variables[`{sha256:${hashType}${(length ? `:${length}` : "")}}`] = sha256Hash;
-        }
-
-        return variables;
-    }
-
-
-    private async getImageMetadata(file: TFile | File): Promise<Record<string, string>> {
         const metadata: Record<string, string> = {};
 
         const fileExtension = file instanceof TFile ? file.extension.toLowerCase() : file.name.split('.').pop()?.toLowerCase() || '';
@@ -1135,7 +1261,8 @@ export class VariableProcessor {
             // Handle TFile (files already in the vault)
             let objectUrl: string | null = null;
             try {
-                const fileContent = await this.app.vault.readBinary(file);
+                const fileContent = providedContent
+                    ?? await this.app.vault.readBinary(file);
                 const detected = await detectImageBinaryType(fileContent);
                 const blob = new Blob([fileContent], { type: detected?.mime ?? "application/octet-stream" });
                 const img = new Image();
@@ -1160,16 +1287,18 @@ export class VariableProcessor {
                 const pixelCount = width * height;
 
                 // Get file stats using app.vault.adapter.stat for TFile
-                let fileSizeInBytes = 0;
-                try {
-                    const fileStats = await this.app.vault.adapter.stat(file.path);
-                    if (fileStats) {
-                        fileSizeInBytes = fileStats.size;
-                    } else {
-                        throw new Error("File stats not available");
+                let fileSizeInBytes = providedSize ?? 0;
+                if (providedSize === undefined) {
+                    try {
+                        const fileStats = await this.app.vault.adapter.stat(file.path);
+                        if (fileStats) {
+                            fileSizeInBytes = fileStats.size;
+                        } else {
+                            throw new Error("File stats not available");
+                        }
+                    } catch (error) {
+                        console.error("Error getting file stats:", error);
                     }
-                } catch (error) {
-                    console.error("Error getting file stats:", error);
                 }
 
                 // Add properties to metadata object
@@ -1361,61 +1490,127 @@ export class VariableProcessor {
             .substring(0, size); // Trim in case size is odd
     }
 
-    private async getNextCounter(
-        folderPath: string,
-        padding: number
-    ): Promise<string> {
-        const counterKey = `counter-${folderPath}`;
-        let counter = this.counters.get(counterKey) || 0;
-        counter++;
-        this.counters.set(counterKey, counter);
-        return counter.toString().padStart(padding, "0");
-    }
-
-    private async generateMD5(text: string): Promise<string> {
-        // Use the module-level md5 function (defined at top of file)
-        // MD5 is needed for non-cryptographic purposes (file naming) where its
-        // properties are useful, and Web Crypto API does not support MD5.
-        try {
-            return md5(text);
-        } catch (error) {
-            console.error('MD5 generation failed:', error);
-            return 'error';
-        }
-    }
-
-    private escapeRegExp(string: string): string {
-        return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-
     private async generateSHA256(text: string): Promise<string> {
         const encoder = new TextEncoder();
-        const data = encoder.encode(text);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');
-        return hashHex;
+        return sha256Hex(encoder.encode(text).buffer);
+    }
+}
+
+const IMAGE_METADATA_TOKENS = new Set([
+    "{width}", "{height}", "{aspectratio}", "{orientation}", "{resolution}",
+    "{ratio}", "{megapixels}", "{issquare}", "{pixelcount}",
+    "{aspectratiotype}", "{resolutioncategory}", "{filesizecategory}",
+    "{dominantdimension}", "{dimensiondifference}", "{bytesperpixel}",
+    "{compressionratio}", "{maxdimension}", "{mindimension}",
+    "{diagonalpixels}", "{aspectratiosimplified}", "{screenfitcategory}"
+]);
+
+function isImageMetadataToken(token: string): boolean {
+    return IMAGE_METADATA_TOKENS.has(token);
+}
+
+function splitFilename(filename: string): {
+    readonly stem: string;
+    readonly extension: string;
+} {
+    const normalized = filename.replace(/\\/g, "/").split("/").pop() ?? filename;
+    const dot = normalized.lastIndexOf(".");
+    if (dot <= 0 || dot === normalized.length - 1) {
+        return {
+            stem: normalized.replace(/^\.+/, "") || "image",
+            extension: ""
+        };
+    }
+    return {
+        stem: normalized.slice(0, dot),
+        extension: normalized.slice(dot + 1)
+    };
+}
+
+function tokenError(token: TemplateToken, message: string): TemplateEvaluationError {
+    return new TemplateEvaluationError([{
+        code: "invalid-argument",
+        token: token.source,
+        message: `${token.source}: ${message}`,
+        offset: token.start
+    }]);
+}
+
+function cloneMoment(value: any): any {
+    if (typeof value?.clone === "function") return value.clone();
+    const momentFactory = (window as typeof window & {
+        moment?: (input?: number) => any;
+    }).moment;
+    const timestamp = Number(value?.valueOf?.());
+    return momentFactory?.(Number.isFinite(timestamp) ? timestamp : undefined)
+        ?? value;
+}
+
+const DIRECT_TEMPLATE_TOKEN_BODIES = new Set([
+    "imagename", "filetype", "sizeb", "sizekb", "sizemb",
+    "notename", "notename_nospaces", "date", "time",
+    "YYYY", "MM", "DD", "HH", "mm", "ss", "weekday", "month",
+    "calendar", "today", "YYYY-MM-DD", "tomorrow", "yesterday",
+    "startofweek", "endofweek", "startofmonth", "endofmonth",
+    "nextweek", "lastweek", "nextmonth", "lastmonth", "daysinmonth",
+    "weekofyear", "quarterofyear", "week", "w", "quarter", "Q",
+    "dayofyear", "DDD", "monthname", "MMMM", "dayname", "dddd",
+    "dateordinal", "Do", "relativetime", "currentdate", "yyyy",
+    "timestamp", "parentfolder", "grandparentfolder", "notefolder",
+    "notepath", "rootfolder", "vaultname", "vaultpath", "imagepath",
+    "fullpath", "timezone", "locale", "platform", "useragent",
+    "random", "uuid", "quality"
+]);
+
+for (const metadataToken of IMAGE_METADATA_TOKENS) {
+    DIRECT_TEMPLATE_TOKEN_BODIES.add(metadataToken.slice(1, -1));
+}
+
+function validateTemplateTokenBody(body: string): string | null {
+    if (DIRECT_TEMPLATE_TOKEN_BODIES.has(body)) return null;
+    if (/^date:.+$/i.test(body)) return null;
+    if (body.startsWith("date:")) return "Date format cannot be empty.";
+    if (/^counter:0+$/i.test(body)) return null;
+    if (/^counter:/i.test(body)) return "Counter syntax must be {counter:000}.";
+
+    const randomHex = /^randomHex:(\d+)$/i.exec(body);
+    if (randomHex) {
+        const length = Number(randomHex[1]);
+        return length >= 1 && length <= 128
+            ? null
+            : "randomHex length must be from 1 to 128.";
+    }
+    if (/^randomHex:/i.test(body)) {
+        return "randomHex length must be an integer from 1 to 128.";
     }
 
-    private async generateFileContentSHA256(file: TFile | File): Promise<string> {
-        try {
-            let arrayBuffer: ArrayBuffer;
+    const size = /^size:(MB|KB|B):(\d+)$/i.exec(body);
+    if (size) {
+        const decimals = Number(size[2]);
+        return decimals <= 10 ? null : "Size decimals must be from 0 to 10.";
+    }
+    if (/^size:/i.test(body)) {
+        return "Size syntax must be {size:B|KB|MB:DECIMALS}.";
+    }
 
-            if (file instanceof TFile) {
-                // Handle TFile (files in the vault)
-                arrayBuffer = await this.app.vault.readBinary(file);
-            } else {
-                // Handle File (dragged/pasted files)
-                arrayBuffer = await file.arrayBuffer();
-            }
-
-            const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            const hashHex = hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');
-            return hashHex;
-        } catch (error) {
-            console.error('Error generating SHA-256 hash of file content:', error);
-            return 'error';
+    const hash = /^(MD5|sha256):(.+)$/i.exec(body);
+    if (hash) {
+        let source = hash[2];
+        let length: number | undefined;
+        const lengthMatch = /:(\d+)$/.exec(source);
+        if (lengthMatch) {
+            length = Number(lengthMatch[1]);
+            source = source.slice(0, -lengthMatch[0].length);
         }
+        if (!source) return "Hash source cannot be empty.";
+        const maxLength = hash[1].toLowerCase() === "md5" ? 32 : 64;
+        if (length !== undefined && (length < 1 || length > maxLength)) {
+            return `${hash[1].toUpperCase()} length must be from 1 to ${maxLength}.`;
+        }
+        return null;
     }
+    if (/^(MD5|sha256)$/i.test(body)) {
+        return "Hash syntax requires a source, for example {MD5:time}.";
+    }
+    return "Unknown template token.";
 }

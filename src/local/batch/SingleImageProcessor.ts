@@ -10,6 +10,9 @@ import { BatchOutputFormat, toBatchOutputFormat } from './BatchFormat';
 import { ImageConversionCommitter } from '../ImageConversionCommitter';
 import { getErrorMessage } from '../../utils/ErrorUtils';
 import { resolveProcessedImageFilename } from '../../utils/ProcessedImageFilename';
+import { createReferenceMutationScanPolicy } from '../../utils/ReferenceScanPolicy';
+import { detectImageBinaryType } from '../../utils/ImageBinaryType';
+import { captureImageFileRevision } from '../../utils/ImageFileRevision';
 
 /**
  * SingleImageProcessor - Shared logic for processing a single image.
@@ -36,9 +39,18 @@ export class SingleImageProcessor {
         allowLargerFiles: boolean
     ): Promise<{ success: boolean; skipped?: boolean; error?: string }> {
         try {
+            const sourceData = await this.app.vault.readBinary(file);
+            const sourceRevision = await captureImageFileRevision(this.app, file, sourceData);
+            const detected = await detectImageBinaryType(sourceData);
+            const sourceFile = new File(
+                [sourceData],
+                file.name,
+                { type: detected?.mime ?? 'application/octet-stream' }
+            );
+
             // 1. Process Image
             const processedImage = await this.imageProcessor.processImageDetailed(
-                file,
+                sourceFile,
                 outputFormat,
                 quality,
                 colorDepth,
@@ -71,16 +83,18 @@ export class SingleImageProcessor {
                 return { success: false, skipped: true, error: t("MSG_SIZE_REDUCTION_INSUFFICIENT") };
             }
 
-            const sourceData = await this.app.vault.readBinary(file);
             const newFileName = await resolveProcessedImageFilename(file, sourceData, processedImage);
             const committer = new ImageConversionCommitter(
                 this.app,
                 this.folderAndFilenameManagement,
                 this.plugin.vaultReferenceManager,
-                { includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing },
-                () => this.plugin.settings.localProcessing.link
+                createReferenceMutationScanPolicy(
+                    this.plugin.settings.global.codeBlockImageLinkIndexing
+                ),
+                () => this.plugin.settings.localProcessing.link,
+                this.plugin.referenceIndexService
             );
-            await committer.commit(file, newFileName, processedImage.data);
+            await committer.commit(file, newFileName, processedImage.data, sourceRevision);
             return { success: true };
         } catch (error) {
             console.error(`Failed to process image ${file.path}:`, error);

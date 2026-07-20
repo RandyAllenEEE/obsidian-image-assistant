@@ -3,11 +3,9 @@ import {
     Editor,
     Platform,
     Notice,
-    TFile,
-    TFolder,
-    EditorPosition,
     MarkdownView,
-    FuzzySuggestModal
+    TFile,
+    type MarkdownFileInfo
 } from "obsidian";
 
 import { SupportedImageFormats } from "./local/SupportedImageFormats";
@@ -16,20 +14,17 @@ import { ImageProcessor } from "./local/ImageProcessor";
 import { VariableProcessor } from "./local/VariableProcessor";
 import { LinkFormatter } from "./utils/LinkFormatter";
 import { EmbedResizeSettings } from "./settings/NonDestructiveResizeSettings";
-import { ContextMenu } from "./ui/ContextMenu";
+import { ContextMenuManager } from "./ui/contextMenu/ContextMenuManager";
 import { ConcurrentQueue } from "./utils/AsyncLock";
 import { ImageAlignment } from './ui/ImageAlignment'; // Import class directly
 import { ImageStateManager } from './ui/ImageStateManager';
 import { ImageCaption } from './ui/ImageCaption';
 import { createLivePreviewCaptionExtension } from './ui/caption/LivePreviewCaptionExtension';
+import { trackedEditorRangeField } from './utils/TrackedEditorRange';
+import { ImageResourceRefreshService } from './utils/ImageResourceRefreshService';
 import { ImageResizer } from "./ui/ImageResizer";
 import { t } from './lang/helpers';
 import { BatchImageProcessor } from "./local/BatchImageProcessor";
-import { UnifiedBatchProcessModal } from "./ui/modals/UnifiedBatchProcessModal";
-import { ProcessSingleImageModal } from "./ui/modals/ProcessSingleImageModal"; // Keep Single Image for now as it might be used differently
-
-
-
 import { UploadHistoryManager } from "./utils/UploadHistoryManager";
 
 // Settings tab and all DEFAULTS
@@ -55,41 +50,12 @@ import {
     mergeWithDefaults,
     normalizeSettings
 } from "./settings/SettingsMerge";
-
-/**
- * Folder Selector Modal for selecting a folder from the vault
- * 文件夹选择器模态框，用于从库中选择文件夹
- */
-class FolderSelectorModal extends FuzzySuggestModal<TFolder> {
-    private onChoose: (folder: TFolder) => void;
-
-    constructor(app: any, onChoose: (folder: TFolder) => void) {
-        super(app);
-        this.onChoose = onChoose;
-        this.setPlaceholder(t("DIALOG_SELECT_FOLDER_PLACEHOLDER"));
-    }
-
-    getItems(): TFolder[] {
-        const folders: TFolder[] = [];
-        const files = this.app.vault.getAllLoadedFiles();
-
-        for (const file of files) {
-            if (file instanceof TFolder) {
-                folders.push(file);
-            }
-        }
-
-        return folders;
-    }
-
-    getItemText(folder: TFolder): string {
-        return folder.path || "/";
-    }
-
-    onChooseItem(folder: TFolder): void {
-        this.onChoose(folder);
-    }
-}
+import { BatchOperationLauncher } from "./ui/contextMenu/batch/BatchOperationLauncher";
+import { registerBatchCommands } from "./ui/contextMenu/batch/registerBatchCommands";
+import {
+    resolveEditorImageInsertionContext
+} from "./core/EditorImageInsertionContext";
+import { ImageReferenceIndexService } from "./utils/ImageReferenceIndexService";
 
 export default class ImageConverterPlugin extends Plugin {
     settings: ImageAssistantSettings;
@@ -112,19 +78,19 @@ export default class ImageConverterPlugin extends Plugin {
     // Link formatter
     linkFormatter: LinkFormatter;
     // Context menu
-    contextMenu: ContextMenu | null = null;
+    contextMenu: ContextMenuManager | null = null;
+    batchOperationLauncher: BatchOperationLauncher;
     // Alignment
     imageAlignment: ImageAlignment | null = null;
     imageStateManager: ImageStateManager | null = null;
     imageCaption: ImageCaption | null = null;
+    imageResourceRefreshService: ImageResourceRefreshService;
 
     // drag-resize (Managed by StateManager but kept for reference if needed)
     imageResizer: ImageResizer | null = null;
 
     // batch processing
     batchImageProcessor: BatchImageProcessor;
-    // Single Image Modal
-    processSingleImageModal: ProcessSingleImageModal;
 
     // captions
     // captionManager: ImageCaptionManager; // Deprecated
@@ -142,6 +108,7 @@ export default class ImageConverterPlugin extends Plugin {
     unusedFileCleaner: UnusedFileCleanerModal | null = null;
     // Vault Reference Manager
     vaultReferenceManager: VaultReferenceManager;
+    referenceIndexService: ImageReferenceIndexService;
     private settingsSaveQueue: Promise<void> = Promise.resolve();
     private runtimeUnloaded = false;
 
@@ -264,6 +231,7 @@ export default class ImageConverterPlugin extends Plugin {
             this.concurrentQueue
         );
         this.localImageHandler = new LocalImageHandler(this.app, this);
+        this.batchOperationLauncher = new BatchOperationLauncher(this.app, this);
 
         this.applyEditModeWrapClass();
         this.registerEvent(
@@ -285,8 +253,12 @@ export default class ImageConverterPlugin extends Plugin {
         this.imageStateManager = new ImageStateManager(this.app, this);
         this.imageAlignment = new ImageAlignment(this.app, this);
         this.imageCaption = this.addChild(new ImageCaption(this));
+        this.imageResourceRefreshService = new ImageResourceRefreshService(this.app, this);
         const captionRenderCoordinator = new CaptionRenderCoordinator(this.app);
-        this.registerEditorExtension(createLivePreviewCaptionExtension(this));
+        this.registerEditorExtension([
+            trackedEditorRangeField,
+            createLivePreviewCaptionExtension(this)
+        ]);
         this.imageResizer = new ImageResizer(this);
         this.addChild(this.imageResizer);
         this.imageStateManager.initialize(
@@ -328,7 +300,11 @@ export default class ImageConverterPlugin extends Plugin {
         // Register MarkdownPostProcessor for Reading Mode Image Handling
         this.registerMarkdownPostProcessor((element, context) => {
             const section = context.getSectionInfo(element);
-            const binding = captionRenderCoordinator.createSectionBinding(section?.text, context.sourcePath);
+            const binding = captionRenderCoordinator.createSectionBinding(
+                section?.text,
+                context.sourcePath,
+                section?.lineStart ?? 0
+            );
             const hasDeferredEmbed = element.matches('.internal-embed, .external-embed')
                 || !!element.querySelector('.internal-embed, .external-embed');
             const hasImage = !!element.querySelector('img');
@@ -350,6 +326,11 @@ export default class ImageConverterPlugin extends Plugin {
         this.linkFormatter = new LinkFormatter(this.app);
         this.imageProcessor = new ImageProcessor(this.app, this.supportedImageFormats);
         this.vaultReferenceManager = new VaultReferenceManager(this.app, this);
+        this.referenceIndexService = this.addChild(new ImageReferenceIndexService(
+            this.app,
+            () => this.settings.global.batchConcurrency
+        ));
+        void this.referenceIndexService.start();
         this.imageStateManager?.start();
 
         // Initialize History Manager. Ownership history is safety metadata for
@@ -383,63 +364,18 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Initialize context menu if enabled
         if (this.settings.global.enableContextMenu) {
-            this.contextMenu = new ContextMenu(
+            this.contextMenu = new ContextMenuManager(
                 this.app,
                 this,
                 this.folderAndFilenameManagement,
-                this.variableProcessor
+                this.variableProcessor,
+                this.batchOperationLauncher
             );
             this.addChild(this.contextMenu);
         }
 
         // Register PASTE/DROP events
         this.dropPasteRegisterEvents();
-
-        // Register file menu events
-        this.registerEvent(
-            this.app.workspace.on("file-menu", (menu, file) => {
-                if (file instanceof TFile && this.supportedImageFormats.isSupported(undefined, file.name)) {
-                    menu.addItem((item) => {
-                        item.setTitle(t("MENU_PROCESS_IMAGE"))
-                            .setIcon("cog")
-                            .onClick(() => {
-                                new ProcessSingleImageModal(this.app, this, file).open();
-                            });
-                    });
-
-                    // Add "Upload to cloud" option for images in cloud mode
-                    if (this.settings.pasteHandling.mode === 'cloud') {
-                        menu.addItem((item) => {
-                            item.setTitle(t("MENU_UPLOAD_CLOUD"))
-                                .setIcon("cloud-upload")
-                                .onClick(() => void this.runAfterComponentsReady(() =>
-                                    this.cloudImageHandler.uploadSingleFile(file)
-                                ));
-                        });
-                    }
-                } else if (file instanceof TFile && (file.extension === 'md' || file.extension === 'canvas')) {
-                    // Context menu for Markdown Notes (Batch Operations)
-
-                    // 1. Local Process
-                    menu.addItem((item) => {
-                        item.setTitle(t("CMD_PROCESS_CURRENT_NOTE") || "Process Images in Note")
-                            .setIcon("cog")
-                            .onClick(() => {
-                                new UnifiedBatchProcessModal(this.app, this, "note", file, "local_process").open();
-                            });
-                    });
-
-                } else if (file instanceof TFolder) {
-                    menu.addItem((item) => {
-                        item.setTitle(t("MENU_PROCESS_FOLDER_IMAGES"))
-                            .setIcon("cog")
-                            .onClick(() => {
-                                new UnifiedBatchProcessModal(this.app, this, "folder", file, "local_process").open();
-                            });
-                    });
-                }
-            })
-        );
     }
 
     private initializeAfterLayoutReady(): void {
@@ -488,22 +424,7 @@ export default class ImageConverterPlugin extends Plugin {
         // 注意：所有命令名称统一使用 "Image Assistant:" 前缀（与 manifest.json 的 name 一致）
         // 这样 Obsidian 快捷键设置的搜索功能才能正确工作
 
-        this.addCommand({
-            id: 'process-all-vault-images',
-            name: t("CMD_PROCESS_ALL_VAULT"),
-            callback: () => void this.runAfterComponentsReady(() =>
-                new UnifiedBatchProcessModal(this.app, this, "vault", null, "local_process").open()
-            )
-        });
-
-        this.addCommand({
-            id: 'process-all-images-current-note',
-            name: t("CMD_PROCESS_CURRENT_NOTE"),
-            callback: () => void this.runAfterComponentsReady(() => {
-                const activeFile = this.getActiveBatchSourceFile();
-                if (activeFile) new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "local_process").open();
-            })
-        });
+        registerBatchCommands(this, this.batchOperationLauncher);
 
         this.addCommand({
             id: 'open-image-converter-settings',
@@ -518,74 +439,6 @@ export default class ImageConverterPlugin extends Plugin {
             callback: () => {
                 new UnusedFileCleanerModal(this.app, this).open();
             }
-        });
-
-        // 批量处理文件夹内的所有图片
-        this.addCommand({
-            id: 'process-folder-images',
-            name: t("MENU_PROCESS_FOLDER_IMAGES"),
-            callback: () => void this.runAfterComponentsReady(async () => {
-                new FolderSelectorModal(this.app, async (folder: TFolder) => {
-                    new UnifiedBatchProcessModal(this.app, this, "folder", folder, "local_process").open();
-                }).open();
-            })
-        });
-
-        // Cloud Batch Commands (New)
-        // --------------------------
-
-        this.addCommand({
-            id: 'upload-all-vault-images',
-            name: t("CMD_UPLOAD_ALL_VAULT" as any) || "Upload all images in vault", // Fallback if key missing
-            callback: () => void this.runAfterComponentsReady(() =>
-                new UnifiedBatchProcessModal(this.app, this, "vault", null, "upload").open()
-            )
-        });
-
-        this.addCommand({
-            id: 'upload-all-images-current-note',
-            name: t("CMD_UPLOAD_CURRENT_NOTE" as any) || "Upload all images in current note",
-            callback: () => void this.runAfterComponentsReady(() => {
-                const activeFile = this.getActiveBatchSourceFile();
-                if (activeFile) new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "upload").open();
-            })
-        });
-
-        this.addCommand({
-            id: 'upload-folder-images',
-            name: t("MENU_UPLOAD_FOLDER_IMAGES"),
-            callback: () => void this.runAfterComponentsReady(async () => {
-                new FolderSelectorModal(this.app, async (folder: TFolder) => {
-                    new UnifiedBatchProcessModal(this.app, this, "folder", folder, "upload").open();
-                }).open();
-            })
-        });
-
-        this.addCommand({
-            id: 'download-network-images-current-note',
-            name: t("CMD_DOWNLOAD_CURRENT_NOTE"),
-            callback: () => void this.runAfterComponentsReady(() => {
-                const activeFile = this.getActiveBatchSourceFile();
-                if (activeFile) new UnifiedBatchProcessModal(this.app, this, "note", activeFile, "download").open();
-            })
-        });
-
-        this.addCommand({
-            id: 'download-network-images-folder',
-            name: t("CMD_DOWNLOAD_FOLDER"),
-            callback: () => void this.runAfterComponentsReady(() => {
-                new FolderSelectorModal(this.app, folder => {
-                    new UnifiedBatchProcessModal(this.app, this, "folder", folder, "download").open();
-                }).open();
-            })
-        });
-
-        this.addCommand({
-            id: 'download-network-images-vault',
-            name: t("CMD_DOWNLOAD_ALL_VAULT"),
-            callback: () => void this.runAfterComponentsReady(() =>
-                new UnifiedBatchProcessModal(this.app, this, "vault", null, "download").open()
-            )
         });
 
         // Frontmatter 模式控制命令
@@ -628,27 +481,6 @@ export default class ImageConverterPlugin extends Plugin {
         this.addReloadCommand();
     }
 
-    private async runAfterComponentsReady(action: () => void | Promise<void>): Promise<void> {
-        try {
-            await this.componentsReady;
-            await action();
-        } catch (error) {
-            console.error('[Image Assistant] Components are unavailable:', error);
-            new Notice(t("MSG_PROCESSING_FAILED"));
-        }
-    }
-
-    private getActiveBatchSourceFile(): TFile | null {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (activeFile && (activeFile.extension === "md" || activeFile.extension === "canvas")) {
-            return activeFile;
-        }
-
-        new Notice(t("MSG_OPEN_NOTE_OR_CANVAS"));
-        return null;
-    }
-
-
     async onunload() {
         this.runtimeUnloaded = true;
         // Clean up alignment related components first
@@ -667,13 +499,6 @@ export default class ImageConverterPlugin extends Plugin {
             this.contextMenu = null;
             this.removeChild(contextMenu);
         }
-
-        // Clean up any open modals
-        [
-            this.processSingleImageModal
-        ].forEach(modal => {
-            if (modal?.close) modal.close();
-        });
 
         this.imageStateManager?.onunload();
         for (const ownerDocument of this.getWorkspaceDocuments()) {
@@ -881,11 +706,12 @@ export default class ImageConverterPlugin extends Plugin {
         if (!enabled || !this.folderAndFilenameManagement || !this.variableProcessor) return;
 
         if (!this.contextMenu) {
-            this.contextMenu = new ContextMenu(
+            this.contextMenu = new ContextMenuManager(
                 this.app,
                 this,
                 this.folderAndFilenameManagement,
-                this.variableProcessor
+                this.variableProcessor,
+                this.batchOperationLauncher
             );
             this.addChild(this.contextMenu);
         }
@@ -950,13 +776,12 @@ export default class ImageConverterPlugin extends Plugin {
      * 获取当前笔记的有效粘贴模式
      * 优先级: 笔记级别 Frontmatter > 全局设置
      */
-    private getEffectivePasteMode(): 'local' | 'cloud' | 'disabled' {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) {
+    private getEffectivePasteMode(file?: TFile | null): 'local' | 'cloud' | 'disabled' {
+        if (!file) {
             return this.settings.pasteHandling.mode;
         }
 
-        const cache = this.app.metadataCache.getFileCache(activeFile);
+        const cache = this.app.metadataCache.getFileCache(file);
         const frontmatter = cache?.frontmatter;
 
         if (frontmatter && 'image_paste_mode' in frontmatter) {
@@ -1038,7 +863,6 @@ export default class ImageConverterPlugin extends Plugin {
      * 处理 OCR 转 LaTeX
      */
     private async handleOCRLatex(isMultiline: boolean) {
-        let editorInteract: EditorContentInserter | null = null;
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
@@ -1049,17 +873,25 @@ export default class ImageConverterPlugin extends Plugin {
             const image = await this.getClipboardImage();
             if (!image) return;
 
-            editorInteract = new EditorContentInserter(view);
-            editorInteract.insertLoadingText(t("LOADING_OCR_LATEX") || "Loading latex...");
-
-            const provider = getLatexProvider(this.app, isMultiline, this.settings.ocrSettings);
-            const parsedLatex = await provider.sendRequest(image);
-            editorInteract.insertResponseToEditor(parsedLatex);
+            const editorInteract = new EditorContentInserter(view);
+            await editorInteract.runWithLoadingText(
+                t("LOADING_OCR_LATEX") || "Loading latex...",
+                async inserter => {
+                    const provider = getLatexProvider(
+                        this.app,
+                        isMultiline,
+                        this.settings.ocrSettings
+                    );
+                    const parsedLatex = await provider.sendRequest(image);
+                    if (!inserter.insertResponseToEditor(parsedLatex)) {
+                        throw new Error(t("MSG_IMAGE_CONTEXT_UNRESOLVED"));
+                    }
+                }
+            );
         } catch (error) {
             console.error('[OCR] LaTeX conversion error:', error);
             new Notice(t("MSG_OCR_FAILED", [getErrorMessage(error)]));
-            // Remove loading text on error
-            if (editorInteract) editorInteract.removeLoadingText();
+            // runWithLoadingText removes a still-owned placeholder on error.
         }
     }
 
@@ -1067,7 +899,6 @@ export default class ImageConverterPlugin extends Plugin {
      * 处理 OCR 转 Markdown
      */
     private async handleOCRMarkdown() {
-        let editorInteract: EditorContentInserter | null = null;
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
@@ -1078,17 +909,24 @@ export default class ImageConverterPlugin extends Plugin {
             const image = await this.getClipboardImage();
             if (!image) return;
 
-            editorInteract = new EditorContentInserter(view);
-            editorInteract.insertLoadingText(t("LOADING_OCR_MARKDOWN") || "Loading markdown...");
-
-            const provider = getMarkdownProvider(this.app, this.settings.ocrSettings);
-            const result = await provider.sendRequest(image);
-            editorInteract.insertResponseToEditor(result);
+            const editorInteract = new EditorContentInserter(view);
+            await editorInteract.runWithLoadingText(
+                t("LOADING_OCR_MARKDOWN") || "Loading markdown...",
+                async inserter => {
+                    const provider = getMarkdownProvider(
+                        this.app,
+                        this.settings.ocrSettings
+                    );
+                    const result = await provider.sendRequest(image);
+                    if (!inserter.insertResponseToEditor(result)) {
+                        throw new Error(t("MSG_IMAGE_CONTEXT_UNRESOLVED"));
+                    }
+                }
+            );
         } catch (error) {
             console.error('[OCR] Markdown conversion error:', error);
             new Notice(t("MSG_OCR_FAILED", [getErrorMessage(error)]));
-            // Remove loading text on error
-            if (editorInteract) editorInteract.removeLoadingText();
+            // runWithLoadingText removes a still-owned placeholder on error.
         }
     }
 
@@ -1097,8 +935,18 @@ export default class ImageConverterPlugin extends Plugin {
 
         // Drop event (Obsidian editor - primary handlers)
         this.registerEvent(
-            this.app.workspace.on("editor-drop", async (evt: DragEvent, editor: Editor) => {
+            this.app.workspace.on("editor-drop", async (
+                evt: DragEvent,
+                editor: Editor,
+                info: MarkdownView | MarkdownFileInfo
+            ) => {
                 if (evt.defaultPrevented) return;
+                const context = resolveEditorImageInsertionContext(
+                    this.app,
+                    editor,
+                    info
+                );
+                if (!context) return;
 
                 if (!evt.dataTransfer) {
                     console.warn("DataTransfer object is null initially. Cannot process drop event.");
@@ -1125,7 +973,7 @@ export default class ImageConverterPlugin extends Plugin {
 
                 if (hasSupportedFiles) {
                     // Get effective paste mode (may be overridden by Frontmatter)
-                    const effectiveMode = this.getEffectivePasteMode();
+                    const effectiveMode = this.getEffectivePasteMode(context.file);
 
                     // Check paste handling mode
                     if (effectiveMode === 'disabled') {
@@ -1135,10 +983,10 @@ export default class ImageConverterPlugin extends Plugin {
 
                     if (effectiveMode === 'cloud') {
                         // Cloud mode: upload to image hosting
-                        await this.cloudImageHandler.handleDrop(evt, editor);
+                        await this.cloudImageHandler.handleDrop(evt, editor, context);
                     } else {
                         // Local mode: use original converter logic
-                        await this.localImageHandler.handleDrop(evt, editor);
+                        await this.localImageHandler.handleDrop(evt, editor, context);
                     }
                 }
             })
@@ -1146,8 +994,18 @@ export default class ImageConverterPlugin extends Plugin {
 
         // --- Paste event handler ---
         this.registerEvent(
-            this.app.workspace.on("editor-paste", async (evt: ClipboardEvent, editor: Editor) => {
+            this.app.workspace.on("editor-paste", async (
+                evt: ClipboardEvent,
+                editor: Editor,
+                info: MarkdownView | MarkdownFileInfo
+            ) => {
                 if (evt.defaultPrevented) return;
+                const context = resolveEditorImageInsertionContext(
+                    this.app,
+                    editor,
+                    info
+                );
+                if (!context) return;
 
                 if (!evt.clipboardData) {
                     console.warn("ClipboardData object is null. Cannot process paste event.");
@@ -1175,7 +1033,7 @@ export default class ImageConverterPlugin extends Plugin {
                 );
                 const hasFileItems = itemData.some(data => data.kind === "file");
 
-                const effectiveMode = this.getEffectivePasteMode();
+                const effectiveMode = this.getEffectivePasteMode(context.file);
 
                 if (hasSupportedItems) {
                     if (effectiveMode === 'disabled') {
@@ -1185,73 +1043,34 @@ export default class ImageConverterPlugin extends Plugin {
 
                     if (effectiveMode === 'cloud') {
                         // Cloud mode: upload to image hosting
-                        await this.cloudImageHandler.handlePaste(evt, editor);
+                        await this.cloudImageHandler.handlePaste(evt, editor, context);
                     } else {
                         // Local mode: use original converter logic
-                        await this.localImageHandler.handlePaste(evt, editor);
+                        await this.localImageHandler.handlePaste(evt, editor, context);
                     }
                 } else if (effectiveMode === 'cloud' && clipboardText && !hasFileItems) {
                     // Check if pasted text contains image URLs (for URL auto-upload)
                     // Use the CloudImageHandler to handle text paste
-                    await this.cloudImageHandler.handlePasteText(clipboardText, editor, cursor, evt);
+                    await this.cloudImageHandler.handlePasteText(
+                        clipboardText,
+                        editor,
+                        cursor,
+                        evt,
+                        context
+                    );
                 }
             })
         );
     }
-
-
-
-    // Helper function to insert link at the specified cursor position
-    private async insertLinkAtCursorPosition(
-        editor: Editor,
-        linkPath: string,
-        cursor: EditorPosition,
-        selectedLinkFormatSetting?: LocalLinkSettings,
-        resizeSetting?: EmbedResizeSettings
-    ) {
-
-        const activeFile = this.app.workspace.getActiveFile();
-
-        const linkFormatToUse = selectedLinkFormatSetting || this.settings.localProcessing.link;
-        const resizeSettingToUse = resizeSetting || this.settings.localProcessing.embedResize;
-
-        // Await the result of formatLink
-        const formattedLink = await this.linkFormatter.formatLink(
-            linkPath, // Pass the original linkPath
-            linkFormatToUse?.linkFormat || "wikilink",
-            linkFormatToUse?.pathFormat || "shortest",
-            activeFile,
-            resizeSettingToUse,
-            linkFormatToUse?.prependCurrentDir ?? false
-        );
-
-
-        // ----- FRONT or BACK ---------
-        // Insert the link at the saved cursor position
-        // - FRONT:Keeps the cursor at the front by default (by doing nothing) when cursorLocation is "front"
-        editor.replaceRange(formattedLink, cursor);
-
-        // Use positive check for "back"
-        // - We have to be carefull not to place it to the back 2 times.
-        if (this.settings.pasteHandling.cursorLocation === "back") {
-            editor.setCursor({
-                line: cursor.line,
-                ch: cursor.ch + formattedLink.length,
-            });
-        }
-
-    }
-
     // Helper function to insert link using EditorContentInserter (for placeholders)
     public async insertLinkWithInserter(
         inserter: EditorContentInserter,
-        editor: Editor,
         linkPath: string,
+        sourceFile: TFile,
         selectedLinkFormatSetting?: LocalLinkSettings,
-        resizeSetting?: EmbedResizeSettings
-    ) {
-        const activeFile = this.app.workspace.getActiveFile();
-
+        resizeSetting?: EmbedResizeSettings,
+        insertionContext?: import("./core/EditorImageInsertionContext").EditorImageInsertionContext
+    ): Promise<boolean> {
         const linkFormatToUse = selectedLinkFormatSetting || this.settings.localProcessing.link;
         const resizeSettingToUse = resizeSetting || this.settings.localProcessing.embedResize;
 
@@ -1260,12 +1079,13 @@ export default class ImageConverterPlugin extends Plugin {
             linkPath,
             linkFormatToUse?.linkFormat || "wikilink",
             linkFormatToUse?.pathFormat || "shortest",
-            activeFile,
+            sourceFile,
             resizeSettingToUse,
-            linkFormatToUse?.prependCurrentDir ?? false
+            linkFormatToUse?.prependCurrentDir ?? false,
+            { view: insertionContext?.view ?? null }
         );
 
-        inserter.insertResponseToEditor(formattedLink);
+        return inserter.insertResponseToEditor(formattedLink);
     }
 
     private formatFileSize(bytes: number): string {

@@ -1,9 +1,9 @@
-import { Editor, MarkdownView, EditorPosition, Debouncer, debounce, Component } from "obsidian";
+import { Editor, MarkdownView, EditorPosition, Component, Notice, TFile } from "obsidian";
 import ImageConverterPlugin from "../main";
 import { LinkFormatter } from '../utils/LinkFormatter';
-import { pipeSyntaxParser } from '../utils/PipeSyntaxParser';
-import { RefinedImageUtils } from '../utils/RefinedImageUtils';
 import { isHttpUrl } from '../utils/NetworkPolicy';
+import { t } from '../lang/helpers';
+import type { ImageStateMutationResult } from './ImageStateManager';
 
 export interface ResizeState {
     isResizing: boolean;
@@ -11,6 +11,16 @@ export interface ResizeState {
     isScrolling: boolean;
 }
 
+export interface ImageResizeOperationContext {
+    readonly view: MarkdownView;
+    readonly file: TFile;
+    readonly editor: Editor;
+    readonly document: Document;
+    readonly image: HTMLImageElement;
+    readonly sourceKey: string | null;
+    readonly originalWidthStyle: string;
+    readonly originalHeightStyle: string;
+}
 
 export class ImageResizer extends Component {
 
@@ -27,6 +37,7 @@ export class ImageResizer extends Component {
     currentHandle: string | null = null; // Which handle is being dragged (nw, ne, sw, se)
     initialAspectRatio = 1; // Initialize initialAspectRatio
     rafId: number | null = null;
+    private rafWindow: Window | null = null;
 
     // Scope component to manage DOM/event registrations per active view
     private eventScope: Component | null = null;
@@ -38,13 +49,6 @@ export class ImageResizer extends Component {
         isScrolling: false,// Flag to indicate if resizing is in progress (needed for smoothing scroll-wheel, and prevent mousemove from interfering)
     };
 
-    private resizeBuffer: {
-        [imageKey: string]: {
-            width: number;
-            height: number;
-        };
-    } = {};
-
     private lastValidDimensions: {
         [imageKey: string]: {
             width: number;
@@ -55,25 +59,21 @@ export class ImageResizer extends Component {
     private resizeRetryTimers: {
         [imageKey: string]: number;
     } = {};
-
-    // Debounce markdown link updates from scroll resizing
-    private debouncedSaveDimensions: Debouncer<
-        [image: HTMLImageElement, newWidth: number, newHeight: number],
-        void
-    >;
+    private resizeRetryWindows: {
+        [imageKey: string]: Window;
+    } = {};
 
     private scrollTimeout: number | null = null;
-    private readonly throttleTimers = new Set<number>();
+    private scrollTimeoutWindow: Window | null = null;
     private readonly SCROLL_DEBOUNCE_MS = 300;
 
 
     resizeSensitivity: number;
     scrollwheelModifier: "None" | "Shift" | "Control" | "Alt" | "Meta";
     private lastMouseEvent: MouseEvent | null = null;
+    private readonly operationContexts = new WeakMap<HTMLImageElement, ImageResizeOperationContext>();
 
     EDGE_SIZE = 30; // Increased constant for edge detection threshold
-
-    throttledUpdateImageLink: (image: HTMLImageElement, newWidth: number, newHeight: number, currentHandle: string | null) => void;     // Throttled version of updateImageLink
 
     // Editor width constraint caching
     private cachedEditorMaxWidth: number | null = null;
@@ -83,29 +83,9 @@ export class ImageResizer extends Component {
     constructor(private plugin: ImageConverterPlugin) {
         super();
         this.linkFormatter = new LinkFormatter(this.plugin.app);
-        this.throttledUpdateImageLink = this.throttle(
-            (
-                image: HTMLImageElement,
-                newWidth: number,
-                newHeight: number,
-                currentHandle: string | null
-            ) => {
-                this.updateMarkdownLinkSafely(image, newWidth, newHeight, currentHandle);
-            },
-            100
-
-        );
         // Get settings from plugin
         this.resizeSensitivity = this.plugin.settings.interactiveResize.sensitivity;
         this.scrollwheelModifier = this.plugin.settings.interactiveResize.scrollModifier;
-
-        // Initialize the debounced function
-        this.debouncedSaveDimensions = debounce(
-            this.saveDimensionsToLink,
-            this.SCROLL_DEBOUNCE_MS,
-            true
-        );
-
     }
 
     onload(markdownView?: MarkdownView) {
@@ -159,18 +139,20 @@ export class ImageResizer extends Component {
      * wrong editor.
      */
     private cancelPendingResizeUpdates(): void {
-        this.debouncedSaveDimensions?.cancel?.();
-
         if (this.scrollTimeout) {
-            window.clearTimeout(this.scrollTimeout);
+            const ownerWindow = this.scrollTimeoutWindow
+                ?? this.activeImage?.ownerDocument.defaultView
+                ?? window;
+            ownerWindow.clearTimeout(this.scrollTimeout);
             this.scrollTimeout = null;
+            this.scrollTimeoutWindow = null;
         }
 
-        for (const timerId of Object.values(this.resizeRetryTimers)) {
-            window.clearTimeout(timerId);
+        for (const [imageKey, timerId] of Object.entries(this.resizeRetryTimers)) {
+            (this.resizeRetryWindows[imageKey] ?? window).clearTimeout(timerId);
         }
         this.resizeRetryTimers = {};
-        this.resizeBuffer = {};
+        this.resizeRetryWindows = {};
         this.resizeState.isScrolling = false;
     }
 
@@ -190,14 +172,10 @@ export class ImageResizer extends Component {
     onunload() {
         // Clean up any active resize operation
         if (this.rafId) {
-            window.cancelAnimationFrame(this.rafId);
+            (this.rafWindow ?? window).cancelAnimationFrame(this.rafId);
             this.rafId = null;
+            this.rafWindow = null;
         }
-
-        for (const timerId of this.throttleTimers) {
-            window.clearTimeout(timerId);
-        }
-        this.throttleTimers.clear();
 
         this.detachView(true);
 
@@ -245,7 +223,9 @@ export class ImageResizer extends Component {
     private getCachedEditorMaxWidth(): number {
         if (this.cachedEditorMaxWidth === null) {
             // Use LinkFormatter's getEditorMaxWidth method
-            this.cachedEditorMaxWidth = (this.linkFormatter as any).getEditorMaxWidth();
+            this.cachedEditorMaxWidth = this.linkFormatter.getEditorMaxWidth({
+                view: this.markdownView
+            });
         }
         return this.cachedEditorMaxWidth!; // Non-null assertion since we just set it above
     }
@@ -324,9 +304,7 @@ export class ImageResizer extends Component {
             return;
         }
 
-        const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-        const activeViewContainer = activeView?.containerEl ?? this.markdownView?.containerEl;
-        if (!activeViewContainer?.contains(target)) {
+        if (!this.markdownView?.containerEl.contains(target)) {
             this.cleanupHandles();
             return;
         }
@@ -461,13 +439,15 @@ export class ImageResizer extends Component {
             this.activeImage.style.cursor = 'default';
         }
 
-        const activeFile = this.plugin.app.workspace.getActiveFile();
-        if (activeFile) {
-            const imageKey = this.getImageKey(this.activeImage, activeFile.path);
+        const ownerFile = this.markdownView?.file;
+        if (ownerFile) {
+            const imageKey = this.getImageKey(this.activeImage, ownerFile.path);
             delete this.lastValidDimensions[imageKey];
             if (this.resizeRetryTimers[imageKey]) {
-                window.clearTimeout(this.resizeRetryTimers[imageKey]);
+                (this.resizeRetryWindows[imageKey] ?? window)
+                    .clearTimeout(this.resizeRetryTimers[imageKey]);
                 delete this.resizeRetryTimers[imageKey];
+                delete this.resizeRetryWindows[imageKey];
             }
         } else {
             this.lastValidDimensions = {};
@@ -475,6 +455,49 @@ export class ImageResizer extends Component {
 
         this.activeImage = null;
         this.lastMouseEvent = null;
+    }
+
+    private captureOperationContext(image: HTMLImageElement): ImageResizeOperationContext | null {
+        const view = this.markdownView;
+        const file = view?.file;
+        const editor = this.editor;
+        if (!view || !file || !editor || !view.contentEl.contains(image)) return null;
+
+        const context = Object.freeze({
+            view,
+            file,
+            editor,
+            document: image.ownerDocument,
+            image,
+            sourceKey: image.getAttribute("data-image-assistant-source-key"),
+            originalWidthStyle: image.style.width,
+            originalHeightStyle: image.style.height
+        });
+        this.operationContexts.set(image, context);
+        return context;
+    }
+
+    private getValidOperationContext(image: HTMLImageElement): ImageResizeOperationContext | null {
+        const context = this.operationContexts.get(image);
+        if (!context) return this.captureOperationContext(image);
+        if (context.view !== this.markdownView
+            || context.editor !== this.editor
+            || context.view.file?.path !== context.file.path
+            || context.document !== image.ownerDocument
+            || !context.view.contentEl.contains(image)) return null;
+
+        const currentSourceKey = image.getAttribute("data-image-assistant-source-key");
+        if (context.sourceKey && currentSourceKey !== context.sourceKey) return null;
+        return context;
+    }
+
+    private restoreTemporaryVisualState(image: HTMLImageElement): void {
+        const context = this.operationContexts.get(image);
+        image.removeClass("is-resizing");
+        image.removeClass("resizing");
+        image.style.width = context?.originalWidthStyle ?? "";
+        image.style.height = context?.originalHeightStyle ?? "";
+        this.plugin.imageStateManager?.refreshAllImages?.();
     }
 
     /**
@@ -569,6 +592,12 @@ export class ImageResizer extends Component {
         } else {
             // If no active image after attempted set, cancel resize and exit early
             this.resizeState.isResizing = false;
+            return;
+        }
+        if (!this.captureOperationContext(this.activeImage)) {
+            this.resizeState.isResizing = false;
+            this.resizeState.isDragging = false;
+            this.restoreTemporaryVisualState(this.activeImage);
             return;
         }
 
@@ -714,9 +743,6 @@ export class ImageResizer extends Component {
             this.activeImage.style.width = `${roundedWidth}px`;
             this.activeImage.style.height = `${roundedHeight}px`;
 
-            // Live-update the markdown link during drag (throttled) so users can see size numbers change
-            this.throttledUpdateImageLink(this.activeImage, roundedWidth, roundedHeight, this.currentHandle);
-
             // Update the cursor position during resize (visual feedback only during drag)
             this.updateCursorPositionDuringResize();
         };
@@ -724,11 +750,12 @@ export class ImageResizer extends Component {
 
         // Cancel any existing animation frame request to prevent conflicts
         if (this.rafId) {
-            window.cancelAnimationFrame(this.rafId);
+            (this.rafWindow ?? window).cancelAnimationFrame(this.rafId);
         }
 
         // Request a new animation frame to handle the resize calculations and updates
         const ownerWindow = this.activeImage?.ownerDocument.defaultView ?? window;
+        this.rafWindow = ownerWindow;
         this.rafId = ownerWindow.requestAnimationFrame(runResizeCalc);
     };
 
@@ -771,8 +798,14 @@ export class ImageResizer extends Component {
         const heightStyle = parseInt(this.activeImage.style.height || '0', 10);
         const finalWidth = Number.isFinite(widthStyle) && widthStyle > 0 ? widthStyle : Math.round(this.initialWidth);
         const finalHeight = Number.isFinite(heightStyle) && heightStyle > 0 ? heightStyle : Math.round(this.initialHeight);
-        const activeFile = this.plugin.app.workspace.getActiveFile();
-        const notePath = activeFile?.path ?? "";
+        const context = this.getValidOperationContext(this.activeImage);
+        if (!context) {
+            this.restoreTemporaryVisualState(this.activeImage);
+            this.resizeState.isDragging = false;
+            this.resizeState.isResizing = false;
+            return;
+        }
+        const notePath = context.file.path;
         const resolvedDimensions = this.resolveValidDimensions(
             this.activeImage,
             notePath,
@@ -787,7 +820,8 @@ export class ImageResizer extends Component {
                 this.activeImage,
                 resolvedDimensions.width,
                 resolvedDimensions.height,
-                completedHandle
+                completedHandle,
+                context
             );
         } else {
             this.scheduleDimensionRetry(
@@ -795,7 +829,8 @@ export class ImageResizer extends Component {
                 notePath,
                 completedHandle,
                 this.initialWidth,
-                this.initialHeight
+                this.initialHeight,
+                context
             );
         }
 
@@ -845,16 +880,31 @@ export class ImageResizer extends Component {
         // Skip Excalidraw images
         if (this.plugin.supportedImageFormats.isExcalidrawImage(image)) return;
 
+        const continuingBurst = this.resizeState.isScrolling
+            && this.activeImage === image;
+        if (this.resizeState.isScrolling && !continuingBurst) return;
+
         // Prevent default scroll behavior
         event.preventDefault();
         event.stopPropagation();
 
-        // Set up scrolling state
+        const context = continuingBurst
+            ? this.getValidOperationContext(image)
+            : this.captureOperationContext(image);
+        if (!context) {
+            this.resizeState.isScrolling = false;
+            this.activeImage = null;
+            return;
+        }
         this.resizeState.isScrolling = true;
         this.activeImage = image;
 
         const dimensions = this.readPositiveDimensions(image);
-        if (!dimensions) return;
+        if (!dimensions) {
+            this.resizeState.isScrolling = false;
+            this.activeImage = null;
+            return;
+        }
 
         this.initialWidth = dimensions.width;
         this.initialHeight = dimensions.height;
@@ -872,13 +922,7 @@ export class ImageResizer extends Component {
             newHeight = newWidth / aspectRatio; // Always maintain aspect ratio for scroll resize
         }
 
-        // Get active file and image name
-        const activeFile = this.plugin.app.workspace.getActiveFile();
-        if (!activeFile) {
-            console.warn("Could not get active file for image:", image);
-            return;
-        }
-        const notePath = activeFile.path;
+        const notePath = context.file.path;
         const resolvedDimensions = this.resolveValidDimensions(
             image,
             notePath,
@@ -888,7 +932,16 @@ export class ImageResizer extends Component {
             this.initialHeight
         );
         if (!resolvedDimensions.isValid) {
-            this.scheduleDimensionRetry(image, notePath, null, this.initialWidth, this.initialHeight);
+            this.scheduleDimensionRetry(
+                image,
+                notePath,
+                null,
+                this.initialWidth,
+                this.initialHeight,
+                context
+            );
+            this.resizeState.isScrolling = false;
+            this.activeImage = null;
             return;
         }
 
@@ -905,45 +958,24 @@ export class ImageResizer extends Component {
         }
         image.style.height = `${newHeight}px`;
 
-        const imageName = this.getImageName(image);
-        if (!imageName) return;
-
-        // Check if alignment is enabled
-        const isAlignmentEnabled = this.plugin.settings.alignment.enabled;
-
-        const imageKey = this.getImageKey(image, notePath);
-
-        // Check if the image has a positional class
-        const hasPositionalClass = isAlignmentEnabled
-            && (this.plugin.imageAlignment?.getCurrentImageAlignment(image).align ?? 'none') !== 'none';
-
-        // Buffer the dimensions (only if needed for later use, e.g., debouncing and alignment is enabled)
-        if (isAlignmentEnabled) {
-            this.resizeBuffer[imageKey] = {
-                width: newWidth,
-                height: newHeight,
-            };
-        }
-
-        // Use throttled version if alignment is disabled OR if the image doesn't have a positional class
-        if (!isAlignmentEnabled || !hasPositionalClass) {
-            // Update markdown link immediately (but still throttled)
-            this.throttledUpdateImageLink(image, newWidth, newHeight, null);
-        }
-
-        // Debounced update to the markdown link (only if alignment is enabled)
-        if (isAlignmentEnabled) {
-            this.debouncedSaveDimensions(image, newWidth, newHeight);
-        }
-
-        // Reset scroll state after delay
+        // Commit the final dimensions once after the wheel burst settles.
         if (this.scrollTimeout) {
-            window.clearTimeout(this.scrollTimeout);
+            (this.scrollTimeoutWindow ?? image.ownerDocument.defaultView ?? window)
+                .clearTimeout(this.scrollTimeout);
         }
 
-        this.scrollTimeout = window.setTimeout(() => {
-            this.resizeState.isScrolling = false;
-            this.activeImage = null;
+        const ownerWindow = image.ownerDocument.defaultView ?? window;
+        this.scrollTimeoutWindow = ownerWindow;
+        this.scrollTimeout = ownerWindow.setTimeout(() => {
+            this.scrollTimeout = null;
+            this.scrollTimeoutWindow = null;
+            void this.saveDimensionsToLink(image, newWidth, newHeight, context)
+                .finally(() => {
+                    this.resizeState.isScrolling = false;
+                    if (this.activeImage === image) {
+                        this.activeImage = null;
+                    }
+                });
         }, this.SCROLL_DEBOUNCE_MS);
     };
 
@@ -1148,13 +1180,21 @@ export class ImageResizer extends Component {
         return { width: newWidth, height: newHeight, isValid: false };
     }
 
-    private scheduleRetry(imageKey: string, callback: () => void, delayMs = 80): void {
+    private scheduleRetry(
+        imageKey: string,
+        ownerWindow: Window,
+        callback: () => void,
+        delayMs = 80
+    ): void {
         if (this.resizeRetryTimers[imageKey]) {
-            window.clearTimeout(this.resizeRetryTimers[imageKey]);
+            (this.resizeRetryWindows[imageKey] ?? ownerWindow)
+                .clearTimeout(this.resizeRetryTimers[imageKey]);
         }
 
-        this.resizeRetryTimers[imageKey] = window.setTimeout(() => {
+        this.resizeRetryWindows[imageKey] = ownerWindow;
+        this.resizeRetryTimers[imageKey] = ownerWindow.setTimeout(() => {
             delete this.resizeRetryTimers[imageKey];
+            delete this.resizeRetryWindows[imageKey];
             callback();
         }, delayMs);
     }
@@ -1164,11 +1204,22 @@ export class ImageResizer extends Component {
         notePath: string,
         currentHandle: string | null,
         fallbackWidth?: number,
-        fallbackHeight?: number
+        fallbackHeight?: number,
+        expectedContext?: ImageResizeOperationContext
     ): void {
         const imageKey = this.getImageKey(image, notePath);
 
-        this.scheduleRetry(imageKey, () => {
+        this.scheduleRetry(
+            imageKey,
+            image.ownerDocument.defaultView ?? window,
+            () => {
+            const context = this.getValidOperationContext(image);
+            if (!context
+                || (expectedContext && context !== expectedContext)
+                || context.file.path !== notePath) {
+                this.restoreTemporaryVisualState(image);
+                return;
+            }
             const dimensions = this.readPositiveDimensions(image);
             const resolvedDimensions = this.resolveValidDimensions(
                 image,
@@ -1185,6 +1236,7 @@ export class ImageResizer extends Component {
                     width: dimensions?.width,
                     height: dimensions?.height,
                 });
+                this.restoreTemporaryVisualState(image);
                 return;
             }
 
@@ -1192,36 +1244,45 @@ export class ImageResizer extends Component {
                 image,
                 resolvedDimensions.width,
                 resolvedDimensions.height,
-                currentHandle
+                currentHandle,
+                context
             );
-        });
+            }
+        );
     }
 
     private updateMarkdownLinkSafely(
         image: HTMLImageElement,
         newWidth: number,
         newHeight: number,
-        currentHandle: string | null
+        currentHandle: string | null,
+        expectedContext?: ImageResizeOperationContext
     ): void {
-        this.updateMarkdownLink(image, newWidth, newHeight, currentHandle)
+        this.updateMarkdownLink(image, newWidth, newHeight, currentHandle, expectedContext)
+            .then((result) => {
+                if (result.complete) return;
+                this.restoreTemporaryVisualState(image);
+                const message = result.status === 'uncertain'
+                    ? t("MSG_RESIZE_SAVE_UNCERTAIN")
+                    : t("MSG_RESIZE_SAVE_FAILED");
+                new Notice(result.error ? `${message}: ${result.error}` : message);
+                this.plugin.imageStateManager?.refreshAllImages?.();
+            })
             .catch((error) => {
                 console.error("[ImageResizer] Failed to update image dimensions:", error);
+                this.restoreTemporaryVisualState(image);
+                new Notice(t("MSG_RESIZE_SAVE_FAILED"));
+                this.plugin.imageStateManager?.refreshAllImages?.();
             });
     }
 
     /**
      * Updates Markdown links within the current editor that match the resized image.
      *
-     * This function identifies lines containing Markdown or Wikilinks that point to the
-     * provided image, and updates their size parameters based on the new width, height,
-     * and the handle used for resizing. 
-     * 
-     * It leverages Obsidian's API for efficient line processing. Specifically it utilizes
-     * `editor.transaction()` to ensure that all link updates are performed **atomically**.
-     * This means that either all changes are successfully applied, or none are, preventing
-     * the document from being left in a partially updated state if an error occurs.
-     * Transactions also improve performance by allowing the editor to optimize the
-     * application of multiple changes and are better integrated with Obsidian's undo/redo system.
+     * This function identifies the exact Markdown or Wiki link for the resized image and
+     * delegates one final update to ImageStateManager. The mapped range transaction verifies
+     * the owner view, source text, and file before saving, and conditionally rolls back if
+     * persistence fails without a concurrent user edit.
      *
      * @param image - The HTMLImageElement that was resized.
      * @param newWidth - The new width of the image in pixels.
@@ -1230,131 +1291,46 @@ export class ImageResizer extends Component {
      *                        (e.g., 'n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se'),
      *                        or null if the resize was not initiated from a handle.
      */
-    private async updateMarkdownLink(image: HTMLImageElement, newWidth: number, newHeight: number, currentHandle: string | null) {
+    private async updateMarkdownLink(
+        image: HTMLImageElement,
+        newWidth: number,
+        newHeight: number,
+        currentHandle: string | null,
+        expectedContext?: ImageResizeOperationContext
+    ): Promise<ImageStateMutationResult> {
+        const context = this.getValidOperationContext(image);
+        if (!context || (expectedContext && context !== expectedContext)) {
+            return {
+                status: 'stale',
+                complete: false,
+                error: t("MSG_RESIZE_CONTEXT_STALE")
+            };
+        }
         if (this.plugin.imageStateManager) {
             const roundedWidth = Math.round(newWidth);
             const roundedHeight = Math.round(newHeight);
             if (!this.plugin.settings.interactiveResize.aspectRatioLocked) {
-                await this.plugin.imageStateManager.updateState(image, {
+                return this.plugin.imageStateManager.updateState(image, {
                     width: roundedWidth,
                     height: roundedHeight
-                });
+                }, context);
             } else if (currentHandle === 'n' || currentHandle === 's') {
-                await this.plugin.imageStateManager.updateState(image, {
+                return this.plugin.imageStateManager.updateState(image, {
                     width: null,
                     height: roundedHeight
-                });
+                }, context);
             } else {
-                await this.plugin.imageStateManager.updateState(image, {
+                return this.plugin.imageStateManager.updateState(image, {
                     width: roundedWidth,
                     height: null
-                });
-            }
-            return;
-        }
-
-
-        // Check if we're in reading mode
-        // Check if we're in reading mode
-        if (!this.markdownView) return;
-        const state = this.markdownView.getState();
-        const isReadingMode = state.mode === "preview";
-
-        if (isReadingMode) {
-            // In reading mode, only update the visual size without modifying the markdown
-            image.style.width = `${Math.round(newWidth)}px`;
-            image.style.height = `${Math.round(newHeight)}px`;
-            return;
-        }
-
-        const imageName = this.getImageName(image);
-        if (!imageName) {
-            console.warn("Could not get imageName for image:", image);
-            return;
-        }
-
-        // Handle external/cloud images based on settings
-        if (this.isExternalLink(imageName)) {
-            // Check cloud upload settings
-            const cloudSettings = this.plugin.settings.pasteHandling.cloud;
-
-            // Only update markdown if user chose 'actual' size source
-            if (cloudSettings.imageSizeSource !== 'actual') {
-                // Only update visual size
-                image.style.width = `${Math.round(newWidth)}px`;
-                image.style.height = `${Math.round(newHeight)}px`;
-                return;
+                }, context);
             }
         }
-
-        const { editor } = this;
-        if (!editor) return;
-        const activeFile = this.plugin.app.workspace.getActiveFile();
-        if (!activeFile) {
-            console.warn("Could not get active file for image:", image);
-            return;
-        }
-
-        const linkMatch = new RefinedImageUtils(this.plugin.app).getImageLinkMatchFromEditor(image, editor);
-        if (!linkMatch || this.isFrontmatter(linkMatch.line, editor)) {
-            return;
-        }
-
-        const parsed = pipeSyntaxParser.parsePipeSyntax(linkMatch.linkText);
-        if (!parsed) {
-            return;
-        }
-
-        const updatedData = { ...parsed };
-        const newSizeString = this.buildResizeSizeString(imageName, newWidth, newHeight, currentHandle);
-        if (newSizeString.startsWith('x')) {
-            const height = parseInt(newSizeString.substring(1), 10);
-            updatedData.size = { height, format: 'xH' };
-        } else {
-            const width = parseInt(newSizeString, 10);
-            updatedData.size = { width, format: 'W' };
-        }
-
-        const updatedContent = pipeSyntaxParser.buildPipeSyntax(updatedData);
-        if (updatedContent !== linkMatch.linkText) {
-            editor.transaction({
-                changes: [{
-                    from: { line: linkMatch.line, ch: linkMatch.start },
-                    to: { line: linkMatch.line, ch: linkMatch.end },
-                    text: updatedContent,
-                }],
-            });
-        }
-    }
-
-    private buildResizeSizeString(
-        imageName: string,
-        newWidth: number,
-        newHeight: number,
-        currentHandle: string | null
-    ): string {
-        const roundedWidth = Math.round(newWidth);
-        const roundedHeight = Math.round(newHeight);
-
-        if (this.isExternalLink(imageName)) {
-            return `${roundedWidth}`;
-        }
-
-        if (!currentHandle) {
-            return `${roundedWidth}`;
-        }
-
-        if (["nw", "ne", "sw", "se", "e", "w"].includes(currentHandle)) {
-            return `${roundedWidth}`;
-        }
-
-        if (["n", "s"].includes(currentHandle)) {
-            return this.plugin.settings.interactiveResize.aspectRatioLocked
-                ? `${roundedWidth}`
-                : `x${roundedHeight}`;
-        }
-
-        return `${roundedWidth}`;
+        return {
+            status: 'failed',
+            complete: false,
+            error: t("MSG_RESIZE_MANAGER_UNAVAILABLE")
+        };
     }
 
     /**
@@ -1447,46 +1423,6 @@ export class ImageResizer extends Component {
     }
 
     /**
-     * Checks if a given line number in the editor is within the frontmatter.
-     *
-     * @param lineNumber - The line number to check.
-     * @param editor - The editor instance.
-     * @returns True if the line is within the frontmatter, false otherwise.
-     */
-    private isFrontmatter(lineNumber: number, editor: Editor): boolean {
-        let inFrontmatter = false;
-        let frontmatterStart = false;
-
-        for (let i = 0; i <= lineNumber; i++) {
-            const line = editor.getLine(i);
-
-            if (i === 0 && line === "---") {
-                inFrontmatter = true;
-                frontmatterStart = true;
-                continue;
-            }
-
-            if (inFrontmatter && line === "---") {
-                inFrontmatter = false;
-                continue;
-            }
-
-            if (i === lineNumber && inFrontmatter && frontmatterStart) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Finds all Markdown and Wikilink image matches in a given content string.
-     *
-     * @param content - The content string to search.
-     * @returns An array of match objects with details about each image link.
-     */
-    // findAllMatches removed - replaced by pipeSyntaxParser.extractAllLinks
-
-    /**
      * Gets the image name from an HTMLImageElement.
      *
      * @param img - The HTMLImageElement to extract the name from.
@@ -1572,11 +1508,20 @@ export class ImageResizer extends Component {
  * @param newWidth The new width of the image.
  * @param newHeight The new height of the image.
  */
-    private saveDimensionsToLink = async (image: HTMLImageElement, newWidth: number, newHeight: number) => {
+    private saveDimensionsToLink = async (
+        image: HTMLImageElement,
+        newWidth: number,
+        newHeight: number,
+        expectedContext: ImageResizeOperationContext
+    ): Promise<void> => {
         const imageName = this.getImageName(image);
         if (!imageName) return;
-        const activeFile = this.plugin.app.workspace.getActiveFile();
-        const notePath = activeFile?.path ?? "";
+        const context = this.getValidOperationContext(image);
+        if (!context || context !== expectedContext) {
+            this.restoreTemporaryVisualState(image);
+            return;
+        }
+        const notePath = context.file.path;
         const resolvedDimensions = this.resolveValidDimensions(
             image,
             notePath,
@@ -1585,44 +1530,24 @@ export class ImageResizer extends Component {
         );
 
         if (!resolvedDimensions.isValid) {
-            this.scheduleDimensionRetry(image, notePath, null);
+            this.scheduleDimensionRetry(image, notePath, null, undefined, undefined, context);
             return;
         }
 
-        this.updateMarkdownLinkSafely(
+        await this.updateMarkdownLink(
             image,
             resolvedDimensions.width,
             resolvedDimensions.height,
-            null
-        );
-
-        if (this.resizeBuffer[imageName]) {
-            delete this.resizeBuffer[imageName];
-        }
+            null,
+            context
+        ).then((result) => {
+            if (result.complete) return;
+            this.restoreTemporaryVisualState(image);
+            const message = result.status === 'uncertain'
+                ? t("MSG_RESIZE_SAVE_UNCERTAIN")
+                : t("MSG_RESIZE_SAVE_FAILED");
+            new Notice(result.error ? `${message}: ${result.error}` : message);
+            this.plugin.imageStateManager?.refreshAllImages?.();
+        });
     };
-
-    /**
-     * Throttles a function to be called at most once within a specified time limit.
-     *
-     * @param func - The function to throttle.
-     * @param limit - The time limit in milliseconds.
-     * @returns A throttled version of the function.
-     */
-    private throttle<T extends (...args: any[]) => void>(
-        func: T,
-        limit: number
-    ): (...args: Parameters<T>) => void {
-        let inThrottle: boolean;
-        return (...args: Parameters<T>) => {
-            if (!inThrottle) {
-                func(...args);
-                inThrottle = true;
-                const timerId = window.setTimeout(() => {
-                    this.throttleTimers.delete(timerId);
-                    inThrottle = false;
-                }, limit);
-                this.throttleTimers.add(timerId);
-            }
-        };
-    }
 }

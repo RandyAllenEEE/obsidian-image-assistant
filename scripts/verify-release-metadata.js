@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 
 const root = process.cwd();
+const expectedPluginId = "obsidian-image-assistant";
 const expectedVersion = process.argv
     .slice(2)
     .find(argument => argument !== "--build")
@@ -25,6 +26,9 @@ const packageLock = readJson("package-lock.json");
 const versions = readJson("versions.json");
 const version = manifest.version;
 
+if (manifest.id !== expectedPluginId) {
+    fail(`manifest id must remain ${expectedPluginId}, got ${manifest.id}`);
+}
 if (!/^\d+\.\d+\.\d+$/.test(version)) {
     fail(`manifest version is not valid SemVer: ${version}`);
 }
@@ -61,6 +65,9 @@ if (verifyBuild) {
     }
 
     const buildManifest = readJson("build/manifest.json");
+    if (buildManifest.id !== expectedPluginId) {
+        fail(`build/manifest.json id must be ${expectedPluginId}`);
+    }
     if (buildManifest.version !== version) {
         fail(`build/manifest.json version ${buildManifest.version} does not match ${version}`);
     }

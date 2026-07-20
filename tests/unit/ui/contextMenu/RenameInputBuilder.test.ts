@@ -1,102 +1,113 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { Platform } from "obsidian";
+import { describe, expect, it, vi } from "vitest";
+import { Modal } from "obsidian";
 import { RenameInputBuilder } from "../../../../src/ui/contextMenu/inputs/RenameInputBuilder";
 import { fakeTFile } from "../../../factories/obsidian";
 
-function makeMenu() {
-    const dom = document.createElement("div");
+function makeContext(kind: "local" | "url") {
+    const image = document.createElement("img");
+    const localFile = kind === "local"
+        ? fakeTFile({
+            path: "assets/photo.png",
+            name: "photo.png",
+            extension: "png"
+        })
+        : null;
     return {
-        dom,
-        addItem(callback: (item: any) => void) {
-            callback({ dom, setTitle: vi.fn() });
-            return this;
-        }
+        image,
+        ownerDocument: document,
+        ownerWindow: window,
+        renderedSrc: kind === "url"
+            ? "https://example.com/photo.png"
+            : "app://local/assets/photo.png",
+        sourceKind: kind,
+        resolution: "resolved",
+        owner: null,
+        viewContext: {},
+        descriptor: null,
+        localFile,
+        url: kind === "url" ? "https://example.com/photo.png" : null,
+        dataReference: null
     } as any;
 }
 
-afterEach(() => {
-    Platform.isMobile = false;
-});
-
 describe("RenameInputBuilder", () => {
-    it("builds populated local image controls and tracks alignment selection", () => {
-        const imageFile = fakeTFile({ path: "assets/photo.png", name: "photo.png", extension: "png" });
+    function makeBuilder() {
         const app = {
-            vault: {
-                getConfig: vi.fn(() => false),
-                getAbstractFileByPath: vi.fn(() => imageFile)
-            }
+            vault: {}
         } as any;
         const plugin = {
             imageStateManager: {
                 getImageState: vi.fn(() => ({
                     caption: "A caption",
                     width: 640,
-                    height: 480,
+                    height: null,
                     align: "center"
                 }))
             }
         } as any;
-        const folderManagement = { getImagePath: vi.fn(() => "assets/photo.png") } as any;
-        const builder = new RenameInputBuilder(app, plugin, folderManagement);
-        const image = document.createElement("img");
-        const menu = makeMenu();
+        return new RenameInputBuilder(app, plugin);
+    }
 
-        const inputs = builder.buildInputs(menu, image, fakeTFile({ path: "notes/note.md" }), false);
-
-        expect(inputs).not.toBeNull();
-        expect(inputs?.nameInput.value).toBe("photo");
-        expect(inputs?.pathInput.value.replace(/\\/g, "/")).toBe("assets");
-        expect(inputs?.captionInput.value).toBe("A caption");
-        expect(inputs?.widthInput.value).toBe("640");
-        expect(inputs?.heightInput.value).toBe("480");
-        expect(inputs?.getAlignment()).toBe("center");
-        expect(menu.dom.querySelectorAll(".image-converter-alignment-button")).toHaveLength(5);
-
-        const left = menu.dom.querySelector(".image-converter-alignment-button") as HTMLElement;
-        left.click();
-        expect(inputs?.getAlignment()).toBe("left");
-        left.click();
-        expect(inputs?.getAlignment()).toBe("none");
-
-        const event = new MouseEvent("click", { bubbles: true });
-        const stop = vi.spyOn(event, "stopPropagation");
-        inputs?.captionInput.dispatchEvent(event);
-        expect(stop).toHaveBeenCalled();
-        builder.onunload();
+    it("builds the typed local properties model without private menu DOM", () => {
+        const builder = makeBuilder();
+        expect(builder.createModel(makeContext("local"))).toMatchObject({
+            fileName: "photo",
+            directory: "assets",
+            caption: "A caption",
+            width: 640,
+            height: null,
+            alignment: "center"
+        });
+        builder.unload();
     });
 
-    it("keeps caption and size controls for network images while hiding file controls", () => {
-        const builder = new RenameInputBuilder(
-            { vault: { getConfig: () => false, getAbstractFileByPath: () => null } } as any,
-            { imageStateManager: { getImageState: () => undefined } } as any,
-            { getImagePath: () => null } as any
-        );
-        const menu = makeMenu();
-        const result = builder.buildInputs(menu, document.createElement("img"), fakeTFile(), true);
+    it("uses the same modal form and hides local file controls for URL properties", () => {
+        const builder = makeBuilder();
+        const open = vi.spyOn(Modal.prototype, "open")
+            .mockImplementation(function (this: Modal) {
+                this.onOpen();
+            });
 
-        expect(result?.isImageResolvable).toBe(false);
-        expect(result?.nameInput.disabled).toBe(true);
-        expect(menu.dom.querySelector(".image-converter-contextmenu-name-input")).toBeNull();
-        expect(menu.dom.querySelector(".image-converter-contextmenu-caption-input")).toBeTruthy();
+        builder.openModal(makeContext("url"), vi.fn());
+        const modal = open.mock.instances[0] as unknown as Modal;
+        expect(modal.contentEl.querySelector(
+            ".image-converter-contextmenu-name-input"
+        )).toBeNull();
+        expect(modal.contentEl.querySelector(
+            ".image-converter-contextmenu-path-input"
+        )).toBeNull();
+        expect(modal.contentEl.querySelector(
+            ".image-converter-contextmenu-caption-input"
+        )).toBeTruthy();
     });
 
-    it("skips custom inputs for native menus and mobile", () => {
-        const image = document.createElement("img");
-        const activeFile = fakeTFile();
-        const nativeBuilder = new RenameInputBuilder(
-            { vault: { getConfig: () => true } } as any,
-            {} as any,
-            {} as any
-        );
-        expect(nativeBuilder.buildInputs(makeMenu(), image, activeFile)).toBeNull();
+    it("uses the shared form in modal fallback and prevents duplicate submits", async () => {
+        const builder = makeBuilder();
+        let finish!: (result: any) => void;
+        const apply = vi.fn(() => new Promise<any>(resolve => {
+            finish = resolve;
+        }));
+        const open = vi.spyOn(Modal.prototype, "open")
+            .mockImplementation(function (this: Modal) {
+                this.onOpen();
+            });
+        const close = vi.spyOn(Modal.prototype, "close");
 
-        Platform.isMobile = true;
-        const mobileBuilder = new RenameInputBuilder(
-            { vault: { getConfig: () => false } } as any,
-            {} as any,
-            {} as any
-        );
-        expect(mobileBuilder.buildInputs(makeMenu(), image, activeFile)).toBeNull();
+        builder.openModal(makeContext("local"), apply);
+        const modal = open.mock.instances[0] as unknown as Modal;
+        const confirm = modal.contentEl.querySelector<HTMLButtonElement>(
+            ".image-converter-contextmenu-confirm"
+        )!;
+        confirm.click();
+        confirm.click();
+
+        expect(apply).toHaveBeenCalledOnce();
+        expect(confirm.disabled).toBe(true);
+        finish({
+            complete: true,
+            linkUpdated: true,
+            fileMoved: false
+        });
+        await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
     });
 });

@@ -98,8 +98,6 @@ describe('LinkFormatter.formatLink', () => {
       resizeDimension: 'width',
       width: 50,
       resizeScaleMode: 'auto',
-      respectEditorMaxWidth: false,
-      maintainAspectRatio: true,
       resizeUnits: 'pixels',
     };
     setMockImageSize(100, 100);
@@ -114,8 +112,6 @@ describe('LinkFormatter.formatLink', () => {
       resizeDimension: 'width',
       width: 40,
       resizeScaleMode: 'auto',
-      respectEditorMaxWidth: false,
-      maintainAspectRatio: true,
       resizeUnits: 'pixels',
     };
     setMockImageSize(100, 100);
@@ -143,8 +139,6 @@ describe('LinkFormatter.formatLink', () => {
       width: 40,
       height: 30,
       resizeScaleMode: 'auto',
-      respectEditorMaxWidth: false,
-      maintainAspectRatio: false,
       resizeUnits: 'pixels',
     };
 
@@ -159,13 +153,40 @@ describe('LinkFormatter.formatLink', () => {
     const preset: NonDestructiveResizePreset = {
       resizeDimension: 'original-height',
       resizeScaleMode: 'auto',
-      respectEditorMaxWidth: false,
-      maintainAspectRatio: true,
       resizeUnits: 'pixels',
     };
 
     const out = await formatter.formatLink(files[0].path, 'markdown', 'absolute', null, preset);
 
     expect(out).toBe('![|x80](/img/pic.png)');
+  });
+
+  it('measures the explicitly supplied owner view without consulting the active leaf', () => {
+    const { app, formatter } = makeFormatterWithFiles(['img/pic.png']);
+    const contentDOM = document.createElement('div');
+    Object.defineProperty(contentDOM, 'clientWidth', { value: 520 });
+    const editor = {
+      getValue: vi.fn(() => ''),
+      cm: {
+        contentDOM,
+        dispatch: vi.fn(),
+        state: {
+          doc: {
+            toString: () => ''
+          }
+        }
+      }
+    };
+    const ownerView = {
+      editor,
+      contentEl: document.createElement('div')
+    } as any;
+    (app.workspace as any).getMostRecentLeaf = vi.fn(() => {
+      throw new Error('active leaf must not be read');
+    });
+
+    expect(formatter.getEditorMaxWidth({ view: ownerView })).toBe(520);
+    expect((app.workspace as any).getMostRecentLeaf).not.toHaveBeenCalled();
+    expect(formatter.getEditorMaxWidth()).toBe(800);
   });
 });

@@ -47,7 +47,7 @@ export interface CanvasUrlReferenceScanResult {
     uncertainFiles: string[];
 }
 
-interface CanvasNode {
+export interface CanvasReferenceNode {
     type?: unknown;
     file?: unknown;
     url?: unknown;
@@ -55,7 +55,7 @@ interface CanvasNode {
 }
 
 interface CanvasDocument {
-    nodes: CanvasNode[];
+    nodes: CanvasReferenceNode[];
     [key: string]: unknown;
 }
 
@@ -75,7 +75,9 @@ export interface CanvasReferenceScanOptions extends MarkdownSourceScanOptions { 
 type CanvasReferenceMutation =
     | { source: "file"; oldFile: TFile; target: "file"; newFile: TFile }
     | { source: "file"; oldFile: TFile; target: "url"; newUrl: string }
-    | { source: "url"; oldUrl: string; target: "file"; newFile: TFile };
+    | { source: "url"; oldUrl: string; target: "file"; newFile: TFile }
+    | { source: "file"; oldFile: TFile; target: "remove" }
+    | { source: "url"; oldUrl: string; target: "remove" };
 
 export async function getCanvasFileReferences(
     app: App,
@@ -109,7 +111,7 @@ export async function getCanvasFileReferenceIndexDetailed(
     for (const canvasFile of canvasFiles) {
         try {
             const content = await app.vault.read(canvasFile);
-            const { nodes } = parseCanvasDocument(content);
+            const { nodes } = parseCanvasReferenceDocument(content);
 
             for (const node of nodes) {
                 if (node.type === "file" && typeof node.file === "string") {
@@ -179,7 +181,7 @@ export async function getCanvasUrlReferencesDetailed(
     for (const canvasFile of canvasFiles) {
         try {
             const content = await app.vault.read(canvasFile);
-            const { nodes } = parseCanvasDocument(content);
+            const { nodes } = parseCanvasReferenceDocument(content);
             for (const node of nodes) {
                 if (typeof node.url === "string" && isSameHttpUrl(node.url, targetUrl)) {
                     references.push({
@@ -258,6 +260,30 @@ export async function replaceCanvasUrlReferencesWithFile(
     }, options);
 }
 
+export async function removeCanvasFileReferences(
+    app: App,
+    oldFile: TFile,
+    options: CanvasReferenceMutationOptions = {}
+): Promise<CanvasReferenceUpdateResult> {
+    return replaceCanvasReferences(app, {
+        source: "file",
+        oldFile,
+        target: "remove"
+    }, options);
+}
+
+export async function removeCanvasUrlReferences(
+    app: App,
+    oldUrl: string,
+    options: CanvasReferenceMutationOptions = {}
+): Promise<CanvasReferenceUpdateResult> {
+    return replaceCanvasReferences(app, {
+        source: "url",
+        oldUrl,
+        target: "remove"
+    }, options);
+}
+
 async function replaceCanvasReferences(
     app: App,
     mutation: CanvasReferenceMutation,
@@ -278,7 +304,9 @@ async function replaceCanvasReferences(
         : new Set<string>();
     const replacementPath = mutation.target === "file"
         ? normalizePath(mutation.newFile.path)
-        : mutation.newUrl;
+        : mutation.target === "url"
+            ? mutation.newUrl
+            : null;
     const canvasFiles = app.vault.getFiles().filter(candidate =>
         candidate.extension === "canvas"
         && (!options.allowedCanvasPaths || options.allowedCanvasPaths.has(candidate.path))
@@ -294,10 +322,11 @@ async function replaceCanvasReferences(
                 matchedCount = 0;
                 replacedCount = 0;
                 hasUnresolvedCandidate = false;
-                const canvasData = parseCanvasDocument(content);
+                const canvasData = parseCanvasReferenceDocument(content);
                 const { nodes } = canvasData;
                 let fileChanged = false;
 
+                const removedNodes = new Set<CanvasReferenceNode>();
                 for (const node of nodes) {
                     if (mutation.source === "file"
                         && node.type === "file"
@@ -313,7 +342,11 @@ async function replaceCanvasReferences(
                         hasUnresolvedCandidate ||= resolution.uncertain;
                         if (resolution.targetPath) {
                             matchedCount++;
-                            if (replaceNativeCanvasNode(node, mutation)) {
+                            if (mutation.target === "remove") {
+                                removedNodes.add(node);
+                                replacedCount++;
+                                fileChanged = true;
+                            } else if (replaceNativeCanvasNode(node, mutation)) {
                                 replacedCount++;
                                 fileChanged = true;
                             }
@@ -322,12 +355,17 @@ async function replaceCanvasReferences(
                         && typeof node.url === "string"
                         && isSameHttpUrl(node.url, mutation.oldUrl)) {
                         matchedCount++;
-                        if (replaceNativeCanvasNode(node, mutation)) {
+                        if (mutation.target === "remove") {
+                            removedNodes.add(node);
+                            replacedCount++;
+                            fileChanged = true;
+                        } else if (replaceNativeCanvasNode(node, mutation)) {
                             replacedCount++;
                             fileChanged = true;
                         }
                     }
 
+                    if (removedNodes.has(node)) continue;
                     if (typeof node.text !== "string") continue;
                     const parsedLinks = getContextualReferenceLinks(node.text, options);
                     const links = parsedLinks
@@ -352,9 +390,11 @@ async function replaceCanvasReferences(
                         }
 
                         matchedCount++;
-                        const replacement = mutation.target === "file" && options.formatLocalTextReference
-                            ? options.formatLocalTextReference(link.source, mutation.newFile, canvasFile)
-                            : ImageLinkPathReplacer.replacePath(link.source, replacementPath);
+                        const replacement = mutation.target === "remove"
+                            ? ""
+                            : mutation.target === "file" && options.formatLocalTextReference
+                                ? options.formatLocalTextReference(link.source, mutation.newFile, canvasFile)
+                                : ImageLinkPathReplacer.replacePath(link.source, replacementPath!);
                         if (replacement === link.source) continue;
                         updatedText = updatedText.slice(0, link.index)
                             + replacement
@@ -373,6 +413,9 @@ async function replaceCanvasReferences(
                     }
                 }
 
+                if (removedNodes.size > 0) {
+                    canvasData.nodes = nodes.filter(node => !removedNodes.has(node));
+                }
                 return fileChanged ? JSON.stringify(canvasData, null, 2) : content;
             });
 
@@ -421,7 +464,10 @@ async function replaceCanvasReferences(
     };
 }
 
-function replaceNativeCanvasNode(node: CanvasNode, mutation: CanvasReferenceMutation): boolean {
+function replaceNativeCanvasNode(
+    node: CanvasReferenceNode,
+    mutation: Exclude<CanvasReferenceMutation, { target: "remove" }>
+): boolean {
     const previousType = node.type;
     const previousFile = node.file;
     const previousUrl = node.url;
@@ -464,7 +510,7 @@ export function findLineNumber(content: string, searchText: string): number {
     return line;
 }
 
-function parseCanvasDocument(content: string): CanvasDocument {
+export function parseCanvasReferenceDocument(content: string): CanvasDocument {
     const canvasData = JSON.parse(content) as Partial<CanvasDocument> | null;
     if (!canvasData || typeof canvasData !== "object" || !Array.isArray(canvasData.nodes)) {
         throw new Error("Canvas document does not contain a valid nodes array");

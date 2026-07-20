@@ -1,0 +1,136 @@
+import { Menu } from "obsidian";
+import { describe, expect, it, vi } from "vitest";
+import { FileContextMenu } from "../../../../../src/ui/contextMenu/file/FileContextMenu";
+import { MenuSessionRegistry } from "../../../../../src/ui/contextMenu/shared/MenuSessionRegistry";
+import {
+    fakeApp,
+    fakeTFile,
+    fakeVault
+} from "../../../../factories/obsidian";
+
+interface TestMenuItem {
+    getIcon(): string;
+    getItems(): TestMenuItem[];
+    getSection(): string;
+    trigger(): void;
+}
+
+function getMenuItems(menu: Menu): TestMenuItem[] {
+    return (menu as unknown as { getItems(): TestMenuItem[] }).getItems();
+}
+
+function createFixture() {
+    const note = fakeTFile({ path: "notes/source.md", extension: "md" });
+    const image = fakeTFile({ path: "assets/photo.png", extension: "png" });
+    const app = fakeApp({
+        vault: fakeVault({ files: [note, image] })
+    }) as any;
+    const uploadSingleFile = vi.fn(async () => undefined);
+    const plugin = {
+        supportedImageFormats: {
+            isSupported: vi.fn((_extension?: string, name?: string) =>
+                /\.(?:png|jpe?g|webp)$/i.test(name ?? "")
+            )
+        },
+        cloudImageHandler: { uploadSingleFile }
+    } as any;
+    const launcher = { open: vi.fn() } as any;
+    const ownership = new MenuSessionRegistry();
+    const fileMenu = new FileContextMenu(app, plugin, launcher, ownership);
+    return {
+        fileMenu,
+        image,
+        launcher,
+        note,
+        ownership,
+        uploadSingleFile
+    };
+}
+
+describe("FileContextMenu", () => {
+    it("adds image processing and upload independently of paste mode", () => {
+        const fixture = createFixture();
+        const menu = new Menu();
+
+        expect(fixture.fileMenu.append(menu, fixture.image)).toBe(true);
+        const items = getMenuItems(menu);
+
+        expect(items).toHaveLength(2);
+        expect(items.map(item => item.getIcon())).toEqual(["cog", "cloud-upload"]);
+        expect(items.map(item => item.getSection()))
+            .toEqual(["image-assistant", "image-assistant"]);
+        items[1].trigger();
+        expect(fixture.uploadSingleFile).toHaveBeenCalledWith(fixture.image);
+    });
+
+    it("adds three direct batch modes to a note submenu", () => {
+        const fixture = createFixture();
+        const menu = new Menu();
+
+        fixture.fileMenu.append(menu, fixture.note);
+        const parent = getMenuItems(menu)[0];
+        const children = parent.getItems();
+
+        expect(parent.getIcon()).toBe("images");
+        expect(parent.getSection()).toBe("image-assistant");
+        expect(children.map(item => item.getIcon())).toEqual([
+            "cog",
+            "cloud-upload",
+            "download"
+        ]);
+        children.forEach(child => child.trigger());
+        expect(fixture.launcher.open.mock.calls.map(([request]: any[]) => request))
+            .toEqual([
+                { scope: "note", target: fixture.note, mode: "local_process" },
+                { scope: "note", target: fixture.note, mode: "upload" },
+                { scope: "note", target: fixture.note, mode: "download" }
+            ]);
+    });
+
+    it("falls back to the unified modal when submenu support is unavailable", () => {
+        const fixture = createFixture();
+        let click: (() => void) | undefined;
+        const menu = {
+            addItem(callback: (item: any) => void) {
+                const item = {
+                    setTitle: () => item,
+                    setIcon: () => item,
+                    onClick: (handler: () => void) => {
+                        click = handler;
+                        return item;
+                    }
+                };
+                callback(item);
+                return menu;
+            }
+        } as any;
+
+        fixture.fileMenu.append(menu, fixture.note);
+        click?.();
+
+        expect(fixture.launcher.open).toHaveBeenCalledWith({
+            scope: "note",
+            target: fixture.note,
+            mode: "local_process"
+        });
+    });
+
+    it("does not append a second Image Assistant group to an owned menu", () => {
+        const fixture = createFixture();
+        const menu = new Menu();
+        fixture.ownership.claim(menu);
+
+        expect(fixture.fileMenu.append(menu, fixture.note)).toBe(false);
+        expect(getMenuItems(menu)).toHaveLength(0);
+    });
+
+    it("releases ownership when a reused menu instance is closed", () => {
+        const fixture = createFixture();
+        const menu = new Menu();
+
+        expect(fixture.fileMenu.append(menu, fixture.note)).toBe(true);
+        menu.hide();
+        expect(fixture.ownership.has(menu)).toBe(false);
+        expect(fixture.fileMenu.append(menu, fixture.note)).toBe(true);
+    });
+});

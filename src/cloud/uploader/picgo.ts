@@ -8,12 +8,11 @@ import type ImageConverterPlugin from "../../main";
 import type { Image, Response, Uploader } from "./types";
 import type { CloudUploadSettings } from "../../settings/types";
 import { withTimeout } from "../../utils/NetworkRequestUtils";
-import { validatePublicHttpUrl } from "../../utils/NetworkPolicy";
 import type { UploadRecord } from "../../utils/UploadHistoryManager";
 import { detectImageBinaryType } from "../../utils/ImageBinaryType";
+import { StreamingImageFetcher } from "../../utils/StreamingImageFetcher";
 
 const CLOUD_REQUEST_TIMEOUT_MS = 60_000;
-const MAX_REMOTE_IMAGE_BYTES = 100 * 1024 * 1024;
 
 interface PicGoResponse {
   success?: unknown;
@@ -27,7 +26,10 @@ export default class PicGoUploader implements Uploader {
   settings: CloudUploadSettings;
   plugin: ImageConverterPlugin;
 
-  constructor(plugin: ImageConverterPlugin) {
+  constructor(
+    plugin: ImageConverterPlugin,
+    private readonly imageFetcher = new StreamingImageFetcher()
+  ) {
     this.plugin = plugin;
     this.settings = plugin.settings.pasteHandling.cloud;
   }
@@ -78,25 +80,9 @@ export default class PicGoUploader implements Uploader {
     }
 
     if (/^https?:\/\//i.test(input)) {
-      const validationError = await validatePublicHttpUrl(input);
-      if (validationError) throw new Error(validationError);
-      const response = await withTimeout(
-        requestUrl({ url: input, method: "GET" }),
-        CLOUD_REQUEST_TIMEOUT_MS,
-        "Remote image fetch"
-      );
-      if (response.status < 200 || response.status >= 300) {
-        throw new Error(`Remote image fetch failed with status ${response.status}`);
-      }
-      const contentLength = Number(this.getResponseHeader(response.headers, "content-length"));
-      if (Number.isFinite(contentLength) && contentLength > MAX_REMOTE_IMAGE_BYTES) {
-        throw new Error("Remote image exceeds the 100 MiB limit");
-      }
-      if (response.arrayBuffer.byteLength > MAX_REMOTE_IMAGE_BYTES) {
-        throw new Error("Remote image exceeds the 100 MiB limit");
-      }
+      const response = await this.imageFetcher.fetch(input);
 
-      const detected = await detectImageBinaryType(response.arrayBuffer);
+      const detected = await detectImageBinaryType(response.data);
       if (!detected) throw new Error("Remote URL did not return a recognized image");
 
       const contentType = (this.getResponseHeader(response.headers, "content-type") ?? "")
@@ -118,7 +104,7 @@ export default class PicGoUploader implements Uploader {
         // Keep the encoded basename when the server accepts a malformed escape sequence.
       }
       const stem = decodedName.replace(/\.[^/.]+$/, "").replace(/[\\/:*?"<>|]/g, "-") || `remote-${index}`;
-      return new File([response.arrayBuffer], `${stem}.${detected.ext}`, { type: detected.mime });
+      return new File([response.data], `${stem}.${detected.ext}`, { type: detected.mime });
     }
 
     const vaultPath = normalizePath(input);

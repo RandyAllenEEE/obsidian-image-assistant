@@ -1,5 +1,8 @@
 import { App, Modal, ButtonComponent, Notice } from "obsidian";
-import { VariableProcessor } from "../local/VariableProcessor";
+import {
+    VariableProcessor,
+    type VariableInfo
+} from "../local/VariableProcessor";
 import { t } from "../lang/helpers";
 
 export class ConfirmDialog extends Modal {
@@ -83,7 +86,7 @@ export class AvailableVariablesModal extends Modal {
     private variableProcessor: VariableProcessor;
     private modalClass = "image-converter-available-variables-modal";
     private searchInput: HTMLInputElement;
-    private categorizedVariables: Record<string, any[]>;
+    private categorizedVariables: Record<string, VariableInfo[]>;
     private contentContainer: HTMLElement;
 
     constructor(app: App, variableProcessor: VariableProcessor) {
@@ -149,7 +152,10 @@ export class AvailableVariablesModal extends Modal {
             // Only show category if it has matching variables
             if (filteredVariables.length > 0) {
                 const categoryEl = this.contentContainer.createEl("div", { cls: "variable-category" });
-                categoryEl.createEl("h4", { text: category, cls: "variable-category-title" });
+                categoryEl.createEl("h4", {
+                    text: getVariableCategoryLabel(category),
+                    cls: "variable-category-title"
+                });
 
                 const table = categoryEl.createEl("table", { cls: "variable-table" });
 
@@ -227,5 +233,18 @@ export class AvailableVariablesModal extends Modal {
         const { contentEl } = this;
         contentEl.empty();
         this.modalEl.removeClass(this.modalClass); // Remove class on close
+    }
+}
+
+function getVariableCategoryLabel(category: string): string {
+    switch (category) {
+        case "Basic": return t("VARIABLE_CATEGORY_BASIC");
+        case "Date & Time": return t("VARIABLE_CATEGORY_DATE_TIME");
+        case "File & Vault": return t("VARIABLE_CATEGORY_FILE_VAULT");
+        case "Image Metadata": return t("VARIABLE_CATEGORY_IMAGE_METADATA");
+        case "Calculated Image Properties":
+            return t("VARIABLE_CATEGORY_CALCULATED");
+        case "Advanced": return t("VARIABLE_CATEGORY_ADVANCED");
+        default: return category;
     }
 }

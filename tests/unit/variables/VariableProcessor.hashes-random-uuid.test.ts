@@ -56,6 +56,16 @@ describe('VariableProcessor hashes, random, and uuid', () => {
     expect(parts[2]).toMatch(/^[a-f0-9]{32}$/);
   });
 
+  it('uses the standard UTF-8 byte representation for custom MD5 text', async () => {
+    const file = new File([new Uint8Array([1])], 'ex.png', { type: 'image/png' });
+    const output = await processor.processTemplate(
+      '{MD5:你好}',
+      { file, activeFile: activeNote }
+    );
+
+    expect(output).toBe('7eca689f0d3389d9dea66ae112e5cfd7');
+  });
+
   it('2.24 sha256: image content and types', async () => {
     const data = new Uint8Array([1,2,3,4]).buffer;
     const file = new File([data], 'img.jpg', { type: 'image/jpeg' });

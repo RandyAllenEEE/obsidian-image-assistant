@@ -4,6 +4,7 @@ import ImageConverterPlugin from "../main";
 
 import { PasteHandler } from "./handlers/PasteHandler";
 import { DropHandler } from "./handlers/DropHandler";
+import type { EditorImageInsertionContext } from "../core/EditorImageInsertionContext";
 
 /**
  * LocalImageHandler - Entry point for local image processing.
@@ -28,19 +29,31 @@ export class LocalImageHandler implements ImageHandler {
         this.dropHandler = new DropHandler(app, plugin);
     }
 
-    async handlePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
-        return this.pasteHandler.handlePaste(evt, editor);
+    async handlePaste(
+        evt: ClipboardEvent,
+        editor: Editor,
+        context: EditorImageInsertionContext
+    ): Promise<void> {
+        return this.pasteHandler.handlePaste(evt, editor, context);
     }
 
-    async handleDrop(evt: DragEvent, editor: Editor): Promise<void> {
-        return this.dropHandler.handleDrop(evt, editor);
+    async handleDrop(
+        evt: DragEvent,
+        editor: Editor,
+        context: EditorImageInsertionContext
+    ): Promise<void> {
+        return this.dropHandler.handleDrop(evt, editor, context);
     }
 
     /**
      * Process files directly (for programmatic use or testing).
      * Delegates to PasteHandler which contains the core processing logic.
      */
-    async processFiles(files: File[], editor: Editor): Promise<void> {
-        return this.pasteHandler.processFiles(files, editor);
+    async processFiles(
+        files: File[],
+        editor: Editor,
+        context: EditorImageInsertionContext
+    ): Promise<void> {
+        return this.pasteHandler.processFiles(files, editor, context);
     }
 }

@@ -20,7 +20,7 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         this.settingsUIState = {
             pasteHandlingSectionCollapsed: false,
             imageAlignmentSectionCollapsed: true,
-            imageDragResizeSectionCollapsed: true,
+            imageDragResizeSectionCollapsed: false,
             imageCaptionSectionCollapsed: true,
             cleanerSectionCollapsed: false,
             ocrSectionCollapsed: true,

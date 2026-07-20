@@ -268,8 +268,10 @@ export class CaptionDomRenderer {
     }
 
     private ensureWidthTracking(img: HTMLImageElement): void {
-        if (typeof ResizeObserver !== 'undefined' && !this.resizeObservers.has(img)) {
-            const observer = new ResizeObserver(() => this.refreshTrackedWidth(img));
+        const OwnerResizeObserver = img.ownerDocument.defaultView?.ResizeObserver
+            ?? (typeof ResizeObserver === 'undefined' ? undefined : ResizeObserver);
+        if (OwnerResizeObserver && !this.resizeObservers.has(img)) {
+            const observer = new OwnerResizeObserver(() => this.refreshTrackedWidth(img));
             observer.observe(img);
             this.resizeObservers.set(img, observer);
         }

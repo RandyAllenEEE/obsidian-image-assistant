@@ -1,10 +1,22 @@
 import { App, Component, Modal, Notice, TFile } from 'obsidian';
 import { t } from '../lang/helpers';
 import {
-	assertCanvasOutputMatchesExtension,
-	getCanvasExportMime
+	finalizeCanvasImageOutput,
+	getCanvasIntermediateMime
 } from '../utils/CanvasImageOutput';
 import { getErrorMessage } from '../utils/ErrorUtils';
+import type ImageConverterPlugin from '../main';
+import { ImageResourceRefreshService } from '../utils/ImageResourceRefreshService';
+import { ModalCommitGuard } from '../utils/ModalCommitGuard';
+import {
+	captureImageFileRevision,
+	type ImageFileRevision
+} from '../utils/ImageFileRevision';
+import { ImageEditCommitService } from '../utils/ImageEditCommitService';
+import {
+	CanvasEditCapabilityService,
+	type CanvasEditCapability
+} from '../utils/CanvasEditCapability';
 
 
 type SupportedImageFormat = 'jpeg' | 'png' | 'webp' | 'avif';
@@ -12,6 +24,8 @@ type SupportedImageFormat = 'jpeg' | 'png' | 'webp' | 'avif';
 export class Crop extends Modal {
 	private componentContainer = new Component();
 	private openVersion = 0;
+	private readonly commitGuard = new ModalCommitGuard();
+	private readonly commitService: ImageEditCommitService;
 
 	private readonly MODAL_PADDING = 16;
 	private readonly HEADER_HEIGHT = 60;
@@ -31,7 +45,9 @@ export class Crop extends Modal {
 
 	private imageFile: TFile;
 	private originalArrayBuffer: ArrayBuffer | null = null;
+	private sourceRevision: ImageFileRevision | null = null;
 	private saving = false;
+	private saveButton: HTMLButtonElement | null = null;
 	private cropContainer: HTMLDivElement;
 	private selectionArea: HTMLDivElement;
 	private isDrawing = false;
@@ -60,10 +76,25 @@ export class Crop extends Modal {
 	private readonly MAX_ZOOM = 5;
 	private readonly ZOOM_STEP = 0.1;
 
-	constructor(app: App, imageFile: TFile) {
+	constructor(
+		app: App,
+		imageFile: TFile,
+		private readonly plugin?: ImageConverterPlugin,
+		private readonly suppliedEditCapability?: CanvasEditCapability
+	) {
 		super(app);
 		this.imageFile = imageFile;
+		this.commitService = new ImageEditCommitService(app);
 		this.containerEl.addClass('crop-tool-modal');
+	}
+
+	close(): void {
+		if (this.commitGuard.closeLocked) {
+			new Notice(t("MSG_IMAGE_EDIT_COMMIT_IN_PROGRESS"));
+			return;
+		}
+		this.commitGuard.cancel();
+		super.close();
 	}
 
 	private get ownerDocument(): Document {
@@ -149,7 +180,9 @@ export class Crop extends Modal {
 
 	async onOpen() {
 		const openVersion = ++this.openVersion;
+		this.commitGuard.reset();
 		this.wasClosed = false;
+		this.sourceRevision = null;
 		this.componentContainer.unload();
 		this.componentContainer = new Component();
 		this.componentContainer.load();
@@ -177,6 +210,7 @@ export class Crop extends Modal {
 		// Create buttons - Move this inside modalWrapper
 		const buttonContainer = modalWrapper.createDiv('crop-modal-buttons');
 		const saveButton = buttonContainer.createEl('button', { text: t("BUTTON_CROP_SAVE") });
+		this.saveButton = saveButton;
 		const cancelButton = buttonContainer.createEl('button', { text: t("BUTTON_CANCEL") });
 		const resetButton = buttonContainer.createEl('button', { text: t("BUTTON_CROP_RESET") });
 
@@ -314,8 +348,13 @@ export class Crop extends Modal {
 		if (!this.originalImage.parentElement) {
 			this.cropContainer.appendChild(this.originalImage);
 		}
+		const revisionPromise = captureImageFileRevision(
+			this.app,
+			this.imageFile,
+			this.originalArrayBuffer
+		);
 
-		return new Promise<void>((resolve, reject) => {
+		await new Promise<void>((resolve, reject) => {
 			let settled = false;
 			let timeout: number | null = null;
 			const finish = (error?: Error) => {
@@ -351,6 +390,11 @@ export class Crop extends Modal {
 			);
 			this.originalImage.src = imageUrl;
 		});
+		const revision = await revisionPromise;
+		if (this.wasClosed || openVersion !== this.openVersion) {
+			throw new Error('Image load cancelled');
+		}
+		this.sourceRevision = revision;
 	}
 
 	private releaseOriginalImageUrl(): void {
@@ -841,11 +885,21 @@ export class Crop extends Modal {
 
 	async saveImage() {
 		if (this.saving) return;
+		const commitToken = this.commitGuard.beginPreparing();
+		if (!commitToken) return;
 		this.saving = true;
+		if (this.saveButton) this.saveButton.disabled = true;
 		try {
-			const outputMime = getCanvasExportMime(this.imageFile.extension);
-			if (!outputMime) {
-				throw new Error(`The image editor cannot safely overwrite .${this.imageFile.extension} files`);
+			const editCapability = await this.getEditCapability();
+			if (!this.commitGuard.isCurrent(commitToken)) return;
+			const outputMime = getCanvasIntermediateMime(
+				this.imageFile.extension,
+				editCapability
+			);
+			if (!outputMime || !editCapability.encodable) {
+				throw new Error(t("MSG_IMAGE_EDITOR_FORMAT_UNSUPPORTED", [
+					this.imageFile.extension
+				]));
 			}
 			const originalCanvas = this.ownerDocument.createElement('canvas');
 			const originalCtx = originalCanvas.getContext('2d');
@@ -978,59 +1032,96 @@ export class Crop extends Modal {
 					quality
 				);
 			});
+			if (!this.commitGuard.isCurrent(commitToken)) return;
 
 			if (!blob) {
 				throw new Error('Failed to create image blob');
 			}
 
-			const arrayBuffer = await blob.arrayBuffer();
+			let arrayBuffer = await blob.arrayBuffer();
+			if (!this.commitGuard.isCurrent(commitToken)) return;
 
 			if (!arrayBuffer) {
 				throw new Error('Failed to create array buffer from blob');
 			}
-			await assertCanvasOutputMatchesExtension(arrayBuffer, this.imageFile.extension);
+			arrayBuffer = await finalizeCanvasImageOutput(
+				arrayBuffer,
+				this.imageFile.extension,
+				editCapability,
+				this.plugin
+			);
+			if (!this.commitGuard.isCurrent(commitToken)) return;
+			if (!this.sourceRevision) {
+				throw new Error(t("MSG_IMAGE_SOURCE_REVISION_MISSING"));
+			}
+			if (!this.commitGuard.beginCommitting(commitToken)) return;
 
-			await this.app.vault.modifyBinary(this.imageFile, arrayBuffer);
+			const commitResult = await this.commitService.commit({
+				file: this.imageFile,
+				expectedRevision: this.sourceRevision,
+				data: arrayBuffer
+			});
+			if (!commitResult.success) {
+				this.commitGuard.fail(commitToken);
+				const message = commitResult.stale
+					? t("MSG_IMAGE_SOURCE_CHANGED")
+					: t("MSG_CROP_SAVE_FAIL", [commitResult.error ?? t("MSG_UNKNOWN_ERROR")]);
+				new Notice(message);
+				return;
+			}
+			if (commitResult.revision) this.sourceRevision = commitResult.revision;
 
-			new Notice('Image saved successfully');
+			const refreshed = await this.refreshActiveView();
+			new Notice(refreshed
+				? t("MSG_IMAGE_SAVE_SUCCESS")
+				: t("MSG_IMAGE_SAVED_REFRESH_FAILED"));
 
-			await this.refreshActiveView();
-
+			this.commitGuard.finish(commitToken);
 			this.close();
 
 		} catch (error) {
+			if (!this.commitGuard.isCurrent(commitToken)) return;
+			this.commitGuard.fail(commitToken);
 			console.error('Save error:', error);
 			new Notice(t("MSG_CROP_SAVE_FAIL", [getErrorMessage(error)]));
 		} finally {
 			this.saving = false;
-		}
-	}
-
-	private async refreshActiveView(): Promise<void> {
-		const leaf = this.app.workspace.getMostRecentLeaf();
-		if (!leaf) return;
-
-		const currentState = leaf.getViewState();
-		let restoreNeeded = false;
-		try {
-			await leaf.setViewState({ type: 'empty', state: {} });
-			restoreNeeded = true;
-			await leaf.setViewState(currentState);
-			restoreNeeded = false;
-		} catch (error) {
-			console.warn('Image was saved, but the preview could not be refreshed', error);
-			if (restoreNeeded) {
-				try {
-					await leaf.setViewState(currentState);
-				} catch (restoreError) {
-					console.error('Failed to restore the active view after cropping an image', restoreError);
-				}
+			if (this.saveButton && this.commitGuard.phase === 'idle') {
+				this.saveButton.disabled = false;
 			}
 		}
 	}
 
+	private async refreshActiveView(): Promise<boolean> {
+		try {
+			const service = this.plugin?.imageResourceRefreshService
+				?? new ImageResourceRefreshService(this.app);
+			await service.refreshFile(this.imageFile);
+			return true;
+		} catch (error) {
+			console.warn('Image was saved, but rendered images could not be refreshed', error);
+			return false;
+		}
+	}
+
+	private async getEditCapability(): Promise<CanvasEditCapability> {
+		if (this.suppliedEditCapability) return this.suppliedEditCapability;
+		const extension = this.imageFile.extension.trim().toLowerCase();
+		if (["jpg", "jpeg", "png", "webp"].includes(extension)) {
+			return { decodable: true, encodable: true, encoder: "canvas" };
+		}
+		if (!this.plugin) {
+			return { decodable: extension === "avif", encodable: false, encoder: null };
+		}
+		return new CanvasEditCapabilityService(this.plugin).get(
+			extension,
+			this.ownerDocument
+		);
+	}
+
 	// Add these cleanup methods
 	onClose() {
+		this.commitGuard.cancel();
 		this.wasClosed = true;
 		this.openVersion++;
 		this.abortImageLoad?.();
@@ -1050,6 +1141,8 @@ export class Crop extends Modal {
 		// Clear references
 		// this.originalImage = null;
 		this.originalArrayBuffer = null;
+		this.sourceRevision = null;
+		this.saveButton = null;
 
 		// Existing cleanup
 		this.componentContainer.unload();

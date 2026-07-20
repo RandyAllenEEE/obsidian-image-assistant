@@ -39,7 +39,9 @@ function createFixture(options: {
             getFiles: vi.fn(() => [canvas]),
             read: vi.fn(async () => canvasContent),
             process,
-            getAbstractFileByPath: vi.fn(() => output),
+            getAbstractFileByPath: vi.fn((path: string) =>
+                path === source.path ? source : path === output.path ? output : null
+            ),
         },
         metadataCache: {
             fileToLinktext: vi.fn((file) => file.path),

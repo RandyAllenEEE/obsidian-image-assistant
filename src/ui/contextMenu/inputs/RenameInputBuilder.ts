@@ -1,379 +1,407 @@
-import { Menu, Platform, TFile, setIcon, Component } from 'obsidian';
-import * as path from 'path';
-import { t } from '../../../lang/helpers';
-import { FolderAndFilenameManagement } from '../../../local/FolderAndFilenameManagement';
-import ImageConverterPlugin from '../../../main';
-import { ImageState } from '../../ImageStateManager';
-import { getVaultConfigBoolean } from '../../../utils/vaultConfig';
+import {
+    App,
+    Component,
+    Modal,
+    Notice,
+    setIcon
+} from "obsidian";
+import { t } from "../../../lang/helpers";
+import type ImageConverterPlugin from "../../../main";
+import type { AlignType } from "../../../utils/PipeSyntaxParser";
+import type {
+    ImageContextMenuContext,
+    ImagePropertiesFormModel,
+    ImagePropertyChanges,
+    ImagePropertyUpdateResult
+} from "../types";
+import { OperationResultModal } from "../../modals/OperationResultModal";
 
-export interface RenameInputs {
-    nameInput: HTMLInputElement;
-    pathInput: HTMLInputElement;
-    captionInput: HTMLInputElement;
-    widthInput: HTMLInputElement;
-    heightInput: HTMLInputElement;
-    confirmButton: HTMLButtonElement;
-    fileNameWithoutExt: string;
-    directoryPath: string;
-    fileExtension: string;
-    obsidianVaultPathForRename: string | undefined;
-    file: TFile | File;
-    isImageResolvable: boolean;
-    getAlignment: () => string;
-}
+type ApplyProperties = (
+    changes: ImagePropertyChanges
+) => Promise<ImagePropertyUpdateResult>;
 
-/**
- * Builds UI input fields for rename/move/caption/dimension editing
- */
+let nextFormId = 0;
+
+/** Opens the shared image-properties form in a lifecycle-managed modal. */
 export class RenameInputBuilder extends Component {
-    private readonly stopPropagationHandler = (e: Event) => e.stopPropagation();
-    private documentClickHandler: ((e: MouseEvent) => void) | null = null;
-
-    // ... constructor ... (implicit from context)
-
     constructor(
-        private app: any,
-        private plugin: ImageConverterPlugin,
-        private folderManagement: FolderAndFilenameManagement
+        private readonly app: App,
+        private readonly plugin: ImageConverterPlugin
     ) {
         super();
     }
 
-    /**
-     * Adds input fields for renaming and moving the image to the context menu.
-     * @param menu - The Menu object to add the input fields to.
-     * @param img - The HTMLImageElement that was right-clicked.
-     * @param activeFile - The currently active TFile.
-     * @param isNetwork - Whether the image is a network image.
-     * @returns RenameInputs object if inputs were created, null if skipped
-     */
-    buildInputs(menu: Menu, img: HTMLImageElement, activeFile: TFile, isNetwork: boolean = false): RenameInputs | null {
-        // ... (lines 46-73: check native menus, resolve basic info) ...
-        const isNativeMenus = getVaultConfigBoolean(this.app, 'nativeMenus', false);
+    openModal(
+        context: ImageContextMenuContext,
+        onApply: ApplyProperties
+    ): void {
+        new ImagePropertiesModal(
+            this.app,
+            context.ownerDocument,
+            this.createModel(context),
+            onApply
+        ).open();
+    }
 
-        if (!isNativeMenus && !Platform.isMobile) {
-            const imagePath = (this.folderManagement && typeof (this.folderManagement as any).getImagePath === 'function')
-                ? (this.folderManagement as any).getImagePath(img)
-                : null;
-            const isImageResolvable = imagePath !== null;
+    createModel(context: ImageContextMenuContext): ImagePropertiesFormModel {
+        if (context.sourceKind !== "local" && context.sourceKind !== "url") {
+            throw new Error("Image properties require a local or URL source.");
+        }
+        const state = this.plugin.imageStateManager?.getImageState(context.image);
+        const pipeData = context.descriptor?.pipeData;
+        const file = context.localFile;
+        return Object.freeze({
+            sourceKind: context.sourceKind,
+            fileName: file?.basename ?? "",
+            directory: file?.parent?.path || "/",
+            caption: state?.caption
+                ?? pipeData?.alt?.replace(/\\\|/g, "|").trim()
+                ?? "",
+            width: state?.width ?? pipeData?.size?.width ?? null,
+            height: state?.height ?? pipeData?.size?.height ?? null,
+            alignment: (state?.align === "none"
+                ? null
+                : state?.align ?? pipeData?.align ?? null) as AlignType
+        });
+    }
+}
 
-            let fileNameWithoutExt = '';
-            let directoryPath = '';
-            let fileExtension = '';
-            let obsidianVaultPathForRename: string | undefined;
-            let file: TFile | File;
+class ImagePropertiesModal extends Modal {
+    private applying = false;
+    private formScope: Component | null = null;
 
-            if (isImageResolvable) {
-                const parsedPath = path.parse(imagePath);
-                fileNameWithoutExt = parsedPath.name;
-                directoryPath = parsedPath.dir;
-                fileExtension = parsedPath.ext;
-                obsidianVaultPathForRename = imagePath;
-                if (!directoryPath) {
-                    directoryPath = '/';
-                }
+    constructor(
+        app: App,
+        private readonly ownerDocument: Document,
+        private readonly model: ImagePropertiesFormModel,
+        private readonly onApply: ApplyProperties
+    ) {
+        super(app);
+    }
 
-                const abstractFile = this.app.vault.getAbstractFileByPath(imagePath);
-                file = abstractFile instanceof TFile ? abstractFile : new File([""], imagePath);
-            }
-
-            // Create all input elements
-            const { container, inputs } = this.createInputElements(
-                isImageResolvable,
-                isNetwork,
-                fileNameWithoutExt,
-                directoryPath,
-                img
-            );
-
-            // Add to menu
-            menu.addItem((item) => {
-                const menuItem = item as any;
-
-                // Register event listeners
-                [inputs.nameInput, inputs.pathInput, inputs.captionInput, inputs.widthInput, inputs.heightInput].forEach(input => {
-                    this.registerDomEvent(input, 'mousedown', this.stopPropagationHandler);
-                    this.registerDomEvent(input, 'click', this.stopPropagationHandler);
-                    this.registerDomEvent(input, 'keydown', this.stopPropagationHandler);
-                });
-
-                if (!this.documentClickHandler) {
-                    this.documentClickHandler = (event: MouseEvent) => {
-                        const target = event.target as Element | null;
-                        if (!target?.closest?.('.image-converter-contextmenu-info-container')) {
-                            return;
-                        }
-                    };
-                }
-                this.registerDomEvent(container.ownerDocument, 'click', this.documentClickHandler);
-
-                // Clear and set the menu item content
-                const maybeDom: any = (menuItem as any).dom;
-                if (maybeDom && typeof maybeDom.appendChild === 'function') {
-                    if (typeof maybeDom.empty === 'function') {
-                        maybeDom.empty();
-                    } else {
-                        try { maybeDom.innerHTML = ''; } catch (e) { void e; }
-                    }
-                    maybeDom.appendChild(container);
-                } else {
-                    (menuItem as any).setTitle?.(t("MENU_IMAGE_TOOLS"));
-                }
+    onOpen(): void {
+        this.titleEl.setText(t("MENU_EDIT_IMAGE_PROPERTIES"));
+        this.contentEl.empty();
+        this.formScope?.unload();
+        this.formScope = new Component();
+        this.formScope.load();
+        const form = createPropertiesForm(
+            this.contentEl.ownerDocument ?? this.ownerDocument,
+            this.model,
+            this.formScope
+        );
+        this.contentEl.appendChild(form.container);
+        this.formScope.registerDomEvent(form.confirmButton, "click", () => {
+            if (this.applying) return;
+            const changes = form.getChanges();
+            if (!changes) return;
+            this.applying = true;
+            form.confirmButton.disabled = true;
+            void this.onApply(changes).then(result => {
+                showPropertyResult(this.app, result);
+                if (result.complete || result.fileMoved) this.close();
+            }).finally(() => {
+                this.applying = false;
+                form.confirmButton.disabled = false;
             });
+        });
+    }
 
+    onClose(): void {
+        this.formScope?.unload();
+        this.formScope = null;
+        this.contentEl.empty();
+    }
+}
+
+function createPropertiesForm(
+    ownerDocument: Document,
+    model: ImagePropertiesFormModel,
+    scope: Component
+): {
+    container: HTMLElement;
+    confirmButton: HTMLButtonElement;
+    getChanges(): ImagePropertyChanges | null;
+} {
+    const formId = `image-assistant-properties-${nextFormId++}`;
+    const container = ownerDocument.createElement("div");
+    container.className = "image-converter-contextmenu-info-container";
+    const controls: Array<HTMLInputElement | HTMLButtonElement> = [];
+
+    const nameInput = createTextInput(
+        ownerDocument,
+        container,
+        "file-text",
+        t("LABEL_NAME"),
+        `${formId}-name`,
+        model.fileName,
+        t("PLACEHOLDER_NAME"),
+        "image-converter-contextmenu-name-input"
+    );
+    const pathInput = createTextInput(
+        ownerDocument,
+        container,
+        "folder",
+        t("LABEL_FOLDER_CONTEXT"),
+        `${formId}-path`,
+        model.directory,
+        t("PLACEHOLDER_PATH"),
+        "image-converter-contextmenu-path-input"
+    );
+    if (model.sourceKind === "url") {
+        nameInput.group.remove();
+        pathInput.group.remove();
+    } else {
+        controls.push(nameInput.input, pathInput.input);
+    }
+
+    const captionInput = createTextInput(
+        ownerDocument,
+        container,
+        "subtitles",
+        t("LABEL_CAPTION"),
+        `${formId}-caption`,
+        model.caption,
+        t("PLACEHOLDER_CAPTION"),
+        "image-converter-contextmenu-caption-input"
+    );
+    controls.push(captionInput.input);
+
+    const dimensionGroup = createGroup(
+        ownerDocument,
+        "aspect-ratio",
+        t("LABEL_SIZE"),
+        `${formId}-width`
+    );
+    const dimensionInputs = ownerDocument.createElement("div");
+    dimensionInputs.className = "image-converter-contextmenu-dimension-inputs";
+    const widthInput = createNumberInput(
+        ownerDocument,
+        `${formId}-width`,
+        model.width,
+        t("PLACEHOLDER_WIDTH")
+    );
+    const heightInput = createNumberInput(
+        ownerDocument,
+        `${formId}-height`,
+        model.height,
+        t("PLACEHOLDER_HEIGHT")
+    );
+    dimensionInputs.append(
+        widthInput,
+        ownerDocument.createTextNode("x"),
+        heightInput
+    );
+    dimensionGroup.appendChild(dimensionInputs);
+    container.appendChild(dimensionGroup);
+    controls.push(widthInput, heightInput);
+
+    const alignment = createAlignmentControl(
+        ownerDocument,
+        model.alignment,
+        scope
+    );
+    container.appendChild(alignment.group);
+
+    const confirmButton = ownerDocument.createElement("button");
+    confirmButton.type = "button";
+    confirmButton.className =
+        "image-converter-contextmenu-button image-converter-contextmenu-confirm";
+    confirmButton.title = t("BUTTON_APPLY");
+    confirmButton.setAttribute("aria-label", t("BUTTON_APPLY"));
+    setIcon(confirmButton, "check");
+    container.appendChild(confirmButton);
+    controls.push(confirmButton);
+
+    for (const control of controls) {
+        for (const eventName of ["mousedown", "click", "keydown"] as const) {
+            scope.registerDomEvent(control, eventName, event => {
+                event.stopPropagation();
+            });
+        }
+    }
+
+    return {
+        container,
+        confirmButton,
+        getChanges: () => {
+            const width = readPositiveInteger(widthInput);
+            const height = readPositiveInteger(heightInput);
+            if (width === undefined || height === undefined) {
+                new Notice(t("MSG_DIMENSIONS_POSITIVE"));
+                return null;
+            }
             return {
-                ...inputs,
-                fileNameWithoutExt,
-                directoryPath,
-                fileExtension,
-                obsidianVaultPathForRename,
-                file: file!,
-                isImageResolvable
+                ...(model.sourceKind === "local"
+                    ? {
+                        fileName: nameInput.input.value,
+                        directory: pathInput.input.value
+                    }
+                    : {}),
+                caption: captionInput.input.value.trim(),
+                width,
+                height,
+                alignment: alignment.getAlignment()
             };
         }
+    };
+}
 
-        return null;
-    }
+function createTextInput(
+    ownerDocument: Document,
+    container: HTMLElement,
+    iconName: string,
+    labelText: string,
+    id: string,
+    value: string,
+    placeholder: string,
+    className: string
+): { group: HTMLElement; input: HTMLInputElement } {
+    const group = createGroup(ownerDocument, iconName, labelText, id);
+    const input = ownerDocument.createElement("input");
+    input.type = "text";
+    input.id = id;
+    input.value = value;
+    input.placeholder = placeholder;
+    input.className = className;
+    group.appendChild(input);
+    container.appendChild(group);
+    return { group, input };
+}
 
-    private createInputElements(
-        isImageResolvable: boolean,
-        isNetwork: boolean,
-        fileNameWithoutExt: string,
-        directoryPath: string,
-        img: HTMLImageElement
-    ) {
-        // ... (lines 131-253: name, path, caption, dimensions setup) ...
-        // Create main container
-        const ownerDocument = img.ownerDocument ?? document;
+function createGroup(
+    ownerDocument: Document,
+    iconName: string,
+    labelText: string,
+    inputId?: string
+): HTMLElement {
+    const group = ownerDocument.createElement("div");
+    group.className = "image-converter-contextmenu-input-group";
+    const icon = ownerDocument.createElement("div");
+    icon.className = "image-converter-contextmenu-icon-container";
+    setIcon(icon, iconName);
+    group.appendChild(icon);
+    const label = ownerDocument.createElement("label");
+    label.textContent = labelText;
+    if (inputId) label.htmlFor = inputId;
+    group.appendChild(label);
+    return group;
+}
 
-        const inputContainer = ownerDocument.createElement('div');
-        inputContainer.className = 'image-converter-contextmenu-info-container';
+function createNumberInput(
+    ownerDocument: Document,
+    id: string,
+    value: number | null,
+    placeholder: string
+): HTMLInputElement {
+    const input = ownerDocument.createElement("input");
+    input.type = "number";
+    input.min = "1";
+    input.id = id;
+    input.value = value?.toString() ?? "";
+    input.placeholder = placeholder;
+    input.className = "image-converter-contextmenu-dimension-input";
+    return input;
+}
 
-        // Create name input group
-        const nameGroup = ownerDocument.createElement('div');
-        nameGroup.className = 'image-converter-contextmenu-input-group';
-
-        const nameIcon = ownerDocument.createElement('div');
-        nameIcon.className = 'image-converter-contextmenu-icon-container';
-        setIcon(nameIcon, 'file-text');
-        nameGroup.appendChild(nameIcon);
-
-        const nameLabel = ownerDocument.createElement('label');
-        nameLabel.textContent = t("LABEL_NAME");
-        nameLabel.setAttribute('for', 'image-converter-name-input');
-        nameGroup.appendChild(nameLabel);
-
-        const nameInput = ownerDocument.createElement('input');
-        nameInput.type = 'text';
-        nameInput.value = fileNameWithoutExt;
-        nameInput.placeholder = t("PLACEHOLDER_NAME");
-        nameInput.className = 'image-converter-contextmenu-name-input';
-        nameInput.id = 'image-converter-name-input';
-        if (!isImageResolvable || isNetwork) {
-            nameInput.classList.add('image-converter-contextmenu-disabled');
-            nameInput.disabled = true;
-        }
-        nameGroup.appendChild(nameInput);
-
-        // Create path input group
-        const pathGroup = ownerDocument.createElement('div');
-        pathGroup.className = 'image-converter-contextmenu-input-group';
-
-        const pathIcon = ownerDocument.createElement('div');
-        pathIcon.className = 'image-converter-contextmenu-icon-container';
-        setIcon(pathIcon, 'folder');
-        pathGroup.appendChild(pathIcon);
-
-        const pathLabel = ownerDocument.createElement('label');
-        pathLabel.textContent = t("LABEL_FOLDER_CONTEXT");
-        pathLabel.setAttribute('for', 'image-converter-path-input');
-        pathGroup.appendChild(pathLabel);
-
-        const pathInput = ownerDocument.createElement('input');
-        pathInput.type = 'text';
-        pathInput.value = directoryPath;
-        pathInput.placeholder = t("PLACEHOLDER_PATH");
-        pathInput.className = 'image-converter-contextmenu-path-input';
-        pathInput.id = 'image-converter-path-input';
-        if (!isImageResolvable || isNetwork) {
-            pathInput.classList.add('image-converter-contextmenu-disabled');
-            pathInput.disabled = true;
-        }
-        pathGroup.appendChild(pathInput);
-
-        // Create caption input group
-        const captionGroup = ownerDocument.createElement('div');
-        captionGroup.className = 'image-converter-contextmenu-input-group';
-
-        const captionIcon = ownerDocument.createElement('div');
-        captionIcon.className = 'image-converter-contextmenu-icon-container';
-        setIcon(captionIcon, 'subtitles');
-        captionGroup.appendChild(captionIcon);
-
-        const captionLabel = ownerDocument.createElement('label');
-        captionLabel.textContent = t("LABEL_CAPTION");
-        captionLabel.setAttribute('for', 'image-converter-caption-input');
-        captionGroup.appendChild(captionLabel);
-
-        const captionInput = ownerDocument.createElement('input');
-        captionInput.type = 'text';
-        captionInput.placeholder = t("PLACEHOLDER_CAPTION_LOADING");
-        captionInput.className = 'image-converter-contextmenu-caption-input';
-        captionInput.id = 'image-converter-caption-input';
-        captionGroup.appendChild(captionInput);
-
-        // Create dimensions input group
-        const dimensionsGroup = ownerDocument.createElement('div');
-        dimensionsGroup.className = 'image-converter-contextmenu-input-group';
-
-        const dimensionsIcon = ownerDocument.createElement('div');
-        dimensionsIcon.className = 'image-converter-contextmenu-icon-container';
-        setIcon(dimensionsIcon, 'aspect-ratio');
-        dimensionsGroup.appendChild(dimensionsIcon);
-
-        const dimensionsLabel = ownerDocument.createElement('label');
-        dimensionsLabel.textContent = t("LABEL_SIZE");
-        dimensionsLabel.setAttribute('for', 'image-converter-width-input');
-        dimensionsGroup.appendChild(dimensionsLabel);
-
-        // Create width input
-        const widthInput = ownerDocument.createElement('input');
-        widthInput.type = 'number';
-        widthInput.min = '1';
-        widthInput.placeholder = t("PLACEHOLDER_WIDTH");
-        widthInput.className = 'image-converter-contextmenu-dimension-input';
-        widthInput.id = 'image-converter-width-input';
-
-        // Create height input
-        const heightInput = ownerDocument.createElement('input');
-        heightInput.type = 'number';
-        heightInput.min = '1';
-        heightInput.placeholder = t("PLACEHOLDER_HEIGHT");
-        heightInput.className = 'image-converter-contextmenu-dimension-input';
-        heightInput.id = 'image-converter-height-input';
-
-        // Create dimension inputs container
-        const dimensionInputsContainer = ownerDocument.createElement('div');
-        dimensionInputsContainer.className = 'image-converter-contextmenu-dimension-inputs';
-        dimensionInputsContainer.appendChild(widthInput);
-        dimensionInputsContainer.appendChild(ownerDocument.createTextNode('×'));
-        dimensionInputsContainer.appendChild(heightInput);
-
-        dimensionsGroup.appendChild(dimensionInputsContainer);
-
-        // Load dimensions via StateManager
-        const currentStateSize = this.plugin.imageStateManager?.getImageState(img);
-        if (currentStateSize) {
-            widthInput.value = currentStateSize.width?.toString() || "";
-            heightInput.value = currentStateSize.height?.toString() || "";
-        }
-
-        // --- NEW: Create Alignment Control ---
-        const { group: alignmentGroup, getAlignment } = this.createAlignmentControl(img, ownerDocument);
-
-        // Add all groups to container
-        if (!isNetwork) {
-            inputContainer.appendChild(nameGroup);
-            inputContainer.appendChild(pathGroup);
-        }
-        inputContainer.appendChild(captionGroup);
-        inputContainer.appendChild(dimensionsGroup);
-        inputContainer.appendChild(alignmentGroup); // Add alignment group
-
-        // Add single confirm button
-        const confirmButton = ownerDocument.createElement('button');
-        confirmButton.type = 'button';
-        confirmButton.className = 'image-converter-contextmenu-button image-converter-contextmenu-confirm';
-        confirmButton.title = t("BUTTON_APPLY");
-        confirmButton.setAttribute('aria-label', t("BUTTON_APPLY"));
-        setIcon(confirmButton, 'check');
-        inputContainer.appendChild(confirmButton);
-
-        // Load caption via StateManager
-        const currentState = this.plugin.imageStateManager?.getImageState(img);
-        if (currentState) {
-            captionInput.value = currentState.caption || "";
-        }
-        captionInput.placeholder = t("PLACEHOLDER_CAPTION");
-
-        return {
-            container: inputContainer,
-            inputs: {
-                nameInput,
-                pathInput,
-                captionInput,
-                widthInput,
-                heightInput,
-                confirmButton,
-                getAlignment
-            },
-            isImageResolvable // Ensure this is returned at the top level of RenameInputs
-        };
-    }
-
-    private createAlignmentControl(img: HTMLImageElement, ownerDocument: Document): { group: HTMLElement, getAlignment: () => string } {
-        const group = ownerDocument.createElement('div');
-        group.className = 'image-converter-contextmenu-input-group image-converter-alignment-group';
-
-        // Icon for label
-        const icon = ownerDocument.createElement('div');
-        icon.className = 'image-converter-contextmenu-icon-container';
-        setIcon(icon, 'align-center');
-        group.appendChild(icon);
-
-        // Label
-        const label = ownerDocument.createElement('label');
-        label.textContent = t("LABEL_ALIGNMENT");
-        group.appendChild(label);
-
-        const buttonsContainer = ownerDocument.createElement('div');
-        buttonsContainer.className = 'image-converter-alignment-buttons';
-
-        const alignOptions = [
-            { id: 'left', icon: 'align-left', title: t("ALIGN_LEFT") },
-            { id: 'left-wrap', icon: 'wrap-text', title: t("ALIGN_LEFT") + ' (Wrap)' },
-            { id: 'center', icon: 'align-center', title: t("ALIGN_CENTER") },
-            { id: 'right-wrap', icon: 'wrap-text', title: t("ALIGN_RIGHT") + ' (Wrap)' },
-            { id: 'right', icon: 'align-right', title: t("ALIGN_RIGHT") },
-        ];
-
-        // Get current alignment
-        let currentAlign = this.plugin.imageStateManager?.getImageState(img)?.align || 'none';
-
-        const buttons: HTMLElement[] = [];
-
-        alignOptions.forEach(opt => {
-            const btn = ownerDocument.createElement('div');
-            btn.className = `image-converter-alignment-button ${currentAlign === opt.id ? 'active' : ''}`;
-            btn.title = opt.title;
-            setIcon(btn, opt.icon);
-
-            // Click Handler
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-
-                // Toggle Logic
-                if (currentAlign === opt.id) {
-                    // Deselect if already selected
-                    currentAlign = 'none';
-                    btn.classList.remove('active');
-                } else {
-                    // Select new option
-                    currentAlign = opt.id as ImageState['align'];
-                    buttons.forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                }
-            });
-
-            buttons.push(btn);
-            buttonsContainer.appendChild(btn);
+function createAlignmentControl(
+    ownerDocument: Document,
+    initial: AlignType,
+    scope: Component
+): { group: HTMLElement; getAlignment(): AlignType } {
+    const group = createGroup(
+        ownerDocument,
+        "align-center",
+        t("LABEL_ALIGNMENT")
+    );
+    group.classList.add("image-converter-alignment-group");
+    const buttonContainer = ownerDocument.createElement("div");
+    buttonContainer.className = "image-converter-alignment-buttons";
+    let alignment = initial;
+    const buttons: HTMLElement[] = [];
+    const options: Array<{ id: Exclude<AlignType, null>; icon: string; title: string }> = [
+        { id: "left", icon: "align-left", title: t("ALIGN_LEFT") },
+        { id: "left-wrap", icon: "wrap-text", title: t("ALIGN_LEFT_WRAP") },
+        { id: "center", icon: "align-center", title: t("ALIGN_CENTER") },
+        { id: "right-wrap", icon: "wrap-text", title: t("ALIGN_RIGHT_WRAP") },
+        { id: "right", icon: "align-right", title: t("ALIGN_RIGHT") }
+    ];
+    for (const option of options) {
+        const button = ownerDocument.createElement("button");
+        button.type = "button";
+        button.className = "image-converter-alignment-button";
+        button.classList.toggle("active", alignment === option.id);
+        button.title = option.title;
+        button.setAttribute("aria-label", option.title);
+        setIcon(button, option.icon);
+        scope.registerDomEvent(button, "click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            alignment = alignment === option.id ? null : option.id;
+            for (const candidate of buttons) {
+                candidate.classList.toggle(
+                    "active",
+                    candidate === button && alignment === option.id
+                );
+            }
         });
-
-        group.appendChild(buttonsContainer);
-
-        return {
-            group,
-            getAlignment: () => currentAlign
-        };
+        buttons.push(button);
+        buttonContainer.appendChild(button);
     }
+    group.appendChild(buttonContainer);
+    return { group, getAlignment: () => alignment };
+}
+
+function readPositiveInteger(input: HTMLInputElement): number | null | undefined {
+    const value = input.value.trim();
+    if (!value) return null;
+    if (!/^\d+$/.test(value)) return undefined;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function showPropertyResult(
+    app: App,
+    result: ImagePropertyUpdateResult
+): void {
+    if (result.complete) {
+        new Notice(t("MSG_CAPTION_UPDATED"));
+        return;
+    }
+    if (result.fileMoved) {
+        new OperationResultModal(app, {
+            title: t("MSG_IMAGE_PROPERTIES_MOVED_PARTIAL_TITLE"),
+            summary: t("MSG_IMAGE_PROPERTIES_MOVED_PARTIAL_SUMMARY", [
+                result.targetPath ?? t("MSG_UNKNOWN_ERROR"),
+                result.compatibilityCopyPreserved
+                    ? t("MSG_IMAGE_PROPERTIES_COMPAT_PRESERVED")
+                    : t("MSG_IMAGE_PROPERTIES_COMPAT_NOT_NEEDED")
+            ]),
+            successful: [
+                t("MSG_IMAGE_PROPERTIES_FILE_MOVED", [
+                    result.targetPath ?? ""
+                ]),
+                ...(result.repairedReferences
+                    ? [t("MSG_IMAGE_PROPERTIES_REFERENCES_REPAIRED", [
+                        result.repairedReferences
+                    ])]
+                    : [])
+            ],
+            failed: [
+                ...(result.error ? [result.error] : []),
+                ...(result.failedFiles ?? [])
+            ],
+            uncertain: [...(result.uncertainFiles ?? [])]
+        }).open();
+        return;
+    }
+    if (result.linkUpdated) {
+        new Notice(t("MSG_IMAGE_PROPERTIES_PARTIAL", [
+            result.error ?? t("MSG_UNKNOWN_ERROR")
+        ]));
+        return;
+    }
+    new Notice(t("MSG_IMAGE_PROPERTIES_FAILED", [
+        result.error ?? t("MSG_UNKNOWN_ERROR")
+    ]));
 }

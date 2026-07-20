@@ -32,12 +32,14 @@ function makeCleanerFixture(canvasContent: string, resolveCanvasLink?: (link: st
     }) as any;
     app.metadataCache.getFirstLinkpathDest = vi.fn((link: string) => resolveCanvasLink?.(link) ?? null);
 
-    const getFilesReferencingImages = vi.fn(async (paths: string[]) =>
-        new Map(paths.map(path => [path, []]))
-    );
+    const scanReferencesForTargetsDetailed = vi.fn(async (paths: string[]) => ({
+        references: new Map(paths.map(path => [path, []])),
+        complete: true,
+        uncertainFiles: []
+    }));
     const plugin = {
         vaultReferenceManager: {
-            getFilesReferencingImages,
+            scanReferencesForTargetsDetailed,
             getFilesReferencingImage: vi.fn(async () => [])
         }
     } as any;
@@ -53,6 +55,48 @@ function makeCleanerFixture(canvasContent: string, resolveCanvasLink?: (link: st
 }
 
 describe("UnusedFileCleaner", () => {
+    it("uses one reference-index query for folder discovery without legacy full scans", async () => {
+        const { cleaner, plugin, used, unused, canvas } = makeCleanerFixture(
+            JSON.stringify({ nodes: [] })
+        );
+        const inspectLocalFiles = vi.fn(async () => new Map([
+            [used.path, {
+                generation: 4,
+                complete: true,
+                markdown: [],
+                canvas: [{
+                    canvasFile: canvas,
+                    nodeFile: used.path,
+                    lineNumber: 1
+                }],
+                uncertainFiles: [],
+                referenceCount: 1,
+                safeToDelete: false
+            }],
+            [unused.path, {
+                generation: 4,
+                complete: true,
+                markdown: [],
+                canvas: [],
+                uncertainFiles: [],
+                referenceCount: 0,
+                safeToDelete: true
+            }]
+        ]));
+        plugin.referenceIndexService = { inspectLocalFiles };
+
+        const result = await cleaner.scanFolder("attachments", ["png"]);
+
+        expect(inspectLocalFiles).toHaveBeenCalledWith(
+            [used, unused],
+            expect.objectContaining({ includeFencedCode: true })
+        );
+        expect(plugin.vaultReferenceManager.scanReferencesForTargetsDetailed)
+            .not.toHaveBeenCalled();
+        expect(result.referencedFiles.map(info => info.file.path)).toEqual([used.path]);
+        expect(result.unreferencedFiles.map(info => info.file.path)).toEqual([unused.path]);
+    });
+
     it("treats files referenced by Canvas file nodes as referenced", async () => {
         const canvasContent = JSON.stringify({
             nodes: [
@@ -63,7 +107,11 @@ describe("UnusedFileCleaner", () => {
 
         const result = await cleaner.scanFolder("attachments", ["png"]);
 
-        expect(plugin.vaultReferenceManager.getFilesReferencingImages).toHaveBeenCalledWith([used.path, unused.path]);
+        expect(plugin.vaultReferenceManager.scanReferencesForTargetsDetailed)
+            .toHaveBeenCalledWith(
+                [used.path, unused.path],
+                expect.objectContaining({ includeFencedCode: true })
+            );
         expect(plugin.vaultReferenceManager.getFilesReferencingImage).not.toHaveBeenCalled();
         expect((cleaner as any).app.vault.read).toHaveBeenCalledTimes(1);
         expect(result.scannedFiles).toBe(2);
@@ -142,7 +190,11 @@ describe("UnusedFileCleaner", () => {
         const plugin = {
             settings: { cleanerSettings: { trashMode: "custom", customTrashPath: "attachments/Trash" } },
             vaultReferenceManager: {
-                getFilesReferencingImages: vi.fn(async (paths: string[]) => new Map(paths.map(path => [path, []]))),
+                scanReferencesForTargetsDetailed: vi.fn(async (paths: string[]) => ({
+                    references: new Map(paths.map(path => [path, []])),
+                    complete: true,
+                    uncertainFiles: []
+                })),
                 getFilesReferencingImage: vi.fn(async () => [])
             }
         } as any;
@@ -247,5 +299,98 @@ describe("UnusedFileCleaner", () => {
 
         expect(count).toBe(0);
         expect(app.fileManager.renameFile).not.toHaveBeenCalled();
+    });
+
+    it("does not delete a file referenced only in an ordinary fence when indexing is disabled", async () => {
+        const file = fakeTFile({
+            path: "attachments/used.png",
+            name: "used.png",
+            extension: "png"
+        });
+        const note = fakeTFile({
+            path: "notes/protected.md",
+            name: "protected.md",
+            extension: "md"
+        });
+        const app = fakeApp({
+            vault: fakeVault({ files: [file, note] })
+        }) as any;
+        const scanReferencesDetailed = vi.fn(async (
+            _path: string,
+            policy: { includeFencedCode: boolean }
+        ) => ({
+            locations: policy.includeFencedCode
+                ? [{
+                    file: note,
+                    start: 12,
+                    end: 37,
+                    original: "![[attachments/used.png]]",
+                    link: file.path,
+                    line: 2
+                }]
+                : [],
+            complete: true,
+            uncertainFiles: []
+        }));
+        const plugin = {
+            settings: { global: { codeBlockImageLinkIndexing: false } },
+            vaultReferenceManager: {
+                scanReferencesDetailed,
+                getFilesReferencingImage: vi.fn(async () => [])
+            }
+        } as any;
+
+        const count = await new UnusedFileCleaner(app, plugin)
+            .deleteFiles([file], "system");
+
+        expect(count).toBe(0);
+        expect(scanReferencesDetailed).toHaveBeenCalledWith(file.path, {
+            kind: "safety",
+            includeFencedCode: true
+        });
+        expect(app.vault.trash).not.toHaveBeenCalled();
+    });
+
+    it("batch-revalidates cleanup candidates through one reference-index pass", async () => {
+        const first = fakeTFile({
+            path: "attachments/first.png",
+            name: "first.png",
+            extension: "png"
+        });
+        const second = fakeTFile({
+            path: "attachments/second.png",
+            name: "second.png",
+            extension: "png"
+        });
+        const app = fakeApp({
+            vault: fakeVault({ files: [first, second] })
+        }) as any;
+        const inspectLocalFiles = vi.fn(async (files: typeof first[]) =>
+            new Map(files.map(file => [file.path, {
+                generation: 7,
+                complete: true,
+                markdown: [],
+                canvas: [],
+                uncertainFiles: [],
+                referenceCount: 0,
+                safeToDelete: true
+            }])));
+        const plugin = {
+            vaultReferenceManager: {},
+            referenceIndexService: {
+                inspectLocalFiles,
+                inspectLocalFile: vi.fn(),
+                getGeneration: vi.fn(() => 7)
+            }
+        } as any;
+
+        const count = await new UnusedFileCleaner(app, plugin)
+            .deleteFiles([first, second], "system");
+
+        expect(count).toBe(2);
+        expect(inspectLocalFiles).toHaveBeenCalledTimes(1);
+        expect(plugin.referenceIndexService.inspectLocalFile)
+            .not.toHaveBeenCalled();
+        expect(app.vault.trash).toHaveBeenCalledTimes(2);
     });
 });

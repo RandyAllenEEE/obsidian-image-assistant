@@ -15,7 +15,7 @@ function makePlugin() {
 }
 
 describe('Local PasteHandler Markdown view guard', () => {
-  it('returns without throwing when there is an active file but no Markdown view', async () => {
+  it('returns without consulting the active view when event ownership is missing', async () => {
     const app = {
       workspace: {
         getActiveFile: vi.fn(() => fakeTFile({ path: 'note.md', name: 'note.md' })),
@@ -26,7 +26,7 @@ describe('Local PasteHandler Markdown view guard', () => {
     const file = new File(['image'], 'image.png', { type: 'image/png' });
 
     await expect(handler.processFiles([file], {} as any)).resolves.toBeUndefined();
-    expect(app.workspace.getActiveViewOfType).toHaveBeenCalled();
+    expect(app.workspace.getActiveViewOfType).not.toHaveBeenCalled();
   });
 
   it('does not consume native image paste without a writable Markdown view', async () => {

@@ -1,76 +1,59 @@
-import { describe, it, expect } from 'vitest';
-import { FileSystemAdapter } from 'obsidian';
-import { FolderAndFilenameManagement } from '../../../src/local/FolderAndFilenameManagement';
-import { VariableProcessor } from '../../../src/local/VariableProcessor';
-import { SupportedImageFormats } from '../../../src/local/SupportedImageFormats';
-import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
-import { fakeApp, fakeTFile, fakeVault } from '../../factories/obsidian';
+import { describe, expect, it } from "vitest";
+import { FolderAndFilenameManagement } from "../../../src/local/FolderAndFilenameManagement";
+import { SupportedImageFormats } from "../../../src/local/SupportedImageFormats";
+import { VariableProcessor } from "../../../src/local/VariableProcessor";
+import { DEFAULT_SETTINGS } from "../../../src/settings/defaults";
+import { fakeApp, fakeVault } from "../../factories/obsidian";
 
-describe('FolderAndFilenameManagement sanitization and ensureFolderExists', () => {
-  function makeFFM() {
-    const app = fakeApp({ vault: fakeVault() }) as any;
-    const supported = new SupportedImageFormats(app);
-    const vp = new VariableProcessor(app, { ...DEFAULT_SETTINGS } as any);
-    const ffm = new FolderAndFilenameManagement(app, { ...DEFAULT_SETTINGS } as any, supported, vp);
-    return { app, ffm };
-  }
+describe("FolderAndFilenameManagement sanitization and folders", () => {
+    function makeFFM() {
+        const app = fakeApp({ vault: fakeVault() }) as any;
+        const supported = new SupportedImageFormats(app);
+        const settings = structuredClone(DEFAULT_SETTINGS);
+        const processor = new VariableProcessor(app, settings);
+        return {
+            app,
+            ffm: new FolderAndFilenameManagement(
+                app,
+                settings,
+                supported,
+                processor
+            )
+        };
+    }
 
-  it('3.9 sanitizeFilename replaces invalids, handles reserved names, preserves trailing dots/underscores, truncates', () => {
-    const { ffm } = makeFFM();
-    expect(ffm.sanitizeFilename('  My/File\\Name??**.txt  ')).toBe('My_File_Name____.txt');
-    expect(ffm.sanitizeFilename('CON')).toMatch(/^CON_?$/);
-    // Leading dots removed; internal dots preserved; trailing dots removed by base sanitization then extension is appended back by caller if present.
-    expect(ffm.sanitizeFilename('..hidden..file..')).toBe('hidden..file.');
-    const long = `${'A'.repeat(300)}.txt`;
-    const out = ffm.sanitizeFilename(long);
-    expect(out.length).toBeLessThanOrEqual(250 + '.txt'.length);
-  });
+    it("sanitizes invalid characters, reserved names and trailing dots", () => {
+        const { ffm } = makeFFM();
 
-  it('3.21 combinePath behavior', () => {
-    const { ffm } = makeFFM();
-    expect(ffm.combinePath('/', 'name.png')).toBe('/name.png');
-    expect(ffm.combinePath('base', 'name.png')).toBe('base/name.png');
-  });
+        expect(ffm.sanitizeFilename("  My/File\\Name??**.txt  "))
+            .toBe("My_File_Name____.txt");
+        expect(ffm.sanitizeFilename("CON")).toBe("CON_");
+        expect(ffm.sanitizeFilename("..hidden..file..")).toBe("hidden..file");
+    });
 
-  it('3.6–3.7 ensureFolderExists creates missing nested paths', async () => {
-    const { app, ffm } = makeFFM();
-    await ffm.ensureFolderExists('alpha/beta/gamma');
-    expect(app.vault.createFolder).toHaveBeenCalled();
-  });
+    it("normalizes Unicode and limits the UTF-8 component length", () => {
+        const { ffm } = makeFFM();
+        const decomposed = `Cafe\u0301-${"测".repeat(120)}.png`;
+        const result = ffm.sanitizeFilename(decomposed);
 
-  it('resolves app://local image src before generic app:// parsing and strips query params', () => {
-    const image = fakeTFile({ path: 'assets/pic.png', name: 'pic.png', extension: 'png' });
-    const app = fakeApp({ vault: fakeVault({ files: [image] }) }) as any;
-    const supported = new SupportedImageFormats(app);
-    const vp = new VariableProcessor(app, { ...DEFAULT_SETTINGS } as any);
-    const ffm = new FolderAndFilenameManagement(app, { ...DEFAULT_SETTINGS } as any, supported, vp);
-    const img = document.createElement('img');
-    img.setAttribute('src', 'app://local/assets/pic.png?mtime=123');
+        expect(result.startsWith("Café-")).toBe(true);
+        expect(result.endsWith(".png")).toBe(true);
+        expect(new TextEncoder().encode(result).byteLength)
+            .toBeLessThanOrEqual(240);
+    });
 
-    expect(ffm.getImagePath(img)).toBe('assets/pic.png');
-  });
+    it("combines root and nested vault paths", () => {
+        const { ffm } = makeFFM();
 
-  it('keeps malformed app://local percent escapes from breaking path resolution', () => {
-    const image = fakeTFile({ path: 'bad%image.png', name: 'bad%image.png', extension: 'png' });
-    const app = fakeApp({ vault: fakeVault({ files: [image] }) }) as any;
-    const supported = new SupportedImageFormats(app);
-    const vp = new VariableProcessor(app, { ...DEFAULT_SETTINGS } as any);
-    const ffm = new FolderAndFilenameManagement(app, { ...DEFAULT_SETTINGS } as any, supported, vp);
-    const img = document.createElement('img');
-    img.setAttribute('src', 'app://local/bad%image.png');
+        expect(ffm.combinePath("/", "name.png")).toBe("/name.png");
+        expect(ffm.combinePath("base", "name.png")).toBe("base/name.png");
+    });
 
-    expect(ffm.getImagePath(img)).toBe('bad%image.png');
-  });
+    it("creates missing nested folders", async () => {
+        const { app, ffm } = makeFFM();
 
-  it('returns null for generic app:// paths that cannot be mapped back into the vault', () => {
-    const app = fakeApp({ vault: fakeVault({ files: [] }) }) as any;
-    app.vault.adapter = new (FileSystemAdapter as any)('C:/vault');
-    const supported = new SupportedImageFormats(app);
-    const vp = new VariableProcessor(app, { ...DEFAULT_SETTINGS } as any);
-    const ffm = new FolderAndFilenameManagement(app, { ...DEFAULT_SETTINGS } as any, supported, vp);
-    const img = document.createElement('img');
-    img.setAttribute('src', 'app://obsidian.md/C:/outside/pic.png');
+        await ffm.ensureFolderExists("alpha/beta/gamma");
 
-    expect(ffm.getImagePath(img)).toBeNull();
-  });
+        expect(app.vault.createFolder).toHaveBeenCalledTimes(3);
+    });
 });

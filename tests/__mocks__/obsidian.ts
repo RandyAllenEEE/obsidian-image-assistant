@@ -551,25 +551,57 @@ export class SecretComponent {
 export class MenuItem {
   private title = '';
   private icon = '';
+  private section = '';
+  private warning = false;
   private click: (() => void) | null = null;
+  private submenu: MenuItem | null = null;
+  private items: MenuItem[] = [];
+  readonly dom = document.createElement('div');
   setTitle(title: string) { this.title = title; return this; }
   setIcon(iconName: string) { this.icon = iconName; return this; }
+  setSection(section: string) { this.section = section; return this; }
+  setWarning(warning: boolean) { this.warning = warning; return this; }
   onClick(cb: () => void) { this.click = cb; return this; }
+  setSubmenu() {
+    this.submenu = new MenuItem();
+    return this.submenu;
+  }
+  addItem(cb: (item: MenuItem) => void) {
+    const item = new MenuItem();
+    cb(item);
+    this.items.push(item);
+    return this;
+  }
+  addSeparator() { return this; }
+  getTitle() { return this.title; }
+  getIcon() { return this.icon; }
+  getSection() { return this.section; }
+  isWarning() { return this.warning; }
+  getItems() { return this.submenu?.items ?? this.items; }
   trigger() { this.click?.(); }
 }
 
 export class Menu {
   private items: MenuItem[] = [];
+  private hideCallbacks: Array<() => void> = [];
+  static forEvent(_evt: PointerEvent | MouseEvent) { return new Menu(); }
   addItem(cb: (item: MenuItem) => void) { const i = new MenuItem(); cb(i); this.items.push(i); return this; }
   addSeparator() { return this; }
+  getItems() { return this.items; }
+  onHide(callback: () => void) { this.hideCallbacks.push(callback); }
+  setUseNativeMenu(_native: boolean) { return this; }
   showAtMouseEvent(_evt: MouseEvent) {
     // In integration-lite tests, simulate user clicking actionable items
     // Trigger each item's click handler once to exercise flows
     for (const item of this.items) {
       try { item.trigger(); } catch { /* ignore synchronous errors in tests */ }
     }
+    return this;
   }
-  hide() { /* no-op */ }
+  hide() {
+    const callbacks = this.hideCallbacks.splice(0);
+    for (const callback of callbacks) callback();
+  }
 }
 
 export class View { getViewType(): string { return 'markdown'; } }

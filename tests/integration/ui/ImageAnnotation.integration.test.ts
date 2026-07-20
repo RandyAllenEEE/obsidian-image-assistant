@@ -240,6 +240,11 @@ describe('ImageAnnotation — 16.2–16.11 Behaviors (integration-lite)', () => 
       tries++;
     }
     expect(writeSpy).toHaveBeenCalled();
+    tries = 0;
+    while (!(closeSpy as any).mock?.calls?.length && tries < 20) {
+      await new Promise(r => setTimeout(r, 20));
+      tries++;
+    }
     expect(closeSpy).toHaveBeenCalled();
 
     // Failure branch: mock toDataURL throwing
@@ -271,6 +276,20 @@ describe('ImageAnnotation — 16.2–16.11 Behaviors (integration-lite)', () => 
     const spy = vi.spyOn((app.vault as any), 'modifyBinary');
 
     await modal.saveAnnotation();
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('does not write when the annotation modal closes during preparation', async () => {
+    const modal = new ImageAnnotationModal(app as any, plugin, imageFile);
+    await modal.onOpen();
+    const path = new (require('fabric').Path)('M 0 0 L 5 5');
+    (modal as any).canvas.add(path);
+    const spy = vi.spyOn((app.vault as any), 'modifyBinary');
+
+    const saving = modal.saveAnnotation();
+    modal.onClose();
+    await saving;
 
     expect(spy).not.toHaveBeenCalled();
   });

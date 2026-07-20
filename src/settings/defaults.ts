@@ -56,8 +56,6 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
             shortestEdge: undefined,
             editorMaxWidthValue: undefined,
             resizeScaleMode: "auto",
-            respectEditorMaxWidth: true,
-            maintainAspectRatio: true,
             resizeUnits: "pixels",
         },
     },

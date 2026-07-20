@@ -32,6 +32,28 @@ describe('MarkdownSourceContext', () => {
         ]);
     });
 
+    it('parses a sized network image without losing its caption or URL', () => {
+        const url = 'https://image.180428.xyz/imagehosting/2026/01/'
+            + '5101737b9bf4cc110ad865f06a38e0ff.png';
+        const source = `![GFL简化模型|500](${url})`;
+
+        const descriptor = getCaptionLinkDescriptors(source)[0];
+
+        expect(descriptor).toMatchObject({
+            source,
+            path: url,
+            context: 'prose',
+            standalone: true,
+            pipeData: {
+                alt: 'GFL简化模型',
+                size: {
+                    width: 500,
+                    format: 'W'
+                }
+            }
+        });
+    });
+
     it('recognizes backtick and tilde ad-* fences case-insensitively', () => {
         expect(parseFenceOpening('```ad-note')?.admonition).toBe(true);
         expect(parseFenceOpening('> ~~~~AD-custom_type options')?.admonition).toBe(true);

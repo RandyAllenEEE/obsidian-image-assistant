@@ -1,5 +1,10 @@
 import { vi } from 'vitest';
 import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
+import {
+  makeJpegBytes,
+  makePngBytes,
+  makeWebpBytes
+} from '../../factories/image';
 
 export function makeBatchSettings(batchLocalOverrides: Record<string, unknown> = {}) {
   const settings = structuredClone(DEFAULT_SETTINGS);
@@ -39,12 +44,21 @@ export function makeBatchPlugin(batchLocalOverrides: Record<string, unknown> = {
 export function makeImageProcessor() {
   return {
     processImageDetailed: vi.fn(async (file: any, format: string) => {
+      const inputExtension = String(file.name ?? '')
+        .split('.')
+        .pop()
+        ?.toLowerCase() || 'png';
       const normalized = format === 'JPEG' ? 'jpg'
-        : format === 'ORIGINAL' ? file.extension
+        : format === 'ORIGINAL' ? inputExtension
           : format.toLowerCase();
       const mimeType = normalized === 'jpg' ? 'image/jpeg' : `image/${normalized}`;
+      const data = normalized === 'jpg' || normalized === 'jpeg'
+        ? makeJpegBytes()
+        : normalized === 'webp'
+          ? makeWebpBytes()
+          : makePngBytes();
       return {
-        data: new ArrayBuffer(4),
+        data,
         mimeType,
         extension: normalized,
         outcome: 'converted'
@@ -63,5 +77,6 @@ export function makeFolderAndFilenameManagement(app: any) {
 }
 
 export function processedPaths(imageProcessor: any): string[] {
-  return imageProcessor.processImageDetailed.mock.calls.map((callArgs: any[]) => callArgs[0].path);
+  return imageProcessor.processImageDetailed.mock.calls
+    .map((callArgs: any[]) => callArgs[0].path ?? callArgs[0].name);
 }

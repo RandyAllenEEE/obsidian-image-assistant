@@ -1,19 +1,25 @@
-import { Editor, EditorPosition } from "obsidian";
+import {
+    Editor,
+    EditorPosition,
+    type MarkdownView,
+    type TFile
+} from "obsidian";
+import {
+    createMappedExistingRangeSession,
+    createMappedInsertionSession,
+    type TrackedEditorRangeOwner,
+    type TrackedEditorRangeSession,
+    type TrackedRangeStatus
+} from "./TrackedEditorRange";
 
-export interface PlaceholderSession {
-    readonly start: EditorPosition;
-    readonly length: number;
-    readonly active: boolean;
-    readonly inserted: boolean;
-    replace(finalText: string): boolean;
-    remove(): boolean;
-}
+export interface PlaceholderSession extends TrackedEditorRangeSession {}
 
 interface SessionState {
     start: EditorPosition;
     readonly text: string;
     active: boolean;
     inserted: boolean;
+    status: TrackedRangeStatus;
 }
 
 const activeSessions = new WeakMap<Editor, Set<SessionState>>();
@@ -81,16 +87,48 @@ function isPositionValid(editor: Editor, position: EditorPosition, label: string
     return true;
 }
 
-export function createPlaceholderSession(editor: Editor, text: string, position?: EditorPosition): PlaceholderSession {
+export function createPlaceholderSession(
+    editor: Editor,
+    text: string,
+    position?: EditorPosition,
+    owner: TrackedEditorRangeOwner = {}
+): PlaceholderSession {
+    const start = clonePosition(position ?? editor.getCursor());
+    const mapped = createMappedInsertionSession(editor, text, start, owner);
+    if (mapped) return mapped;
+    return createFallbackSession(editor, text, start, true);
+}
+
+export function createTrackedRangeSession(
+    editor: Editor,
+    text: string,
+    position: EditorPosition,
+    owner: {
+        readonly view?: MarkdownView | null;
+        readonly file?: TFile | null;
+    } = {}
+): TrackedEditorRangeSession {
+    return createMappedExistingRangeSession(editor, text, position, owner)
+        ?? createFallbackSession(editor, text, position, false);
+}
+
+function createFallbackSession(
+    editor: Editor,
+    text: string,
+    position: EditorPosition,
+    insert: boolean
+): PlaceholderSession {
     const state: SessionState = {
-        start: clonePosition(position ?? editor.getCursor()),
+        start: clonePosition(position),
         text,
         active: false,
         inserted: false,
+        status: "active",
     };
 
-    const invalidate = (): false => {
+    const invalidate = (status: TrackedRangeStatus = "stale"): false => {
         state.active = false;
+        state.status = status;
         activeSessions.get(editor)?.delete(state);
         return false;
     };
@@ -104,7 +142,7 @@ export function createPlaceholderSession(editor: Editor, text: string, position?
         if (!isPositionValid(editor, end, "Placeholder end")) return invalidate();
         if (typeof editor.getRange === "function" && editor.getRange(state.start, end) !== state.text) {
             console.warn("EditorReplacement: Placeholder content changed. Aborting replacement.");
-            return invalidate();
+            return invalidate("modified");
         }
 
         const startOffset = positionToOffset(editor, state.start);
@@ -131,6 +169,7 @@ export function createPlaceholderSession(editor: Editor, text: string, position?
         });
 
         state.active = false;
+        state.status = "completed";
         sessions?.delete(state);
         if (shouldFollowReplacement) {
             editor.setCursor(advancePosition(state.start, replacement));
@@ -139,8 +178,18 @@ export function createPlaceholderSession(editor: Editor, text: string, position?
     };
 
     if (isPositionValid(editor, state.start, "Cursor")) {
-        editor.replaceRange(text, state.start);
-        state.inserted = true;
+        if (insert) {
+            editor.replaceRange(text, state.start);
+            state.inserted = true;
+        } else {
+            const end = getEnd();
+            if (!isPositionValid(editor, end, "Tracked range end")
+                || (typeof editor.getRange === "function"
+                    && editor.getRange(state.start, end) !== text)) {
+                state.status = "stale";
+                return createInactiveFallbackSession(state);
+            }
+        }
         state.active = true;
         let sessions = activeSessions.get(editor);
         if (!sessions) {
@@ -148,7 +197,7 @@ export function createPlaceholderSession(editor: Editor, text: string, position?
             activeSessions.set(editor, sessions);
         }
         sessions.add(state);
-        editor.setCursor(getEnd());
+        if (insert) editor.setCursor(getEnd());
     }
 
     return {
@@ -160,7 +209,10 @@ export function createPlaceholderSession(editor: Editor, text: string, position?
             return state.active;
         },
         get inserted(): boolean {
-            return state.inserted;
+            return insert && state.inserted;
+        },
+        get status(): TrackedRangeStatus {
+            return state.status;
         },
         replace(finalText: string): boolean {
             return apply(finalText);
@@ -168,5 +220,31 @@ export function createPlaceholderSession(editor: Editor, text: string, position?
         remove(): boolean {
             return apply("");
         },
+        release(): boolean {
+            if (!state.active) return false;
+            state.active = false;
+            state.status = "completed";
+            activeSessions.get(editor)?.delete(state);
+            return true;
+        },
+    };
+}
+
+function createInactiveFallbackSession(
+    state: SessionState
+): PlaceholderSession {
+    return {
+        get start(): EditorPosition {
+            return clonePosition(state.start);
+        },
+        length: state.text.length,
+        active: false,
+        inserted: false,
+        get status(): TrackedRangeStatus {
+            return state.status;
+        },
+        replace: () => false,
+        remove: () => false,
+        release: () => false
     };
 }

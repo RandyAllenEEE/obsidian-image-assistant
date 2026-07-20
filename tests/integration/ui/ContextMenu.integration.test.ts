@@ -1,286 +1,660 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { Menu } from 'obsidian';
-import { ContextMenu } from '../../../src/ui/ContextMenu';
-import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
-import { fakeApp, fakeTFile, fakeVault, fakeWorkspace } from '../../factories/obsidian';
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Menu } from "obsidian";
+import { ContextMenuManager } from "../../../src/ui/contextMenu/ContextMenuManager";
+import { IMAGE_ASSISTANT_MENU_SECTION } from "../../../src/ui/contextMenu/shared/MenuSections";
+import { DEFAULT_SETTINGS } from "../../../src/settings/defaults";
+import {
+    fakeApp,
+    fakeTFile,
+    fakeVault,
+    fakeWorkspace
+} from "../../factories/obsidian";
 
-function setupImage(containerClass = 'markdown-preview-view') {
-  document.body.innerHTML = '';
-  const container = document.createElement('div');
-  container.className = containerClass;
-  const img = document.createElement('img');
-  img.src = 'app://vault/imgs/pic.jpg';
-  container.appendChild(img);
-  document.body.appendChild(container);
-  return img;
+function setupImage(mode: "reading" | "editor" = "reading") {
+    document.body.innerHTML = "";
+    const container = document.createElement("div");
+    container.className = mode === "reading"
+        ? "markdown-preview-view"
+        : "markdown-source-view";
+    const wrapper = document.createElement("div");
+    wrapper.className = "image-wrapper";
+    const image = document.createElement("img");
+    image.src = "blob:https://obsidian.local/proxy";
+    wrapper.appendChild(image);
+    container.appendChild(wrapper);
+    document.body.appendChild(container);
+    return { container, image, wrapper };
 }
 
-function setupWrappedImage() {
-  document.body.innerHTML = '';
-  const container = document.createElement('div');
-  container.className = 'markdown-preview-view';
-  const wrapper = document.createElement('div');
-  wrapper.className = 'image-wrapper';
-  const img = document.createElement('img');
-  img.src = 'app://vault/imgs/pic.jpg';
-  wrapper.appendChild(img);
-  container.appendChild(wrapper);
-  document.body.appendChild(container);
-  return { wrapper, img };
-}
-
-function makePlugin(overrides: Record<string, unknown> = {}) {
-  return {
-    settings: structuredClone(DEFAULT_SETTINGS),
-    supportedImageFormats: {
-      isExcalidrawImage: vi.fn(() => false)
-    },
-    imageStateManager: {
-      getImageState: vi.fn(() => null)
-    },
-    ...overrides
-  } as any;
-}
-
-function makeContext(app: any, plugin: any) {
-  const folderAndFilenameManagement = {
-    getImagePath: vi.fn((img: HTMLImageElement) =>
-      (img.getAttribute('src') || '').replace(/^app:\/\/vault\//, '')
-    )
-  };
-  return new ContextMenu(app, plugin, folderAndFilenameManagement as any, {} as any);
-}
-
-describe('ContextMenu integration', () => {
-  let app: any;
-  let note: any;
-  let plugin: any;
-
-  beforeEach(() => {
-    note = fakeTFile({ path: 'notes/n1.md', name: 'n1.md', extension: 'md' });
-    const image = fakeTFile({ path: 'imgs/pic.jpg', name: 'pic.jpg', extension: 'jpg' });
-    app = fakeApp({
-      vault: fakeVault({ files: [note, image] }),
-      workspace: fakeWorkspace({ activeFile: note })
+function makeFixture() {
+    const note = fakeTFile({
+        path: "notes/n1.md",
+        name: "n1.md",
+        extension: "md"
+    });
+    const imageFile = fakeTFile({
+        path: "imgs/pic.jpg",
+        name: "pic.jpg",
+        extension: "jpg"
+    });
+    const editor = {};
+    const view = {
+        file: note,
+        editor,
+        contentEl: document.body,
+        containerEl: document.body,
+        getMode: () => "preview"
+    };
+    const workspace = fakeWorkspace({
+        activeFile: note,
+        activeView: view as any
     }) as any;
-    plugin = makePlugin();
-  });
+    const listeners: Record<string, (...args: any[]) => void> = {};
+    workspace.on = vi.fn((event: string, callback: (...args: any[]) => void) => {
+        listeners[event] = callback;
+        return { detach: vi.fn() };
+    });
+    workspace.getLeavesOfType = vi.fn(() => [{ view }]);
+    const app = fakeApp({
+        vault: fakeVault({ files: [note, imageFile] }),
+        workspace
+    }) as any;
+    const plugin = {
+        settings: structuredClone(DEFAULT_SETTINGS),
+        supportedImageFormats: {
+            isExcalidrawImage: vi.fn(() => false),
+            isSupported: vi.fn((_extension?: string, name?: string) =>
+                /\.(?:png|jpe?g|webp)$/i.test(name ?? "")
+            )
+        },
+        cloudImageHandler: {},
+        historyManager: {
+            isUrlUploaded: vi.fn(() => false),
+            getRecord: vi.fn(),
+            removeRecord: vi.fn()
+        },
+        imageStateManager: {
+            getImageState: vi.fn(() => null),
+            refreshAllImages: vi.fn()
+        },
+        imageCaption: { refreshAllViews: vi.fn() }
+    } as any;
+    const folderManagement = {
+        ensureFolderExists: vi.fn(),
+        safeRenameFile: vi.fn(),
+        sanitizeFilename: (value: string) => value
+    };
+    const manager = new ContextMenuManager(
+        app,
+        plugin,
+        folderManagement as any,
+        { processTemplate: vi.fn(async (value: string) => value) } as any,
+        { open: vi.fn() } as any
+    );
+    const contextMenu = manager.renderedImageMenu;
+    const makeContext = (image: HTMLImageElement) => {
+        const source = "![[imgs/pic.jpg|Caption|center|320]]";
+        const clicked = {
+            view,
+            file: note,
+            editor,
+            match: {
+                line: 0,
+                start: 0,
+                end: source.length,
+                linkText: source,
+                descriptor: { path: imageFile.path, pipeData: null }
+            }
+        };
+        return {
+            image,
+            ownerDocument: image.ownerDocument,
+            ownerWindow: image.ownerDocument.defaultView,
+            renderedSrc: image.src,
+            sourceKind: "local",
+            resolution: "resolved",
+            owner: clicked,
+            viewContext: clicked,
+            descriptor: clicked.match.descriptor,
+            localFile: imageFile,
+            url: null,
+            dataReference: null
+        } as any;
+    };
+    return {
+        app,
+        contextMenu,
+        editor,
+        imageFile,
+        listeners,
+        manager,
+        makeContext,
+        note,
+        plugin,
+        view
+    };
+}
 
-  it('registers a capturing document contextmenu listener on construction', () => {
-    const addSpy = vi.spyOn(document, 'addEventListener');
+function menuTitles(menu: Menu): string[] {
+    return ((menu as any).items as Array<{ title: string }>)
+        .map(item => item.title);
+}
 
-    const ctx = makeContext(app, plugin);
+function submenuTitles(menu: Menu, title: string): string[] {
+    const parent = ((menu as any).items as Array<{
+        getTitle(): string;
+        getItems(): Array<{ getTitle(): string }>;
+    }>).find(item => item.getTitle() === title);
+    return parent?.getItems().map(item => item.getTitle()) ?? [];
+}
 
-    expect(addSpy).toHaveBeenCalledWith('contextmenu', expect.any(Function), true);
-    ctx.onunload();
-  });
+function pluginMenuItems(menu: Menu): Array<{
+    getTitle(): string;
+    getSection(): string;
+    isWarning(): boolean;
+}> {
+    return (menu as any).getItems().filter(
+        (item: { getSection(): string }) =>
+            item.getSection() === IMAGE_ASSISTANT_MENU_SECTION
+    );
+}
 
-  it('shows the menu for images inside markdown views', () => {
-    const img = setupImage();
-    const ctx = makeContext(app, plugin);
-    const createSpy = vi.spyOn(ctx, 'createContextMenuItems').mockReturnValue(true);
-    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
-
-    img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-
-    expect(createSpy).toHaveBeenCalledWith(expect.any(Menu), img, note, expect.any(MouseEvent));
-    expect(showSpy).toHaveBeenCalled();
-    ctx.onunload();
-  });
-
-  it('uses the image inside a supported wrapper when the wrapper receives the contextmenu event', () => {
-    const { wrapper, img } = setupWrappedImage();
-    const ctx = makeContext(app, plugin);
-    const createSpy = vi.spyOn(ctx, 'createContextMenuItems').mockReturnValue(true);
-    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
-
-    wrapper.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-
-    expect(createSpy).toHaveBeenCalledWith(expect.any(Menu), img, note, expect.any(MouseEvent));
-    expect(showSpy).toHaveBeenCalled();
-    ctx.onunload();
-  });
-
-  it('does not open the menu when another handler already prevented the contextmenu event', () => {
-    const img = setupImage();
-    const ctx = makeContext(app, plugin);
-    const createSpy = vi.spyOn(ctx, 'createContextMenuItems').mockReturnValue(true);
-    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
-    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
-    event.preventDefault();
-
-    img.dispatchEvent(event);
-
-    expect(createSpy).not.toHaveBeenCalled();
-    expect(showSpy).not.toHaveBeenCalled();
-    ctx.onunload();
-  });
-
-  it('registers context menu listeners for popout window documents', () => {
-    const listeners: Record<string, Function> = {};
-    app.workspace.on = vi.fn((event: string, callback: Function) => {
-      listeners[event] = callback;
-      return { detach: vi.fn() };
+describe("ContextMenu integration", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        vi.clearAllMocks();
+        vi.useRealTimers();
     });
 
-    const popoutDocument = document.implementation.createHTMLDocument('popout');
-    const container = popoutDocument.createElement('div');
-    container.className = 'markdown-preview-view';
-    const img = popoutDocument.createElement('img');
-    img.src = 'app://vault/imgs/pic.jpg';
-    container.appendChild(img);
-    popoutDocument.body.appendChild(container);
+    it("captures context without preventing the official or browser menu", async () => {
+        vi.useFakeTimers();
+        const addSpy = vi.spyOn(window, "addEventListener");
+        const fixture = makeFixture();
+        const { image } = setupImage("reading");
+        vi.spyOn((fixture.contextMenu as any).imageResolver, "resolve")
+            .mockReturnValue(fixture.makeContext(image));
+        const event = new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        });
+        const stop = vi.spyOn(event, "stopPropagation");
+        const show = vi.spyOn(Menu.prototype, "showAtMouseEvent")
+            .mockImplementation(function (this: Menu) {
+                return this;
+            });
 
-    const ctx = makeContext(app, plugin);
-    const createSpy = vi.spyOn(ctx, 'createContextMenuItems').mockReturnValue(true);
-    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
+        image.dispatchEvent(event);
 
-    listeners['window-open']?.(null, { document: popoutDocument });
-    img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+        expect(addSpy).toHaveBeenCalledWith(
+            "pointerdown",
+            expect.any(Function),
+            true
+        );
+        expect(addSpy).toHaveBeenCalledWith(
+            "contextmenu",
+            expect.any(Function),
+            true
+        );
+        expect(event.defaultPrevented).toBe(false);
+        expect(stop).not.toHaveBeenCalled();
+        expect(show).not.toHaveBeenCalled();
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(1);
+        await vi.advanceTimersByTimeAsync(1500);
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(0);
+        fixture.manager.unload();
+    });
 
-    expect(createSpy).toHaveBeenCalledWith(expect.any(Menu), img, note, expect.any(MouseEvent));
-    expect(showSpy).toHaveBeenCalled();
+    it("uses a right-button pointer seed when contextmenu never reaches the plugin", () => {
+        const fixture = makeFixture();
+        const { image } = setupImage("editor");
+        const sourceUrl =
+            "https://image.180428.xyz/imagehosting/2026/01/"
+            + "5101737b9bf4cc110ad865f06a38e0ff.png";
+        const source = `![GFL简化模型|500](${sourceUrl})`;
+        const clicked = {
+            view: fixture.view,
+            file: fixture.note,
+            editor: fixture.editor,
+            match: {
+                line: 0,
+                start: 0,
+                end: source.length,
+                linkText: source,
+                descriptor: { path: sourceUrl, pipeData: null }
+            }
+        };
+        const context = {
+            ...fixture.makeContext(image),
+            sourceKind: "url",
+            renderedSrc: "blob:https://obsidian.local/proxy",
+            owner: clicked,
+            viewContext: clicked,
+            descriptor: clicked.match.descriptor,
+            localFile: null,
+            url: sourceUrl
+        } as any;
+        const resolver = (fixture.contextMenu as any).imageResolver;
+        vi.spyOn(resolver, "resolve").mockReturnValue(context);
+        vi.spyOn(resolver, "resolveForOfficialMenu").mockReturnValue(context);
+        const pointerEvent = new MouseEvent("pointerdown", {
+            bubbles: true,
+            cancelable: true,
+            button: 2
+        });
+        const stop = vi.spyOn(pointerEvent, "stopPropagation");
 
-    createSpy.mockClear();
-    listeners['window-close']?.(null, { document: popoutDocument });
-    img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+        image.dispatchEvent(pointerEvent);
+        const menu = new Menu();
+        menu.addItem(item => item
+            .setTitle("Copy image")
+            .setSection("action"));
+        fixture.listeners["url-menu"]?.(menu, sourceUrl);
 
-    expect(createSpy).not.toHaveBeenCalled();
-    expect((ctx as any).contextMenuDocumentScopes.has(popoutDocument)).toBe(false);
-    ctx.onunload();
-  });
+        expect(pointerEvent.defaultPrevented).toBe(false);
+        expect(stop).not.toHaveBeenCalled();
+        expect(pluginMenuItems(menu).map(item => item.getTitle())).toEqual([
+            "Edit image properties…",
+            "Download locally…",
+            "Delete reference or source…",
+            "More image actions..."
+        ]);
+        fixture.manager.unload();
+    });
 
-  it('does not show the menu for unsupported targets or views', () => {
-    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
+    it("extends the direct Live Preview image menu created by Menu.forEvent", () => {
+        const fixture = makeFixture();
+        const { image, wrapper } = setupImage("editor");
+        const sourceUrl =
+            "https://image.180428.xyz/imagehosting/2026/01/"
+            + "5101737b9bf4cc110ad865f06a38e0ff.png";
+        const source = `![GFL简化模型|500](${sourceUrl})`;
+        const clicked = {
+            view: fixture.view,
+            file: fixture.note,
+            editor: fixture.editor,
+            match: {
+                line: 0,
+                start: 0,
+                end: source.length,
+                linkText: source,
+                descriptor: { path: sourceUrl, pipeData: null }
+            }
+        };
+        const context = {
+            ...fixture.makeContext(image),
+            sourceKind: "url",
+            renderedSrc: sourceUrl,
+            owner: clicked,
+            viewContext: clicked,
+            descriptor: clicked.match.descriptor,
+            localFile: null,
+            url: sourceUrl
+        } as any;
+        const resolver = (fixture.contextMenu as any).imageResolver;
+        vi.spyOn(resolver, "resolve").mockReturnValue(context);
+        vi.spyOn(resolver, "resolveForOfficialMenu").mockReturnValue(context);
+        let nativeMenu: Menu | null = null;
 
-    const plainDiv = document.createElement('div');
-    document.body.appendChild(plainDiv);
-    const nonImageCtx = makeContext(app, plugin);
-    plainDiv.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-    expect(showSpy).not.toHaveBeenCalled();
-    nonImageCtx.onunload();
+        wrapper.addEventListener("contextmenu", event => {
+            nativeMenu = Menu.forEvent(event);
+            nativeMenu.addItem(item => item
+                .setTitle("Copy image")
+                .setSection("image"));
+            nativeMenu.addItem(item => item
+                .setTitle("Reset size")
+                .setSection("image"));
+        });
 
-    const outsideImg = setupImage('not-a-markdown-view');
-    const outsideCtx = makeContext(app, plugin);
-    outsideImg.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-    expect(showSpy).not.toHaveBeenCalled();
-    outsideCtx.onunload();
+        image.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        }));
 
-    const canvasImg = setupImage();
-    app.workspace.getActiveViewOfType = vi.fn(() => ({ getViewType: () => 'canvas' }));
-    const canvasCtx = makeContext(app, plugin);
-    canvasImg.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-    expect(showSpy).not.toHaveBeenCalled();
-    canvasCtx.onunload();
-  });
+        expect(nativeMenu).not.toBeNull();
+        expect(menuTitles(nativeMenu!)).toEqual([
+            "Edit image properties…",
+            "Download locally…",
+            "Delete reference or source…",
+            "More image actions...",
+            "Copy image",
+            "Reset size"
+        ]);
+        expect(pluginMenuItems(nativeMenu!).map(item => item.getTitle()))
+            .toEqual([
+                "Edit image properties…",
+                "Download locally…",
+                "Delete reference or source…",
+                "More image actions..."
+            ]);
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(0);
+        fixture.manager.unload();
+    });
 
-  it('skips Excalidraw images', () => {
-    const img = setupImage();
-    plugin.supportedImageFormats.isExcalidrawImage = vi.fn(() => true);
-    const ctx = makeContext(app, plugin);
-    const showSpy = vi.spyOn(Menu.prototype as any, 'showAtMouseEvent').mockImplementation(() => {});
+    it("restores Menu.forEvent when the context menu manager unloads", () => {
+        const before = Menu.forEvent;
+        const fixture = makeFixture();
 
-    img.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+        expect(Menu.forEvent).not.toBe(before);
 
-    expect(showSpy).not.toHaveBeenCalled();
-    ctx.onunload();
-  });
+        fixture.manager.unload();
 
-  it('removes the registered document listener on unload', () => {
-    const removeSpy = vi.spyOn(document, 'removeEventListener');
-    const ctx = makeContext(app, plugin);
+        expect(Menu.forEvent).toBe(before);
+    });
 
-    ctx.onunload();
+    it("resolves a caption sibling back to its single image on pointerdown", () => {
+        const fixture = makeFixture();
+        const { container, image } = setupImage("editor");
+        image.setAttribute("data-image-assistant-layout-key", "url:0");
+        const caption = container.createSpan({
+            cls: "image-assistant-live-preview-caption"
+        });
+        caption.setAttribute("data-image-assistant-layout-key", "url:0");
+        const resolve = vi.spyOn(
+            (fixture.contextMenu as any).imageResolver,
+            "resolve"
+        ).mockReturnValue(fixture.makeContext(image));
 
-    expect(removeSpy).toHaveBeenCalledWith('contextmenu', expect.any(Function), true);
-  });
+        caption.dispatchEvent(new MouseEvent("pointerdown", {
+            bubbles: true,
+            cancelable: true,
+            button: 2
+        }));
 
-  it('delegates process and annotation menu items to the processing handler', () => {
-    const img = setupImage();
-    const ctx = makeContext(app, plugin);
-    const processImage = vi.fn();
-    const annotateImage = vi.fn();
-    (ctx as any).processingHandler = { processImage, annotateImage, cropRotateFlip: vi.fn() };
+        expect(resolve).toHaveBeenCalledWith(image);
+        fixture.manager.unload();
+    });
 
-    const menu = new Menu();
-    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
-    ctx.addProcessImageMenuItem(menu, img, event);
-    ctx.addAnnotateImageMenuItem(menu, img);
-    menu.showAtMouseEvent(event);
+    it("appends to the official editor menu and preserves existing items", async () => {
+        vi.useFakeTimers();
+        const fixture = makeFixture();
+        const { image } = setupImage("editor");
+        const context = fixture.makeContext(image);
+        const resolver = (fixture.contextMenu as any).imageResolver;
+        vi.spyOn(resolver, "resolve").mockReturnValue(context);
+        vi.spyOn(resolver, "resolveForOfficialMenu").mockReturnValue(context);
+        const event = new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        });
+        const fallback = vi.spyOn(Menu.prototype, "showAtMouseEvent")
+            .mockImplementation(function (this: Menu) {
+                return this;
+            });
+        image.dispatchEvent(event);
 
-    expect(processImage).toHaveBeenCalledWith(img);
-    expect(annotateImage).toHaveBeenCalledWith(img);
-    ctx.onunload();
-  });
+        const menu = new Menu();
+        menu.addItem(item => item.setTitle("Other plugin action"));
+        const info = { file: fixture.note, editor: fixture.editor };
+        fixture.listeners["editor-menu"]?.(menu, fixture.editor, info);
+        fixture.listeners["editor-menu"]?.(menu, fixture.editor, info);
 
-  it('delegates clipboard and delete menu items with the resolved image', () => {
-    const { wrapper, img } = setupWrappedImage();
-    const ctx = makeContext(app, plugin);
-    const cutImageAndLink = vi.fn();
-    const copyImage = vi.fn();
-    const copyImageAsBase64 = vi.fn();
-    const deleteImageAndLink = vi.fn();
-    (ctx as any).clipboardHandler = { cutImageAndLink, copyImage, copyImageAsBase64, onunload: vi.fn() };
-    (ctx as any).deleteHandler = { deleteImageAndLink };
+        const titles = menuTitles(menu);
+        expect(titles).toContain("Other plugin action");
+        expect(titles.filter(title => title === "More image actions..."))
+            .toHaveLength(1);
+        expect(submenuTitles(menu, "More image actions..."))
+            .toContain("Convert/compress...");
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(0);
+        await vi.runAllTimersAsync();
+        expect(fallback).not.toHaveBeenCalled();
+        fixture.manager.unload();
+    });
 
-    const menu = new Menu();
-    const event = { target: wrapper } as unknown as MouseEvent;
-    ctx.addCutImageMenuItem(menu, img, event);
-    ctx.addCopyImageMenuItem(menu, img, event);
-    ctx.addCopyBase64ImageMenuItem(menu, img, event);
-    ctx.addDeleteImageAndLinkMenuItem(menu, img, event);
-    menu.showAtMouseEvent(event);
+    it("keeps resolved URL transfer and deletion actions at the compact top level", () => {
+        const fixture = makeFixture();
+        const { image } = setupImage("reading");
+        const context = {
+            ...fixture.makeContext(image),
+            sourceKind: "url",
+            renderedSrc: "blob:https://obsidian.local/proxy",
+            descriptor: {
+                path: "https://cdn.example.com/image?id=42"
+            },
+            localFile: null,
+            url: "https://cdn.example.com/image?id=42"
+        } as any;
+        const menu = new Menu();
 
-    expect(cutImageAndLink).toHaveBeenCalledWith(event, img);
-    expect(copyImage).toHaveBeenCalledWith(event, img);
-    expect(copyImageAsBase64).toHaveBeenCalledWith(event, img);
-    expect(deleteImageAndLink).toHaveBeenCalledWith(event, img);
-    ctx.onunload();
-  });
+        fixture.contextMenu.createContextMenuItems(menu, context);
 
-  it('applies rename and caption changes only once while the confirmation is running', async () => {
-    const img = setupImage();
-    const ctx = makeContext(app, plugin);
-    const confirmButton = document.createElement('button');
-    const input = () => document.createElement('input');
-    let finishRename!: () => void;
-    const handleRenameAndMove = vi.fn(() => new Promise<void>(resolve => { finishRename = resolve; }));
-    const handleDimensionsAndCaptionUpdate = vi.fn(async () => undefined);
-    (ctx as any).renameHandler = { handleRenameAndMove, handleDimensionsAndCaptionUpdate };
-    (ctx as any).renameInputBuilder = {
-      buildInputs: vi.fn(() => ({
-        confirmButton,
-        isImageResolvable: true,
-        nameInput: input(),
-        pathInput: input(),
-        captionInput: input(),
-        widthInput: input(),
-        heightInput: input(),
-        getAlignment: () => 'center',
-        fileNameWithoutExt: 'pic',
-        fileExtension: '.jpg',
-        obsidianVaultPathForRename: 'imgs/pic.jpg',
-        file: fakeTFile({ path: 'imgs/pic.jpg', extension: 'jpg' })
-      })),
-      onunload: vi.fn()
-    };
+        expect(menuTitles(menu)).toEqual([
+            "Edit image properties…",
+            "Download locally…",
+            "Delete reference or source…",
+            "More image actions..."
+        ]);
+        expect(submenuTitles(menu, "More image actions..."))
+            .toEqual(["Open in new window", "Cut"]);
+        expect(pluginMenuItems(menu).map(item => item.getTitle())).toEqual(
+            menuTitles(menu)
+        );
+        expect(pluginMenuItems(menu).find(
+            item => item.getTitle() === "Delete reference or source…"
+        )?.isWarning()).toBe(true);
+        fixture.manager.unload();
+    });
 
-    ctx.createContextMenuItems(
-      new Menu(),
-      img,
-      note,
-      new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
-    );
-    confirmButton.dispatchEvent(new MouseEvent('click'));
-    confirmButton.dispatchEvent(new MouseEvent('click'));
+    it("uses the official URL event to expose safe actions for a Blob proxy", () => {
+        const fixture = makeFixture();
+        const { image } = setupImage("reading");
+        const initial = {
+            ...fixture.makeContext(image),
+            sourceKind: "blob",
+            resolution: "pending",
+            viewContext: null,
+            descriptor: null,
+            localFile: null,
+            url: null
+        } as any;
+        const pendingUrl = {
+            ...initial,
+            sourceKind: "url",
+            url: "https://cdn.example.com/dynamic?id=42"
+        } as any;
+        const resolver = (fixture.contextMenu as any).imageResolver;
+        vi.spyOn(resolver, "resolve").mockReturnValue(initial);
+        const enhance = vi.spyOn(resolver, "resolveForOfficialMenu")
+            .mockReturnValue(pendingUrl);
 
-    expect(handleRenameAndMove).toHaveBeenCalledOnce();
-    expect(handleDimensionsAndCaptionUpdate).not.toHaveBeenCalled();
-    expect(confirmButton.disabled).toBe(true);
+        image.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        }));
+        const menu = new Menu();
+        menu.addItem(item => item
+            .setTitle("Copy image")
+            .setSection("action"));
+        fixture.listeners["url-menu"]?.(
+            menu,
+            "https://cdn.example.com/dynamic?id=42"
+        );
 
-    finishRename();
-    await vi.waitFor(() => expect(handleDimensionsAndCaptionUpdate).toHaveBeenCalledOnce());
-    expect(confirmButton.disabled).toBe(false);
-    ctx.onunload();
-  });
+        expect(enhance).toHaveBeenCalledWith(
+            image,
+            {
+                kind: "url",
+                url: "https://cdn.example.com/dynamic?id=42"
+            },
+            initial
+        );
+        expect(menuTitles(menu)).toEqual([
+            "Copy image",
+            "Download locally…",
+            "More image actions..."
+        ]);
+        expect(pluginMenuItems(menu).map(item => item.getTitle())).toEqual([
+            "Download locally…",
+            "More image actions..."
+        ]);
+        expect(submenuTitles(menu, "More image actions..."))
+            .toEqual(["Open in new window"]);
+        fixture.manager.unload();
+    });
+
+    it("does not let an unrelated URL event consume a local image context", () => {
+        const fixture = makeFixture();
+        const { image } = setupImage("reading");
+        const local = fixture.makeContext(image);
+        const resolver = (fixture.contextMenu as any).imageResolver;
+        vi.spyOn(resolver, "resolve").mockReturnValue(local);
+        const enhance = vi.spyOn(resolver, "resolveForOfficialMenu");
+
+        image.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        }));
+        const menu = new Menu();
+        fixture.listeners["url-menu"]?.(
+            menu,
+            "https://example.com/unrelated"
+        );
+
+        expect(enhance).not.toHaveBeenCalled();
+        expect(pluginMenuItems(menu)).toHaveLength(0);
+        fixture.manager.unload();
+    });
+
+    it("invalidates an image context when a newer non-image right-click occurs", () => {
+        vi.useFakeTimers();
+        const fixture = makeFixture();
+        const { image } = setupImage("reading");
+        vi.spyOn((fixture.contextMenu as any).imageResolver, "resolve")
+            .mockReturnValue(fixture.makeContext(image));
+
+        image.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        }));
+        document.body.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        }));
+        const menu = new Menu();
+        fixture.listeners["file-menu"]?.(menu, fixture.note);
+
+        expect(menuTitles(menu)).not.toContain("Convert/compress...");
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(0);
+        fixture.manager.unload();
+    });
+
+    it("uses the image inside a supported wrapper as the resolver target", async () => {
+        vi.useFakeTimers();
+        const fixture = makeFixture();
+        const { image, wrapper } = setupImage("reading");
+        const resolve = vi.spyOn(
+            (fixture.contextMenu as any).imageResolver,
+            "resolve"
+        ).mockReturnValue(fixture.makeContext(image));
+        const show = vi.spyOn(Menu.prototype, "showAtMouseEvent")
+            .mockImplementation(function (this: Menu) {
+                return this;
+            });
+
+        wrapper.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        }));
+        await vi.runAllTimersAsync();
+
+        expect(resolve).toHaveBeenCalledWith(image);
+        expect(show).not.toHaveBeenCalled();
+        fixture.manager.unload();
+    });
+
+    it("still records reliable image context after Obsidian prevents the browser menu", async () => {
+        vi.useFakeTimers();
+        const fixture = makeFixture();
+        const { image } = setupImage("reading");
+        const resolve = vi.spyOn(
+            (fixture.contextMenu as any).imageResolver,
+            "resolve"
+        ).mockReturnValue(fixture.makeContext(image));
+        const show = vi.spyOn(Menu.prototype, "showAtMouseEvent")
+            .mockImplementation(function (this: Menu) {
+                return this;
+            });
+        const event = new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        });
+        event.preventDefault();
+
+        image.dispatchEvent(event);
+        expect(resolve).toHaveBeenCalledWith(image);
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(1);
+        await vi.runAllTimersAsync();
+
+        expect(show).not.toHaveBeenCalled();
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(0);
+        fixture.manager.unload();
+    });
+
+    it("keeps popout document listeners scoped to that window", async () => {
+        vi.useFakeTimers();
+        const fixture = makeFixture();
+        const popoutDocument = document.implementation.createHTMLDocument(
+            "popout"
+        );
+        const container = popoutDocument.createElement("div");
+        container.className = "markdown-preview-view";
+        const image = popoutDocument.createElement("img");
+        image.src = "https://example.com/photo.png";
+        container.appendChild(image);
+        popoutDocument.body.appendChild(container);
+        const resolver = (fixture.contextMenu as any).imageResolver;
+        const context = fixture.makeContext(image);
+        const resolve = vi.spyOn(resolver, "resolve")
+            .mockReturnValue(context);
+        vi.spyOn(resolver, "resolveForOfficialMenu")
+            .mockReturnValue(context);
+        fixture.listeners["window-open"]?.(null, {
+            document: popoutDocument
+        });
+        image.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        }));
+        const firstMenu = new Menu();
+        fixture.listeners["file-menu"]?.(firstMenu, fixture.imageFile);
+        expect(menuTitles(firstMenu)).toContain("More image actions...");
+
+        fixture.listeners["window-close"]?.(null, {
+            document: popoutDocument
+        });
+        image.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        }));
+        expect(resolve).toHaveBeenCalledOnce();
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(0);
+        const secondMenu = new Menu();
+        fixture.listeners["file-menu"]?.(secondMenu, fixture.imageFile);
+        expect(menuTitles(secondMenu)).not.toContain("Convert/compress...");
+        expect((fixture.contextMenu as any).documentScopes.has(popoutDocument))
+            .toBe(false);
+        fixture.manager.unload();
+    });
+
+    it("renders only capability-approved actions for unresolved images", () => {
+        const fixture = makeFixture();
+        const { image } = setupImage("reading");
+        const context = {
+            ...fixture.makeContext(image),
+            sourceKind: "unresolved",
+            resolution: "unresolved",
+            owner: null,
+            viewContext: null,
+            descriptor: null,
+            localFile: null
+        } as any;
+        const menu = new Menu();
+
+        fixture.contextMenu.createContextMenuItems(menu, context);
+
+        expect(menuTitles(menu)).toEqual(["More image actions..."]);
+        expect((fixture.contextMenu as any).menuScopes.size).toBe(1);
+        menu.hide();
+        expect((fixture.contextMenu as any).menuScopes.size).toBe(0);
+        fixture.manager.unload();
+    });
 });

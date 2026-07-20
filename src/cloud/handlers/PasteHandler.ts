@@ -1,4 +1,4 @@
-import { App, Editor, Notice, MarkdownView, EditorPosition } from "obsidian";
+import { App, Editor, Notice, EditorPosition } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { UploaderManager } from "../uploader/index";
 import { CloudLinkFormatter } from "../CloudLinkFormatter";
@@ -10,6 +10,9 @@ import { isHttpUrl } from "../../utils/NetworkPolicy";
 import { getErrorMessage } from "../../utils/ErrorUtils";
 
 import { BasePasteHandler } from "../../core/BasePasteHandler";
+import type { EditorImageInsertionContext } from "../../core/EditorImageInsertionContext";
+import { createTrackedRangeSession } from "../../utils/EditorReplacement";
+import { ImageLinkPathReplacer } from "../../utils/ImageLinkPathReplacer";
 
 export class PasteHandler extends BasePasteHandler {
     private helpers: CloudResourceHelpers;
@@ -22,7 +25,11 @@ export class PasteHandler extends BasePasteHandler {
         this.helpers = new CloudResourceHelpers(plugin);
     }
 
-    async handlePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
+    async handlePaste(
+        evt: ClipboardEvent,
+        editor: Editor,
+        context?: EditorImageInsertionContext
+    ): Promise<void> {
         if (evt.defaultPrevented) return;
         if (!evt.clipboardData) return;
 
@@ -37,68 +44,83 @@ export class PasteHandler extends BasePasteHandler {
                 return;
             }
 
-            if (!this.canProcessFiles()) return;
+            if (!this.canProcessFiles(context)) return;
             evt.preventDefault();
-            await this.processFiles(supportedFiles, editor);
+            await this.processFiles(supportedFiles, editor, context);
             return;
         }
 
-        await this.handleNonFilePaste(evt, editor);
+        await this.handleNonFilePaste(evt, editor, context);
     }
 
     // override to handle text paste
-    protected async handleNonFilePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
+    protected async handleNonFilePaste(
+        evt: ClipboardEvent,
+        editor: Editor,
+        context?: EditorImageInsertionContext
+    ): Promise<void> {
         if (!evt.clipboardData) return;
         const clipboardText = evt.clipboardData.getData('text/plain');
         if (clipboardText) {
-            await this.handlePasteText(clipboardText, editor, editor.getCursor(), evt);
+            if (!context) return;
+            await this.handlePasteText(
+                clipboardText,
+                editor,
+                editor.getCursor(),
+                evt,
+                context
+            );
         }
     }
 
-    public async processFiles(files: File[], editor: Editor): Promise<void> {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) {
-            new Notice(t("MSG_NO_ACTIVE_FILE") || 'No active file detected.');
-            return;
-        }
-        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!activeView) {
-            new Notice(t("MSG_NO_ACTIVE_VIEW") || 'No active Markdown view detected.');
-            return;
-        }
-
+    public async processFiles(
+        files: File[],
+        editor: Editor,
+        context?: EditorImageInsertionContext
+    ): Promise<void> {
+        if (!context) return;
         for (const file of files) {
             // Insert uploading placeholder using EditorContentInserter
-            const inserter = new EditorContentInserter(activeView);
-            inserter.insertLoadingText(`${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`);
+            const inserter = new EditorContentInserter(
+                context.view ?? context.editor,
+                context.file
+            );
 
             try {
-                const uploaderManager = new UploaderManager(
-                    this.plugin.settings.pasteHandling.cloud.uploader,
-                    this.plugin
+                await inserter.runWithLoadingText(
+                    `${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`,
+                    async session => {
+                        const uploaderManager = new UploaderManager(
+                            this.plugin.settings.pasteHandling.cloud.uploader,
+                            this.plugin
+                        );
+
+                        const dataTransfer = new DataTransfer();
+                        dataTransfer.items.add(file);
+                        const uploadResult = await uploaderManager.uploadByClipboard(
+                            dataTransfer.files
+                        );
+                        if (!uploadResult.success || uploadResult.result.length === 0) {
+                            throw new Error(
+                                uploadResult.msg
+                                    || t("REFERENCE_WORKFLOW_UPLOAD_NO_URL")
+                            );
+                        }
+
+                        const cloudUrl = uploadResult.result[0];
+                        const cloudLink = CloudLinkFormatter.formatCloudLink(
+                            cloudUrl,
+                            this.plugin.settings.pasteHandling.cloud
+                        );
+                        if (!session.insertResponseToEditor(cloudLink)) {
+                            throw new Error(t("MSG_IMAGE_CONTEXT_UNRESOLVED"));
+                        }
+                    }
                 );
-
-                const dataTransfer = new DataTransfer();
-                dataTransfer.items.add(file);
-                const fileList = dataTransfer.files;
-
-                const uploadResult = await uploaderManager.uploadByClipboard(fileList);
-                if (uploadResult.success && uploadResult.result.length > 0) {
-                    const cloudUrl = uploadResult.result[0];
-                    const cloudLink = CloudLinkFormatter.formatCloudLink(
-                        cloudUrl,
-                        this.plugin.settings.pasteHandling.cloud
-                    );
-
-                    inserter.insertResponseToEditor(cloudLink);
-                    new Notice(t("MODAL_UPLOAD_SUCCESS") || 'Image uploaded successfully!');
-                } else {
-                    throw new Error("Upload failed (no URL returned)");
-                }
+                new Notice(t("MODAL_UPLOAD_SUCCESS"));
             } catch (error) {
                 console.error('[Cloud Upload] Upload failed:', error);
-                new Notice(`${t("MODAL_UPLOAD_FAILED") || "Upload failed"}: ${getErrorMessage(error)}`);
-                inserter.removeLoadingText();
+                new Notice(`${t("MODAL_UPLOAD_FAILED")}: ${getErrorMessage(error)}`);
             }
         }
 
@@ -110,8 +132,9 @@ export class PasteHandler extends BasePasteHandler {
     public async handlePasteText(
         clipboardText: string,
         editor: Editor,
-        cursor: EditorPosition,
-        evt: ClipboardEvent
+        _cursor: EditorPosition,
+        evt: ClipboardEvent,
+        context?: EditorImageInsertionContext
     ) {
         if (evt.defaultPrevented) return;
         if (this.plugin.settings.pasteHandling.cloud.remoteServerMode) {
@@ -132,32 +155,65 @@ export class PasteHandler extends BasePasteHandler {
 
         if (networkLinks.length === 0) return;
 
+        if (!context) return;
         evt.preventDefault();
-
-        let newContent = clipboardText;
+        const selectionStart = editor.getCursor("from");
+        const selectionEnd = editor.getCursor("to");
+        const insertionOffset = editor.posToOffset(selectionStart);
+        editor.replaceRange(clipboardText, selectionStart, selectionEnd);
+        editor.setCursor(
+            editor.offsetToPos(insertionOffset + clipboardText.length)
+        );
+        const sessions = networkLinks.map(link => ({
+            link,
+            session: createTrackedRangeSession(
+                editor,
+                link.source,
+                editor.offsetToPos(insertionOffset + link.index),
+                { view: context.view, file: context.file }
+            )
+        }));
         const uploaderManager = new UploaderManager(
             this.plugin.settings.pasteHandling.cloud.uploader,
             this.plugin
         );
+        let replaced = 0;
+        let failed = 0;
+        let stale = 0;
 
         // Process all network image links (both markdown and wiki format)
-        for (const link of networkLinks) {
+        for (const { link, session } of sessions) {
             const originalLink = link.source;
             const imageUrl = link.path;
             try {
                 const uploadResult = await uploaderManager.upload([imageUrl]);
                 if (uploadResult.success && uploadResult.result.length > 0) {
                     const cloudUrl = uploadResult.result[0];
-                    const cloudLink = CloudLinkFormatter.formatCloudLink(
-                        cloudUrl,
-                        this.plugin.settings.pasteHandling.cloud,
-                        originalLink
+                    const cloudLink = ImageLinkPathReplacer.replacePath(
+                        originalLink,
+                        cloudUrl
                     );
-                    newContent = newContent.replace(originalLink, cloudLink);
+                    if (session.replace(cloudLink)) {
+                        replaced++;
+                    } else {
+                        stale++;
+                    }
+                } else {
+                    failed++;
+                    session.release();
                 }
-            } catch (e) { console.error(e); }
+            } catch (error) {
+                console.error(error);
+                failed++;
+                session.release();
+            }
         }
-
-        editor.replaceRange(newContent, cursor);
+        if (failed > 0 || stale > 0) {
+            new Notice(t("MSG_CLOUD_TEXT_PASTE_PARTIAL", [
+                replaced,
+                failed,
+                stale
+            ]));
+        }
     }
 }

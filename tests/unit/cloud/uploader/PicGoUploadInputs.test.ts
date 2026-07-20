@@ -16,7 +16,30 @@ function createUploader(data: ArrayBuffer = onePixelPng()) {
         },
         historyManager: { addRecord: vi.fn() },
     } as any;
-    return { uploader: new PicGoUploader(plugin), file, readBinary, data };
+    const imageFetcher = {
+        fetch: vi.fn(async (url: string) => {
+            const response = await requestUrl({ url, method: "GET" });
+            const contentLength = response.headers?.["content-length"];
+            if (contentLength && Number(contentLength) > 100 * 1024 * 1024) {
+                throw new Error("Remote image exceeds the 100 MiB limit");
+            }
+            return {
+                data: response.arrayBuffer,
+                status: response.status,
+                headers: response.headers ?? {},
+                finalUrl: url,
+                transport: "electron",
+                redirectChainVerified: true,
+                hardLimitEnforced: true
+            };
+        })
+    };
+    return {
+        uploader: new PicGoUploader(plugin, imageFetcher as any),
+        file,
+        readBinary,
+        data
+    };
 }
 
 function onePixelPng(): ArrayBuffer {

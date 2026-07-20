@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-image-assistant",
-	"version": "5.0.0",
+	"version": "5.1.0",
 	"description": "Convert, compress, resize, annotate, upload, download, caption, and OCR images directly in Obsidian.",
 	"main": "main.js",
 	"scripts": {
@@ -16,7 +16,8 @@
 		"test:coverage": "vitest run --coverage",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"typecheck:test": "tsc -p tsconfig.test.json --noEmit",
-		"check:scripts": "node --check scripts/obsidian-runtime-smoke.js && node --check scripts/verify-release-metadata.js && node --check scripts/prepare-release.js",
+		"check:scripts": "node --check scripts/obsidian-runtime-smoke.js && node --check scripts/verify-release-metadata.js && node --check scripts/prepare-release.js && node --check scripts/deploy-local.js",
+		"deploy:local": "npm run build && node scripts/deploy-local.js",
 		"smoke:obsidian": "node scripts/obsidian-runtime-smoke.js",
 		"verify:release": "node scripts/verify-release-metadata.js",
 		"check": "npm run lint && npm run typecheck && npm run typecheck:test && npm run check:scripts && npm run test:coverage && npm run build && npm run verify:release -- --build && npm audit --omit=optional"

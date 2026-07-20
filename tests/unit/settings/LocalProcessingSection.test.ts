@@ -69,9 +69,17 @@ describe("LocalProcessingSection", () => {
 
         const tabs = container.querySelectorAll<HTMLElement>(".image-converter-tab");
         expect(tabs).toHaveLength(5);
+        expect(tabs[4].textContent).toContain("Initial embed size");
         tabs[2].click();
         expect(setActiveTab).toHaveBeenCalledWith("conversion");
         expect(refreshDisplay).toHaveBeenCalledOnce();
+    });
+
+    it("labels embed sizing as an insertion-time default, separate from interactive resize", () => {
+        const container = render(makePlugin(), "resize");
+
+        expect(container.textContent).toContain("Initial size for new images");
+        expect(container.textContent).toContain("does not control drag or scroll resizing");
     });
 
     it("renders and updates folder and filename settings", async () => {

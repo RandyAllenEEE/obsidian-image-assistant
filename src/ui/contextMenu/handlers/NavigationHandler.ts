@@ -1,6 +1,6 @@
 import { App, Notice, TFile } from 'obsidian';
 import { t } from '../../../lang/helpers';
-import { FolderAndFilenameManagement } from '../../../local/FolderAndFilenameManagement';
+import type { ImageContextMenuContext } from '../types';
 
 interface FileExplorerView {
     revealInFolder?: (file: TFile) => void | Promise<void>;
@@ -10,21 +10,16 @@ interface FileExplorerView {
  * Handles navigation operations (show in navigation/explorer)
  */
 export class NavigationHandler {
-    constructor(
-        private app: App,
-        private folderManagement: FolderAndFilenameManagement
-    ) { }
+    constructor(private app: App) { }
 
     /**
      * Shows the image file in the navigation pane.
      * @param img - The HTMLImageElement whose file needs to be shown.
      */
-    async showImageInNavigation(img: HTMLImageElement) {
+    async showImageInNavigation(context: ImageContextMenuContext) {
         try {
-            const imagePath = this.folderManagement.getImagePath(img);
-            if (imagePath) {
-                const file = this.app.vault.getAbstractFileByPath(imagePath);
-                if (file instanceof TFile) {
+            const file = context.localFile;
+            if (file instanceof TFile) {
                     // First, try to get existing file explorer
                     let [fileExplorerLeaf] = this.app.workspace.getLeavesOfType('file-explorer');
 
@@ -52,7 +47,6 @@ export class NavigationHandler {
                             await fileExplorerView.revealInFolder?.(file);
                         }
                     }
-                }
             }
         } catch (error) {
             new Notice(t("MSG_FAIL_SHOW_NAV"));
@@ -64,12 +58,12 @@ export class NavigationHandler {
      * Shows the image file in the system explorer.
      * @param img - The HTMLImageElement whose file needs to be shown in the system explorer.
      */
-    async showImageInSystemExplorer(img: HTMLImageElement) {
+    async showImageInSystemExplorer(context: ImageContextMenuContext) {
         try {
-            const imagePath = this.folderManagement.getImagePath(img);
-            if (imagePath) {
+            const file = context.localFile;
+            if (file) {
                 // Use the Obsidian API to reveal the file in the system explorer
-                await this.app.showInFolder(imagePath);
+                await this.app.showInFolder(file.path);
             }
         } catch (error) {
             new Notice(t("MSG_FAIL_SHOW_EXPLORER"));

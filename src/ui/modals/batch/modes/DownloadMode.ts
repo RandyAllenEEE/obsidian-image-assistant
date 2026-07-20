@@ -10,29 +10,31 @@ import {
 } from "../../../../types/BatchTypes";
 import { IBatchMode, ReviewAction } from "./IBatchMode";
 import { t } from "../../../../lang/helpers";
-import { CloudImageDeleter } from "../../../../cloud/CloudImageDeleter";
-import { ImageReferenceReplacer } from "../../../../utils/ImageReferenceReplacer";
 import { getContextualImageLinks } from "../../../../utils/MarkdownSourceContext";
 import type { DownloadResult } from "../../../../cloud/NetworkImageDownloader";
-import { ReferenceSafetyService } from "../../../../utils/ReferenceSafetyService";
 import { OperationResultModal } from "../../OperationResultModal";
 import { ConfirmDialog } from "../../../../settings/SettingsModals";
 import { isDomainBlacklisted } from "../../../../utils/NetworkPolicy";
 import { getErrorMessage } from "../../../../utils/ErrorUtils";
-import {
-    getCanvasUrlReferencesDetailed,
-    replaceCanvasUrlReferencesWithFile
-} from "../../../../utils/CanvasReferenceUtils";
-import { buildAllowedPathSet } from "../../../../utils/batch";
+import { BatchScopeResolver } from "../../../../utils/batch/BatchScopeResolver";
+import { ImageReferenceWorkflowCoordinator } from "../../../../utils/ImageReferenceWorkflowCoordinator";
 
 export interface DownloadTaskOrigin {
     file: TFile;
     targetFolder: string;
+    verification: "verified" | "unverified";
 }
 
 export interface DownloadTaskSource {
     url: string;
     origins: DownloadTaskOrigin[];
+    verification: "verified" | "unverified";
+}
+
+export interface CanvasDownloadCandidate {
+    readonly url: string;
+    readonly file: TFile;
+    readonly verification: "unverified";
 }
 
 interface DownloadTaskOutputEntry {
@@ -66,33 +68,18 @@ export class DownloadMode implements IBatchMode {
     }
 
     async loadTasks(): Promise<BatchTaskDiscoveryResult> {
-        let files: TFile[] = [];
-        const failedFiles: string[] = [];
-        const uncertainFiles: string[] = [];
-
-        if (this.scope === "note" && this.target instanceof TFile) {
-            files.push(this.target);
-        } else if (this.scope === "folder" && this.target instanceof TFolder) {
-            const collectFiles = (folder: TFolder) => {
-                for (const child of folder.children) {
-                    if (child instanceof TFile && (child.extension === "md" || child.extension === "canvas")) {
-                        files.push(child);
-                    } else if (child instanceof TFolder) {
-                        collectFiles(child);
-                    }
-                }
-            };
-            collectFiles(this.target);
-        } else if (this.scope === "vault") {
-            files = this.app.vault.getFiles().filter(file =>
-                file.extension === "md" || file.extension === "canvas"
-            );
-        }
-
-        files.sort((a, b) => a.path.localeCompare(b.path));
+        const resolver = new BatchScopeResolver(this.app, this.plugin);
+        const discovery = resolver.collectSourceDocuments(this.scope, this.target);
+        const files = discovery.items;
+        const failedFiles = [...discovery.failedFiles];
+        const uncertainFiles = [...discovery.uncertainFiles];
         const grouped = new Map<string, { url: string; origins: DownloadTaskOrigin[] }>();
         for (const file of files) {
-            const links = new Set<string>();
+            const links = new Map<string, "verified" | "unverified">();
+            const addLink = (url: string, verification: "verified" | "unverified") => {
+                const current = links.get(url);
+                if (current !== "verified") links.set(url, verification);
+            };
             const useContentScan = !!this.plugin.settings.global.codeBlockImageLinkIndexing;
 
             try {
@@ -104,16 +91,15 @@ export class DownloadMode implements IBatchMode {
                         if (!rawNode || typeof rawNode !== "object") continue;
                         const node = rawNode as { url?: unknown; text?: unknown };
                         if (typeof node.url === "string"
-                            && this.isAllowedNetworkImageUrl(node.url)
-                            && this.isLikelyCanvasImageUrl(node.url)) {
-                            links.add(node.url);
+                            && this.isAllowedNetworkImageUrl(node.url)) {
+                            addLink(node.url, "unverified");
                         }
                         if (typeof node.text !== "string") continue;
                         for (const link of getContextualImageLinks(node.text, {
                             includeFencedCode: useContentScan
                         })) {
                             const rawPath = (link.path ?? "").trim();
-                            if (this.isAllowedNetworkImageUrl(rawPath)) links.add(rawPath);
+                            if (this.isAllowedNetworkImageUrl(rawPath)) addLink(rawPath, "verified");
                         }
                     }
                 } else {
@@ -122,7 +108,7 @@ export class DownloadMode implements IBatchMode {
                     const cache = this.app.metadataCache.getFileCache(file);
                     for (const embed of cache?.embeds ?? []) {
                         if (this.isAllowedNetworkImageUrl(embed.link)) {
-                            links.add(embed.link);
+                            addLink(embed.link, "verified");
                         }
                     }
 
@@ -135,7 +121,7 @@ export class DownloadMode implements IBatchMode {
                     })) {
                         const rawPath = (link.path ?? "").trim();
                         if (!this.isAllowedNetworkImageUrl(rawPath)) continue;
-                        links.add(rawPath);
+                        addLink(rawPath, "verified");
                     }
                 }
             } catch (error) {
@@ -157,11 +143,15 @@ export class DownloadMode implements IBatchMode {
                 continue;
             }
 
-            for (const link of [...links].sort()) {
+            for (const [link, verification] of [...links.entries()]
+                .sort(([left], [right]) => left.localeCompare(right))) {
                 const key = this.normalizeUrlIdentity(link);
                 const group = grouped.get(key) ?? { url: link, origins: [] };
-                if (!group.origins.some(origin => origin.file.path === file.path)) {
-                    group.origins.push({ file, targetFolder });
+                const existingOrigin = group.origins.find(origin => origin.file.path === file.path);
+                if (!existingOrigin) {
+                    group.origins.push({ file, targetFolder, verification });
+                } else if (verification === "verified") {
+                    existingOrigin.verification = "verified";
                 }
                 grouped.set(key, group);
             }
@@ -172,19 +162,29 @@ export class DownloadMode implements IBatchMode {
             .map(group => {
                 group.origins.sort((a, b) => a.file.path.localeCompare(b.file.path));
                 const folders = [...new Set(group.origins.map(origin => origin.targetFolder))].sort();
+                const verification = group.origins.some(origin => origin.verification === "verified")
+                    ? "verified" as const
+                    : "unverified" as const;
+                const summary = t("BATCH_DOWNLOAD_SOURCE_SUMMARY", [
+                    group.origins.length.toString(),
+                    folders.length.toString(),
+                    group.origins[0]?.file.path ?? "",
+                    folders.map(folder => folder || "/").join(", ")
+                ]);
                 return {
                     id: group.url,
                     name: this.extractImageNameFromUrl(group.url),
                     path: group.url,
-                    source: { url: group.url, origins: group.origins } satisfies DownloadTaskSource,
+                    source: {
+                        url: group.url,
+                        origins: group.origins,
+                        verification
+                    } satisfies DownloadTaskSource,
                     selected: true,
                     status: 'pending' as const,
-                    message: t("BATCH_DOWNLOAD_SOURCE_SUMMARY", [
-                        group.origins.length.toString(),
-                        folders.length.toString(),
-                        group.origins[0]?.file.path ?? "",
-                        folders.map(folder => folder || "/").join(", ")
-                    ])
+                    message: verification === "unverified"
+                        ? `${summary}. ${t("BATCH_DOWNLOAD_UNVERIFIED_CANDIDATE")}`
+                        : summary
                 };
             });
 
@@ -225,16 +225,6 @@ export class DownloadMode implements IBatchMode {
             const skipped: DownloadResult[] = [];
             for (const destination of destinations) {
                 await this.plugin.folderAndFilenameManagement?.ensureFolderExists?.(destination.targetFolder);
-                if (typeof this.plugin.cloudImageHandler.downloadImageToFolder !== "function") {
-                    const legacy = await this.plugin.cloudImageHandler.batchDownload([{
-                        url: source.url,
-                        targetFolder: destination.targetFolder,
-                        suggestedName: task.name,
-                        activeFile: destination.files[0]
-                    }]);
-                    return legacy.successful[0] ?? legacy.skipped[0] ?? legacy.failed[0]
-                        ?? { status: "failed", success: false, item: source.url, error: t("MSG_UNKNOWN_ERROR") };
-                }
                 const result = await this.plugin.cloudImageHandler.downloadImageToFolder(
                     source.url,
                     destination.targetFolder,
@@ -243,9 +233,13 @@ export class DownloadMode implements IBatchMode {
                 );
                 if (result.success) {
                     downloads.push({ ...destination, result });
-                } else if (result.skipped) {
+                } else if (result.skipped
+                    || (source.verification === "unverified"
+                        && result.errorCode === "not-image")) {
                     skipped.push(result);
-                    errors.push(`${destination.targetFolder || "/"}: ${result.error ?? t("MSG_UNKNOWN_ERROR")}`);
+                    if (result.skipped) {
+                        errors.push(`${destination.targetFolder || "/"}: ${result.error ?? t("MSG_UNKNOWN_ERROR")}`);
+                    }
                 } else {
                     errors.push(`${destination.targetFolder}: ${result.error ?? t("MSG_UNKNOWN_ERROR")}`);
                 }
@@ -283,13 +277,31 @@ export class DownloadMode implements IBatchMode {
     private getTaskSource(task: BatchTask): DownloadTaskSource | null {
         const source = task.source as Partial<DownloadTaskSource> | undefined;
         if (typeof source?.url !== "string") return null;
-        if (Array.isArray(source.origins)) return source as DownloadTaskSource;
+        if (Array.isArray(source.origins)) {
+            const origins = source.origins.map(origin => ({
+                ...origin,
+                verification: origin.verification === "unverified"
+                    ? "unverified" as const
+                    : "verified" as const
+            }));
+            return {
+                url: source.url,
+                origins,
+                verification: source.verification === "unverified"
+                    ? "unverified"
+                    : "verified"
+            };
+        }
 
         const legacyFile = (source as unknown as { file?: TFile }).file;
         if (legacyFile instanceof TFile) {
             const targetFolder = this.plugin.folderAndFilenameManagement
                 ?.getDefaultAttachmentFolderPath?.(legacyFile) ?? "";
-            return { url: source.url, origins: [{ file: legacyFile, targetFolder }] };
+            return {
+                url: source.url,
+                origins: [{ file: legacyFile, targetFolder, verification: "verified" }],
+                verification: "verified"
+            };
         }
         return null;
     }
@@ -381,16 +393,6 @@ export class DownloadMode implements IBatchMode {
         }
     }
 
-    private isLikelyCanvasImageUrl(url: string): boolean {
-        if (this.plugin.historyManager?.isUrlUploaded(url)) return true;
-        try {
-            const path = decodeURIComponent(new URL(url).pathname);
-            return this.plugin.supportedImageFormats.isSupported(undefined, path);
-        } catch {
-            return false;
-        }
-    }
-
     getReviewActions(): ReviewAction[] {
         const actions: ReviewAction[] = [
             { id: "replace_only", label: t("BATCH_REPLACE_LINKS_ONLY") || "Replace Links Only", style: 'primary' },
@@ -435,21 +437,13 @@ export class DownloadMode implements IBatchMode {
             return true;
         }
 
-        const allowedPathSet = buildAllowedPathSet(this.scope, this.target, this.app);
-
+        const scopeResolver = new BatchScopeResolver(this.app, this.plugin);
+        const allowedPathSet = scopeResolver.getAllowedDocumentPaths(this.scope, this.target);
         let count = 0;
         const updatedNotePaths = new Set<string>();
         const blocked: string[] = [];
         const uncertain = new Set<string>();
-        const replacer = new ImageReferenceReplacer(
-            this.app,
-            this.plugin.vaultReferenceManager,
-            () => this.plugin.settings.localProcessing.link
-        );
-        const safetyService = new ReferenceSafetyService(this.app, this.plugin.vaultReferenceManager, {
-            includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
-        });
-        const deleter = new CloudImageDeleter(this.plugin);
+        const coordinator = new ImageReferenceWorkflowCoordinator(this.app, this.plugin);
         let deletionCancelled = false;
         const discoveryComplete = result.discovery?.complete !== false;
 
@@ -462,17 +456,8 @@ export class DownloadMode implements IBatchMode {
             }
             blocked.push(...output.errors.map(error => `${url}: ${error}`));
 
-            const scan = await this.plugin.vaultReferenceManager.scanReferencesDetailed(url);
-            const canvasScan = await getCanvasUrlReferencesDetailed(this.app, url, {
-                includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
-            });
-            scan.uncertainFiles.forEach(path => uncertain.add(path));
-            canvasScan.uncertainFiles.forEach(path => uncertain.add(path));
-            const outOfScopeLocations = scan.locations.filter(location => !allowedPathSet.has(location.file.path));
-            const outOfScopeCanvasLocations = canvasScan.references.filter(reference =>
-                !allowedPathSet.has(reference.canvasFile.path)
-            );
             let updateIncomplete = false;
+            let initialReferenceCount: number | null = null;
             for (const download of output.downloads) {
                 const vaultPath = download.result.vaultPath;
                 const localFile = vaultPath ? this.app.vault.getAbstractFileByPath(vaultPath) : null;
@@ -485,45 +470,41 @@ export class DownloadMode implements IBatchMode {
                 const targetPaths = download.files.length > 0
                     ? new Set(download.files.map(file => file.path).filter(path => allowedPathSet.has(path)))
                     : new Set(allowedPathSet);
-                const scopedLocations = scan.locations.filter(location => targetPaths.has(location.file.path));
-                const updateResult = await this.plugin.vaultReferenceManager.updateReferenceLocationsDetailed(
-                    scopedLocations,
-                    location => replacer.serializeReference(location.original, localFile, location.file)
-                );
-                const canvasUpdateResult = await replaceCanvasUrlReferencesWithFile(
-                    this.app,
-                    url,
-                    localFile,
+                const inventory = await coordinator.inspect(
+                    { kind: "url", url },
                     {
-                        allowedCanvasPaths: targetPaths,
-                        includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing,
-                        formatLocalTextReference: (originalLink, newFile, canvasFile) =>
-                            replacer.serializeReference(originalLink, newFile, canvasFile)
+                        mutationBoundary: {
+                            allowedDocumentPaths: [...targetPaths]
+                        }
                     }
                 );
+                initialReferenceCount ??= inventory.totalReferences;
+                const updateResult = await coordinator.replace(
+                    inventory,
+                    { kind: "local", file: localFile },
+                    "all"
+                );
                 updateResult.uncertainFiles.forEach(path => uncertain.add(path));
-                canvasUpdateResult.uncertainFiles.forEach(path => uncertain.add(path));
-                updateResult.files.filter(file => file.replaced > 0)
-                    .forEach(file => updatedNotePaths.add(file.filePath));
-                canvasUpdateResult.files.filter(file => file.replaced > 0)
-                    .forEach(file => updatedNotePaths.add(file.filePath));
-
-                const replaced = updateResult.replaced + canvasUpdateResult.replaced;
-                const found = updateResult.found + canvasUpdateResult.found;
-                count += replaced;
-                const incomplete = !updateResult.complete
-                    || updateResult.replaced !== updateResult.found
-                    || updateResult.failedFiles.length > 0
-                    || updateResult.uncertainFiles.length > 0
-                    || !canvasUpdateResult.complete
-                    || canvasUpdateResult.replaced !== canvasUpdateResult.found
-                    || canvasUpdateResult.failedFiles.length > 0
-                    || canvasUpdateResult.uncertainFiles.length > 0;
-                if (incomplete) {
-                    updateIncomplete = true;
-                    blocked.push(t("BATCH_DOWNLOAD_REPLACE_INCOMPLETE", [url, replaced.toString(), found.toString()]));
+                count += updateResult.changed;
+                if (updateResult.changed > 0) {
+                    inventory.mutableMarkdown.forEach(reference =>
+                        updatedNotePaths.add(reference.file.path)
+                    );
+                    inventory.mutableCanvas.forEach(reference =>
+                        updatedNotePaths.add(reference.canvasFile.path)
+                    );
                 }
-                this.plugin.cloudImageHandler.discardDownloadUndo(download.result);
+                if (!updateResult.complete) {
+                    updateIncomplete = true;
+                    blocked.push(t("BATCH_DOWNLOAD_REPLACE_INCOMPLETE", [
+                        url,
+                        updateResult.changed.toString(),
+                        updateResult.found.toString()
+                    ]));
+                    blocked.push(...updateResult.failedFiles.map(path => `${url}: ${path}`));
+                } else {
+                    this.plugin.cloudImageHandler.discardDownloadUndo(download.result);
+                }
             }
 
             if (action === "replace_delete_cloud") {
@@ -531,43 +512,25 @@ export class DownloadMode implements IBatchMode {
                     blocked.push(t("BATCH_DELETE_BLOCKED_DISCOVERY", [url]));
                     continue;
                 }
+                if (updateIncomplete || output.errors.length > 0) continue;
                 if (!this.plugin.historyManager.isUrlUploaded(url)) {
                     blocked.push(t("BATCH_DELETE_NOT_OWNED", [url]));
                     continue;
                 }
-                if (!scan.complete || !canvasScan.complete) {
-                    blocked.push(t("BATCH_DELETE_SCAN_INCOMPLETE", [url]));
-                    continue;
-                }
-                if (updateIncomplete) continue;
-                const outOfScopeCount = outOfScopeLocations.length + outOfScopeCanvasLocations.length;
-                if (outOfScopeCount > 0) {
-                    blocked.push(t("BATCH_DELETE_OUT_OF_SCOPE", [url, outOfScopeCount.toString()]));
-                    continue;
-                }
-
-                if (scan.locations.length + canvasScan.references.length === 0
+                if ((initialReferenceCount ?? 0) === 0
                     && !(await this.confirmZeroReferenceDeletion(url))) {
                     deletionCancelled = true;
                     blocked.push(t("BATCH_DELETE_ZERO_CANCELLED", [url]));
                     continue;
                 }
 
-                const safety = await safetyService.inspectUrl(url);
-                safety.uncertainFiles.forEach(path => uncertain.add(path));
-                if (!safety.safeToDelete) {
-                    const reason = safety.complete
-                        ? t("BATCH_REFERENCES_REMAIN", [safety.referenceCount.toString()])
-                        : t("BATCH_REFERENCE_VERIFY_INCOMPLETE");
-                    blocked.push(`${url}: ${reason}`);
-                    continue;
-                }
-
-                const deleteResult = await deleter.deleteImageDetailed({ url });
-                if (!deleteResult.success) {
+                const deleteResult = await coordinator.deleteSource({ kind: "url", url });
+                deleteResult.uncertainFiles.forEach(path => uncertain.add(path));
+                if (!deleteResult.sourceDeleted) {
                     blocked.push(t("BATCH_CLOUD_DELETE_FAILED", [
                         url,
-                        deleteResult.message ?? deleteResult.reason ?? t("MSG_UNKNOWN_ERROR")
+                        [...deleteResult.failedFiles, ...deleteResult.uncertainFiles].join(", ")
+                            || t("BATCH_REFERENCES_REMAIN", [deleteResult.found.toString()])
                     ]));
                 }
             }

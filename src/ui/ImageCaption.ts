@@ -13,6 +13,7 @@ import {
     isTextNode
 } from './caption/CaptionDomUtils';
 import { collectUsableMarkdownViews, getMarkdownViewMode } from './MarkdownViewRegistry';
+import { resolveEditorView } from '../utils/EditorViewResolver';
 
 type ReadingCaptionContext = CaptionRenderContext & ReadingImageContext & {
     captionText?: string | null;
@@ -300,9 +301,7 @@ export class ImageCaption extends Component {
             }
 
             this.renderer.cleanup(contentEl);
-            const editorView = (view.editor as unknown as {
-                cm?: { dispatch(spec: { effects: unknown }): void };
-            })?.cm;
+            const editorView = resolveEditorView(view.editor, view);
             editorView?.dispatch({ effects: refreshLivePreviewCaptionsEffect.of(undefined) });
         }
     }

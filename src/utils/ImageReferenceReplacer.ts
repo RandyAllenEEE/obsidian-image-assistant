@@ -3,6 +3,15 @@ import type { LocalLinkSettings } from "../settings/types";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
 import { LocalImageReferenceSerializer } from "./LocalImageReferenceSerializer";
 import type { VaultReferenceManager } from "./VaultReferenceManager";
+import {
+    getFixedPixelResizePipe,
+    type EmbedResizeSettings
+} from "../settings/NonDestructiveResizeSettings";
+import { pipeSyntaxParser } from "./PipeSyntaxParser";
+
+export interface SerializeImageReferenceOptions {
+    readonly applyInitialSize?: boolean;
+}
 
 export class ImageReferenceReplacer {
     private readonly serializer: LocalImageReferenceSerializer;
@@ -10,7 +19,8 @@ export class ImageReferenceReplacer {
     constructor(
         private app: App,
         private referenceManager: VaultReferenceManager,
-        private readonly settingsProvider: () => LocalLinkSettings = () => DEFAULT_SETTINGS.localProcessing.link
+        private readonly settingsProvider: () => LocalLinkSettings = () => DEFAULT_SETTINGS.localProcessing.link,
+        private readonly resizeSettingsProvider?: () => EmbedResizeSettings
     ) {
         this.serializer = new LocalImageReferenceSerializer(app);
     }
@@ -19,12 +29,20 @@ export class ImageReferenceReplacer {
         return this.serializer.formatPath(this.requireTargetFile(target), noteFile, this.settingsProvider());
     }
 
-    serializeReference(originalLink: string, target: string | TFile, noteFile: TFile): string {
+    serializeReference(
+        originalLink: string,
+        target: string | TFile,
+        noteFile: TFile,
+        options: SerializeImageReferenceOptions = {}
+    ): string {
+        const source = options.applyInitialSize
+            ? this.applyInitialSize(originalLink)
+            : originalLink;
         return this.serializer.serialize({
             target: this.requireTargetFile(target),
             sourceFile: noteFile,
             settings: this.settingsProvider(),
-            originalLink
+            originalLink: source
         });
     }
 
@@ -60,5 +78,27 @@ export class ImageReferenceReplacer {
             throw new Error(`Local image target not found: ${typeof target === "string" ? target : target.path}`);
         }
         return targetFile;
+    }
+
+    private applyInitialSize(originalLink: string): string {
+        const settings = this.resizeSettingsProvider?.();
+        if (!settings) return originalLink;
+        const existing = pipeSyntaxParser.parsePipeSyntax(originalLink, {
+            attributeMode: "display"
+        });
+        if (!existing || existing.size) return originalLink;
+        const pipe = getFixedPixelResizePipe(settings);
+        if (!pipe) return originalLink;
+        const size = pipeSyntaxParser.parsePipeAttributes(
+            pipe.slice(1),
+            false,
+            "display"
+        ).size;
+        if (!size) return originalLink;
+        const patch = pipeSyntaxParser.updateSizePreservingSyntax(originalLink, {
+            width: size.width ?? null,
+            height: size.height ?? null
+        });
+        return patch.status === "updated" ? patch.linkText : originalLink;
     }
 }

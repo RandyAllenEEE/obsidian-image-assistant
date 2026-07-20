@@ -1,122 +1,129 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadImageMock = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => undefined));
-vi.mock('../../../../src/utils/ImageLoadUtils', () => ({ loadImage: loadImageMock }));
-import { ClipboardHandler } from '../../../../src/ui/contextMenu/handlers/ClipboardHandler';
-import { fakeApp, fakeWorkspace } from '../../../factories/obsidian';
+const loadImageMock = vi.hoisted(
+    () => vi.fn<() => Promise<void>>(async () => undefined)
+);
+vi.mock("../../../../src/utils/ImageLoadUtils", () => ({
+    loadImage: loadImageMock
+}));
 
-describe('ClipboardHandler', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    loadImageMock.mockResolvedValue(undefined);
-  });
+import { ClipboardHandler } from "../../../../src/ui/contextMenu/handlers/ClipboardHandler";
 
-  function makeHandler(options: {
-    src?: string;
-    resolvedPath?: string | null;
-  } = {}) {
-    const source = `![img](${options.src ?? 'assets/pic.png'})`;
-    const editor = { getLine: vi.fn(() => source) };
-    const file = { path: 'notes/current.md' };
-    const view = { editor, file, contentEl: document.createElement('div') };
-    const app = fakeApp({
-      workspace: fakeWorkspace({
-        activeFile: file as any,
-        activeView: view as any
-      })
-    }) as any;
-    const folderManagement = {
-      getImagePath: vi.fn(() => options.resolvedPath ?? 'assets/pic.png')
-    };
-    const imageMatchFinder = {
-      findImageMatches: vi.fn().mockResolvedValue([
-        {
-          lineNumber: 0,
-          line: `![img](${options.src ?? 'assets/pic.png'})`,
-          fullMatch: `![img](${options.src ?? 'assets/pic.png'})`,
-          index: 0
-        }
-      ])
-    };
-    const linkRemover = {
-      removeImageLink: vi.fn().mockResolvedValue(undefined)
-    };
-    const viewContextResolver = {
-      resolve: vi.fn(() => ({
-        view,
-        file,
-        editor,
-        match: { line: 0, start: 0, end: source.length, linkText: source }
-      })),
-      resolveOwner: vi.fn(() => ({ view, file, editor }))
-    };
-    const handler = new ClipboardHandler(
-      app,
-      folderManagement as any,
-      imageMatchFinder as any,
-      linkRemover as any,
-      viewContextResolver as any
-    );
-
-    return { editor, folderManagement, handler, imageMatchFinder, linkRemover, source, viewContextResolver };
-  }
-
-  function makeEvent(target: EventTarget): MouseEvent {
-    return { target } as unknown as MouseEvent;
-  }
-
-  it('uses the network image URL when cutting a network image link', async () => {
-    const src = 'https://cdn.example.com/a%20b.png?size=large';
-    const img = document.createElement('img');
-    img.setAttribute('src', src);
-    const { editor, folderManagement, handler, imageMatchFinder, linkRemover, source } = makeHandler({ src });
-
-    await handler.cutImageAndLink(makeEvent(img));
-
-    expect(folderManagement.getImagePath).not.toHaveBeenCalled();
-    expect(imageMatchFinder.findImageMatches).not.toHaveBeenCalled();
-    expect(linkRemover.removeImageLink).toHaveBeenCalledWith(
-      editor,
-      0,
-      source,
-      source,
-      true,
-      0
-    );
-  });
-
-  it('uses the resolved image override when the original event target is a wrapper', async () => {
-    const wrapper = document.createElement('div');
-    const img = document.createElement('img');
-    img.setAttribute('src', 'app://local/assets/pic.png');
-    const { folderManagement, handler, imageMatchFinder, viewContextResolver } = makeHandler({
-      resolvedPath: 'assets/pic.png'
+describe("ClipboardHandler", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        loadImageMock.mockResolvedValue(undefined);
     });
 
-    await handler.cutImageAndLink(makeEvent(wrapper), img);
+    function makeFixture(source = "![img](https://example.com/pic.png)") {
+        let value = source;
+        const editor = {
+            getValue: vi.fn(() => value),
+            lineCount: vi.fn(() => value.split("\n").length),
+            getLine: vi.fn((line: number) => value.split("\n")[line] ?? ""),
+            replaceRange: vi.fn((
+                replacement: string,
+                from: { line: number; ch: number },
+                to: { line: number; ch: number }
+            ) => {
+                const currentLine = value.split("\n")[from.line] ?? "";
+                value = currentLine.slice(0, from.ch)
+                    + replacement
+                    + currentLine.slice(to.ch);
+            })
+        };
+        const view = {
+            editor,
+            file: { path: "notes/current.md" },
+            save: vi.fn().mockResolvedValue(undefined)
+        };
+        const clipboard = { writeText: vi.fn().mockResolvedValue(undefined) };
+        const image = document.createElement("img");
+        image.src = "https://proxy.local/cached";
+        const viewContext = {
+            view,
+            file: view.file,
+            editor,
+            match: {
+                line: 0,
+                start: 0,
+                end: source.length,
+                linkText: source
+            }
+        };
+        const context = {
+            image,
+            ownerDocument: document,
+            ownerWindow: { navigator: { clipboard } },
+            renderedSrc: image.src,
+            sourceKind: "url",
+            resolution: "resolved",
+            owner: viewContext,
+            viewContext,
+            descriptor: null,
+            localFile: null,
+            url: "https://example.com/pic.png",
+            dataReference: null
+        } as any;
+        return {
+            context,
+            clipboard,
+            editor,
+            getValue: () => value,
+            handler: new ClipboardHandler(),
+            setValue: (next: string) => { value = next; },
+            view
+        };
+    }
 
-    expect(viewContextResolver.resolve).toHaveBeenCalledWith(img);
-    expect(folderManagement.getImagePath).not.toHaveBeenCalled();
-    expect(imageMatchFinder.findImageMatches).not.toHaveBeenCalled();
-  });
+    it("cuts only the exact source occurrence supplied by the shared context", async () => {
+        const fixture = makeFixture();
+        await fixture.handler.cutImageAndLink(fixture.context);
 
-  it('waits for image loading and reports a load failure when copying', async () => {
-    let rejectLoad!: (error: Error) => void;
-    loadImageMock.mockReturnValueOnce(new Promise<void>((_, reject) => { rejectLoad = reject; }));
-    const img = document.createElement('img');
-    img.src = 'https://cdn.example.com/image.png';
-    const { handler } = makeHandler();
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    let settled = false;
+        expect(fixture.clipboard.writeText)
+            .toHaveBeenCalledWith(fixture.context.viewContext.match.linkText);
+        expect(fixture.getValue()).toBe("");
+        expect(fixture.view.save).toHaveBeenCalledOnce();
+    });
 
-    const copying = handler.copyImage(makeEvent(img)).then(() => { settled = true; });
-    await Promise.resolve();
-    expect(settled).toBe(false);
+    it("fails closed when the source range changed before the click executes", async () => {
+        const fixture = makeFixture();
+        fixture.setValue("![other](https://example.com/other.png)");
 
-    rejectLoad(new Error('offline'));
-    await copying;
+        await fixture.handler.cutImageAndLink(fixture.context);
 
-    expect(loadImageMock).toHaveBeenCalledWith(expect.anything(), img.src);
-    expect(errorSpy).toHaveBeenCalledWith('Failed to copy image:', expect.any(Error));
-  });
+        expect(fixture.clipboard.writeText).not.toHaveBeenCalled();
+        expect(fixture.view.save).not.toHaveBeenCalled();
+    });
+
+    it("waits for image loading and reports a load failure when copying", async () => {
+        let rejectLoad!: (error: Error) => void;
+        loadImageMock.mockReturnValueOnce(
+            new Promise<void>((_, reject) => {
+                rejectLoad = reject;
+            })
+        );
+        const fixture = makeFixture();
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        let settled = false;
+
+        const copying = fixture.handler.copyImage(fixture.context)
+            .then(() => {
+                settled = true;
+            });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        rejectLoad(new Error("offline"));
+        await copying;
+
+        expect(loadImageMock).toHaveBeenCalledWith(
+            expect.any(HTMLImageElement),
+            fixture.context.image.src
+        );
+        expect(errorSpy).toHaveBeenCalledWith(
+            "Failed to copy image:",
+            expect.any(Error)
+        );
+    });
 });

@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import ImageConverterPlugin from "../../../src/main";
 import { PasteModeConfigModal } from "../../../src/ui/modals/PasteModeConfigModal";
+import { BatchOperationLauncher } from "../../../src/ui/contextMenu/batch/BatchOperationLauncher";
 import { fakeApp, fakeTFile } from "../../factories/obsidian";
+import { TEST_PLUGIN_ID } from "../../helpers/plugin-manifest";
 
 async function createPlugin() {
     const app = fakeApp() as any;
-    const plugin = new ImageConverterPlugin(app, { id: "image-assistant" } as any);
+    const plugin = new ImageConverterPlugin(app, { id: TEST_PLUGIN_ID } as any);
     vi.spyOn(plugin as any, "loadData").mockResolvedValue(undefined);
     await plugin.loadSettings();
     return { app, plugin };
@@ -116,10 +118,20 @@ describe("runtime feature lifecycle", () => {
             .mockReturnValueOnce(markdown)
             .mockReturnValueOnce(canvas)
             .mockReturnValueOnce(image);
+        const launcher = new BatchOperationLauncher(app, plugin);
+        const open = vi.spyOn(launcher, "open").mockImplementation(() => undefined);
 
-        expect((plugin as any).getActiveBatchSourceFile()).toBe(markdown);
-        expect((plugin as any).getActiveBatchSourceFile()).toBe(canvas);
-        expect((plugin as any).getActiveBatchSourceFile()).toBeNull();
+        launcher.openCurrentNote("local_process");
+        launcher.openCurrentNote("upload");
+        launcher.openCurrentNote("download");
+
+        expect(open).toHaveBeenNthCalledWith(1, {
+            scope: "note", target: markdown, mode: "local_process"
+        });
+        expect(open).toHaveBeenNthCalledWith(2, {
+            scope: "note", target: canvas, mode: "upload"
+        });
+        expect(open).toHaveBeenCalledTimes(2);
     });
 
     it("does not open per-note paste settings for non-Markdown files", async () => {

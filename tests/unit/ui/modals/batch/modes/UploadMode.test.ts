@@ -10,7 +10,10 @@ function makePlugin(overrides: Record<string, unknown> = {}) {
     settings: structuredClone(DEFAULT_SETTINGS),
     commandOpenSettingsTab: vi.fn(),
     historyManager: {
-      isLocalPathUploaded: vi.fn(() => false)
+      isLocalPathUploaded: vi.fn(() => false),
+      isUrlUploaded: vi.fn(() => true),
+      getRecord: vi.fn(),
+      removeRecord: vi.fn()
     },
     supportedImageFormats: {
       isSupported: vi.fn((_extension?: string, name?: string) => /\.(png|jpe?g|webp|gif)$/i.test(name || ''))
@@ -224,6 +227,11 @@ describe('UploadMode', () => {
 
     expect(completed).toBe(false);
     expect(deleteSpy).not.toHaveBeenCalled();
+    expect(plugin.vaultReferenceManager.scanReferencesDetailed)
+      .toHaveBeenCalledWith(url, {
+        kind: "safety",
+        includeFencedCode: true
+      });
   });
 
   it('loads current canvas note image tasks through metadataCache-resolved file links', async () => {
@@ -373,6 +381,7 @@ describe('UploadMode', () => {
     const plugin = makePlugin();
     plugin.vaultReferenceManager.getFilesReferencingImage.mockResolvedValue([]);
     const mode = new UploadMode(app, plugin, canvas, 'note');
+    vi.spyOn(mode as any, 'confirmZeroReferenceDeletion').mockResolvedValue(false);
 
     const completed = await mode.handleReviewAction('replace_delete', {
       successful: [{ status: 'success', success: true, item: image, output: 'https://cdn.example.com/a.png' }],
@@ -383,6 +392,7 @@ describe('UploadMode', () => {
 
     expect(plugin.vaultReferenceManager.updateReferenceLocationsDetailed).toHaveBeenCalledWith([], expect.any(Function));
     expect(app.vault.trash).not.toHaveBeenCalled();
+    expect(completed).toBe(false);
   });
 
   it('keeps the review open when zero-reference deletion is cancelled', async () => {
@@ -493,6 +503,7 @@ describe('UploadMode', () => {
     const location = { file: note, start: 0, end: 17, original: '![[images/a.png]]', link: 'images/a.png', line: 0 };
     plugin.vaultReferenceManager.scanReferencesDetailed
       .mockResolvedValueOnce({ locations: [location], complete: true, uncertainFiles: [] })
+      .mockResolvedValueOnce({ locations: [location], complete: true, uncertainFiles: [] })
       .mockResolvedValue({ locations: [], complete: true, uncertainFiles: [] });
     plugin.vaultReferenceManager.getFilesReferencingImage.mockResolvedValue([]);
     plugin.vaultReferenceManager.updateReferenceLocationsDetailed.mockResolvedValue({
@@ -523,6 +534,7 @@ describe('UploadMode', () => {
     plugin.vaultReferenceManager.getFilesReferencingImage.mockResolvedValue([]);
     const location = { file: note, start: 0, end: 17, original: '![[images/a.png]]', link: 'images/a.png', line: 0 };
     plugin.vaultReferenceManager.scanReferencesDetailed
+      .mockResolvedValueOnce({ locations: [location], complete: true, uncertainFiles: [] })
       .mockResolvedValueOnce({ locations: [location], complete: true, uncertainFiles: [] })
       .mockResolvedValue({ locations: [], complete: true, uncertainFiles: [] });
     plugin.vaultReferenceManager.updateReferenceLocationsDetailed.mockResolvedValue({

@@ -8,6 +8,8 @@ import type {
 } from "../utils/VaultReferenceManager";
 import { ImageReferenceReplacer } from "../utils/ImageReferenceReplacer";
 import {
+    CanvasFileReference,
+    CanvasReferenceScanResult,
     CanvasReferenceUpdateResult,
     getCanvasFileReferenceIndexDetailed,
     replaceCanvasFileReferences
@@ -15,6 +17,20 @@ import {
 import { AsyncLock } from "../utils/AsyncLock";
 import type { LocalLinkSettings } from "../settings/types";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
+import {
+    ReferenceSafetyService,
+    type ReferenceSafetyReport
+} from "../utils/ReferenceSafetyService";
+import {
+    createReferenceMutationScanPolicy,
+    type ReferenceMutationScanPolicy
+} from "../utils/ReferenceScanPolicy";
+import {
+    verifyImageFileRevision,
+    type ImageFileRevision
+} from "../utils/ImageFileRevision";
+import { ImageEditCommitService } from "../utils/ImageEditCommitService";
+import type { ImageReferenceIndexService } from "../utils/ImageReferenceIndexService";
 
 export type ImageConversionCommitStage =
     | "preflight"
@@ -31,6 +47,8 @@ export interface ImageConversionCommitReport {
     markdown?: ReferenceUpdateResult;
     canvas?: CanvasReferenceUpdateResult;
     uncertainFiles: string[];
+    protectedReferences?: number;
+    protectedFiles?: string[];
 }
 
 export class ImageConversionCommitError extends Error {
@@ -47,40 +65,96 @@ export class ImageConversionCommitter {
         private app: App,
         private fileManager: FolderAndFilenameManagement,
         private referenceManager: VaultReferenceManager,
-        private readonly canvasScanOptions: { includeFencedCode?: boolean } = {},
-        private readonly linkSettingsProvider: () => LocalLinkSettings = () => DEFAULT_SETTINGS.localProcessing.link
+        private readonly mutationScanPolicy: ReferenceMutationScanPolicy =
+            createReferenceMutationScanPolicy(true),
+        private readonly linkSettingsProvider: () => LocalLinkSettings = () => DEFAULT_SETTINGS.localProcessing.link,
+        private readonly referenceIndex?: ImageReferenceIndexService
     ) { }
 
-    async commit(source: TFile, targetFilename: string, data: ArrayBuffer): Promise<TFile> {
+    async commit(
+        source: TFile,
+        targetFilename: string,
+        data: ArrayBuffer,
+        expectedRevision?: ImageFileRevision
+    ): Promise<TFile> {
         return ImageConversionCommitter.commitLock.acquire("vault-reference-commit", () =>
-            this.commitUnlocked(source, targetFilename, data)
+            this.commitUnlocked(source, targetFilename, data, expectedRevision)
         );
     }
 
-    private async commitUnlocked(source: TFile, targetFilename: string, data: ArrayBuffer): Promise<TFile> {
+    private async commitUnlocked(
+        source: TFile,
+        targetFilename: string,
+        data: ArrayBuffer,
+        expectedRevision?: ImageFileRevision
+    ): Promise<TFile> {
+        await this.assertExpectedRevision(source, expectedRevision);
         if (source.name === targetFilename) {
-            await this.app.vault.modifyBinary(source, data);
+            if (expectedRevision) {
+                const result = await new ImageEditCommitService(this.app).commit({
+                    file: source,
+                    expectedRevision,
+                    data
+                });
+                if (!result.success) {
+                    throw this.revisionError(
+                        source,
+                        result.error ?? "Image source changed before it could be saved"
+                    );
+                }
+            } else {
+                await this.app.vault.modifyBinary(source, data);
+            }
             return source;
         }
 
-        const markdownScan = await this.scanMarkdownReferences(source.path);
-        const canvasScan = await getCanvasFileReferenceIndexDetailed(this.app, [source], this.canvasScanOptions);
+        const safetyService = new ReferenceSafetyService(
+            this.app,
+            this.referenceManager,
+            this.referenceIndex
+        );
+        const safety = await safetyService.inspectLocalFile(source);
+        const mutationScans = await this.scanMutationReferences(source, safety);
+        const markdownScan = mutationScans.markdown;
+        const canvasScan = mutationScans.canvas;
         const preflightUncertain = [
+            ...safety.uncertainFiles,
             ...markdownScan.uncertainFiles,
             ...canvasScan.uncertainFiles
         ];
-        if (!markdownScan.complete || !canvasScan.complete) {
+        if (!safety.complete || !markdownScan.complete || !canvasScan.complete) {
             throw new ImageConversionCommitError(
-                `Reference preflight was incomplete: ${preflightUncertain.join(", ")}`,
+                `Reference preflight was incomplete: ${uniqueSorted(preflightUncertain).join(", ")}`,
                 {
                     stage: "preflight",
                     sourcePath: source.path,
                     sourcePreserved: true,
-                    uncertainFiles: preflightUncertain
+                    uncertainFiles: uniqueSorted(preflightUncertain)
+                }
+            );
+        }
+        const mutableCanvas = canvasScan.references.get(source.path) ?? [];
+        const protectedReferences = getProtectedReferences(
+            safety.markdown,
+            safety.canvas,
+            markdownScan.locations,
+            mutableCanvas
+        );
+        if (protectedReferences.count > 0) {
+            throw new ImageConversionCommitError(
+                `${protectedReferences.count} reference(s) are protected by the fenced-code setting`,
+                {
+                    stage: "preflight",
+                    sourcePath: source.path,
+                    sourcePreserved: true,
+                    uncertainFiles: [],
+                    protectedReferences: protectedReferences.count,
+                    protectedFiles: protectedReferences.files
                 }
             );
         }
 
+        await this.assertExpectedRevision(source, expectedRevision);
         let target: TFile | null;
         try {
             target = await this.fileManager.createUniqueBinary(
@@ -134,7 +208,7 @@ export class ImageConversionCommitter {
         }
 
         const canvasResult = await replaceCanvasFileReferences(this.app, source, target, {
-            ...this.canvasScanOptions,
+            includeFencedCode: this.mutationScanPolicy.includeFencedCode,
             formatLocalTextReference: (originalLink, newFile, canvasFile) =>
                 replacer.serializeReference(originalLink, newFile, canvasFile)
         });
@@ -153,22 +227,24 @@ export class ImageConversionCommitter {
                 }
             );
         }
+        await this.referenceIndex?.refreshPaths([
+            ...markdownResult.files
+                .filter(file => file.replaced > 0)
+                .map(file => file.filePath),
+            ...canvasResult.files
+                .filter(file => file.replaced > 0)
+                .map(file => file.filePath)
+        ]);
 
-        const postflightMarkdown = await this.scanMarkdownReferences(source.path);
-        const postflightCanvas = await getCanvasFileReferenceIndexDetailed(this.app, [source], this.canvasScanOptions);
-        const remainingCanvasRefs = postflightCanvas.references.get(source.path) ?? [];
-        if (!postflightMarkdown.complete
-            || !postflightCanvas.complete
-            || postflightMarkdown.locations.length > 0
-            || remainingCanvasRefs.length > 0) {
+        const postflight = await safetyService.inspectLocalFile(source);
+        if (!postflight.complete || postflight.referenceCount > 0) {
             const uncertainFiles = [
-                ...postflightMarkdown.uncertainFiles,
-                ...postflightCanvas.uncertainFiles,
-                ...postflightMarkdown.locations.map(location => location.file.path),
-                ...remainingCanvasRefs.map(reference => reference.canvasFile.path)
+                ...postflight.uncertainFiles,
+                ...postflight.markdown.map(location => location.file.path),
+                ...postflight.canvas.map(reference => reference.canvasFile.path)
             ];
             throw new ImageConversionCommitError(
-                `Source references remain after conversion: ${Array.from(new Set(uncertainFiles)).join(", ")}`,
+                `Source references remain after conversion: ${uniqueSorted(uncertainFiles).join(", ")}`,
                 {
                     stage: "markdown",
                     sourcePath: source.path,
@@ -176,11 +252,12 @@ export class ImageConversionCommitter {
                     sourcePreserved: true,
                     markdown: markdownResult,
                     canvas: canvasResult,
-                    uncertainFiles: Array.from(new Set(uncertainFiles))
+                    uncertainFiles: uniqueSorted(uncertainFiles)
                 }
             );
         }
 
+        await this.assertExpectedRevision(source, expectedRevision);
         try {
             await this.app.vault.trash(source, true);
         } catch (error) {
@@ -200,12 +277,30 @@ export class ImageConversionCommitter {
         return target;
     }
 
-    private async scanMarkdownReferences(imagePath: string): Promise<ReferenceScanResult> {
-        if (typeof this.referenceManager.scanReferencesDetailed === "function") {
-            return this.referenceManager.scanReferencesDetailed(imagePath);
+    private async assertExpectedRevision(
+        source: TFile,
+        expectedRevision?: ImageFileRevision
+    ): Promise<void> {
+        if (!expectedRevision) return;
+        if (source.path !== expectedRevision.path) {
+            throw this.revisionError(source, "Image source moved before conversion");
         }
+        const result = await verifyImageFileRevision(this.app, expectedRevision);
+        if (!result.matches) {
+            throw this.revisionError(
+                source,
+                result.error ?? "Image source changed before conversion"
+            );
+        }
+    }
 
-        return { locations: [], complete: true, uncertainFiles: [] };
+    private revisionError(source: TFile, message: string): ImageConversionCommitError {
+        return new ImageConversionCommitError(message, {
+            stage: "preflight",
+            sourcePath: source.path,
+            sourcePreserved: true,
+            uncertainFiles: [source.path]
+        });
     }
 
     private isReferenceUpdateComplete(result: ReferenceUpdateResult): boolean {
@@ -221,4 +316,128 @@ export class ImageConversionCommitter {
             && (result.uncertainFiles?.length ?? 0) === 0
             && result.replaced === result.found;
     }
+
+    private async scanMutationReferences(
+        source: TFile,
+        safety: ReferenceSafetyReport
+    ): Promise<{
+        markdown: ReferenceScanResult;
+        canvas: CanvasReferenceScanResult;
+    }> {
+        if (this.mutationScanPolicy.includeFencedCode) {
+            return {
+                markdown: {
+                    locations: safety.markdown,
+                    complete: safety.complete,
+                    uncertainFiles: safety.uncertainFiles
+                },
+                canvas: {
+                    references: new Map([[source.path, safety.canvas]]),
+                    complete: safety.complete,
+                    uncertainFiles: safety.uncertainFiles
+                }
+            };
+        }
+        if (this.referenceIndex) {
+            const snapshot = await this.referenceIndex.inspectLocalFile(source, {
+                includeFencedCode: false
+            });
+            return {
+                markdown: {
+                    locations: [...snapshot.markdown],
+                    complete: snapshot.complete,
+                    uncertainFiles: [...snapshot.uncertainFiles]
+                },
+                canvas: {
+                    references: new Map([[source.path, [...snapshot.canvas]]]),
+                    complete: snapshot.complete,
+                    uncertainFiles: [...snapshot.uncertainFiles]
+                }
+            };
+        }
+
+        let markdown: ReferenceScanResult;
+        try {
+            markdown = await this.referenceManager.scanReferencesDetailed(
+                source.path,
+                this.mutationScanPolicy
+            );
+        } catch (error) {
+            markdown = {
+                locations: [],
+                complete: false,
+                uncertainFiles: [`Markdown mutation scan: ${getErrorMessage(error)}`]
+            };
+        }
+
+        let canvas: CanvasReferenceScanResult;
+        try {
+            canvas = await getCanvasFileReferenceIndexDetailed(
+                this.app,
+                [source],
+                this.mutationScanPolicy
+            );
+        } catch (error) {
+            canvas = {
+                references: new Map([[source.path, []]]),
+                complete: false,
+                uncertainFiles: [`Canvas mutation scan: ${getErrorMessage(error)}`]
+            };
+        }
+
+        return { markdown, canvas };
+    }
+}
+
+function getProtectedReferences(
+    safetyMarkdown: readonly ReferenceLocation[],
+    safetyCanvas: readonly CanvasFileReference[],
+    mutableMarkdown: readonly ReferenceLocation[],
+    mutableCanvas: readonly CanvasFileReference[]
+): { count: number; files: string[] } {
+    const mutableMarkdownKeys = countKeys(mutableMarkdown.map(markdownKey));
+    const mutableCanvasKeys = countKeys(mutableCanvas.map(canvasKey));
+    const protectedMarkdown = safetyMarkdown.filter(
+        reference => !consumeKey(mutableMarkdownKeys, markdownKey(reference))
+    );
+    const protectedCanvas = safetyCanvas.filter(
+        reference => !consumeKey(mutableCanvasKeys, canvasKey(reference))
+    );
+    return {
+        count: protectedMarkdown.length + protectedCanvas.length,
+        files: uniqueSorted([
+            ...protectedMarkdown.map(reference => reference.file.path),
+            ...protectedCanvas.map(reference => reference.canvasFile.path)
+        ])
+    };
+}
+
+function countKeys(keys: readonly string[]): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
+    return counts;
+}
+
+function consumeKey(counts: Map<string, number>, key: string): boolean {
+    const count = counts.get(key) ?? 0;
+    if (count === 0) return false;
+    if (count === 1) counts.delete(key);
+    else counts.set(key, count - 1);
+    return true;
+}
+
+function getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+function markdownKey(reference: ReferenceLocation): string {
+    return `${reference.file.path}:${reference.start}-${reference.end}`;
+}
+
+function canvasKey(reference: CanvasFileReference): string {
+    return `${reference.canvasFile.path}:${reference.lineNumber}:${reference.nodeFile}`;
+}
+
+function uniqueSorted(values: readonly string[]): string[] {
+    return [...new Set(values.filter(Boolean))].sort();
 }

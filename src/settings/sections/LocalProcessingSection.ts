@@ -6,6 +6,7 @@ import { t } from "../../lang/helpers";
 import { AVIF_ENCODER_CONFIGS, ImageProcessor } from "../../local/ImageProcessor";
 import { findFfmpegExecutablePath, normalizeExecutablePath } from "../../utils/ffmpegPath";
 import { addInfoIcon } from "../../utils/settingInfo";
+import { AvailableVariablesModal } from "../SettingsModals";
 
 interface RenderContext {
     plugin: ImageConverterPlugin;
@@ -48,7 +49,7 @@ function renderTabs(container: HTMLElement, context: RenderContext): void {
         ["filename", "pencil", t("TAB_FILENAME")],
         ["conversion", "settings", t("TAB_CONVERSION")],
         ["linkformat", "link", t("TAB_LINK_FORMAT")],
-        ["resize", "frame", t("TAB_RESIZE")],
+        ["resize", "frame", t("TAB_EMBED_SIZE")],
     ];
 
     for (const [id, icon, label] of tabDefs) {
@@ -86,7 +87,7 @@ function renderFolder(container: HTMLElement, context: RenderContext): void {
         });
 
     if (destination.type === "SUBFOLDER") {
-        new Setting(container)
+        const setting = new Setting(container)
             .setName(t("MODAL_LABEL_SUBFOLDER_TEMPLATE"))
             .addText(text => {
                 text.setValue(destination.subfolderTemplate || "")
@@ -96,10 +97,11 @@ function renderFolder(container: HTMLElement, context: RenderContext): void {
                     });
                 text.inputEl.setAttr("spellcheck", "false");
             });
+        addVariablesButton(setting, context);
     }
 
     if (destination.type === "CUSTOM") {
-        new Setting(container)
+        const setting = new Setting(container)
             .setName(t("LABEL_CUSTOM_PATH"))
             .addText(text => {
                 text.setValue(destination.customTemplate || "")
@@ -109,13 +111,14 @@ function renderFolder(container: HTMLElement, context: RenderContext): void {
                     });
                 text.inputEl.setAttr("spellcheck", "false");
             });
+        addVariablesButton(setting, context);
     }
 }
 
 function renderFilename(container: HTMLElement, context: RenderContext): void {
     const filename = context.plugin.settings.localProcessing.filename;
 
-    new Setting(container)
+    const templateSetting = new Setting(container)
         .setName(t("LABEL_CUSTOM_IMAGENAME"))
         .addText(text => {
             text.setValue(filename.customTemplate || "")
@@ -125,6 +128,7 @@ function renderFilename(container: HTMLElement, context: RenderContext): void {
                 });
             text.inputEl.setAttr("spellcheck", "false");
         });
+    addVariablesButton(templateSetting, context);
 
     new Setting(container)
         .setName(t("LABEL_SKIP_RENAME_PATTERNS"))
@@ -151,6 +155,20 @@ function renderFilename(container: HTMLElement, context: RenderContext): void {
                     await context.plugin.saveSettings();
                 });
         });
+}
+
+function addVariablesButton(setting: Setting, context: RenderContext): void {
+    setting.addExtraButton(button => {
+        button
+            .setIcon("braces")
+            .setTooltip(t("TOOLTIP_SHOW_VARIABLES"))
+            .onClick(() => {
+                new AvailableVariablesModal(
+                    context.plugin.app,
+                    context.plugin.variableProcessor
+                ).open();
+            });
+    });
 }
 
 function renderConversion(container: HTMLElement, context: RenderContext): void {
@@ -462,7 +480,8 @@ function renderEmbedResize(container: HTMLElement, context: RenderContext): void
     const resize = context.plugin.settings.localProcessing.embedResize;
 
     new Setting(container)
-        .setName(t("SETTING_RESIZE_DIMENSIONS"))
+        .setName(t("SETTING_EMBED_SIZE"))
+        .setDesc(t("SETTING_EMBED_SIZE_DESC"))
         .addDropdown(dropdown => {
             dropdown
                 .addOption("none", t("SETTING_RESIZE_DIM_NONE"))
@@ -540,24 +559,6 @@ function renderEmbedResize(container: HTMLElement, context: RenderContext): void
                 });
         });
 
-    new Setting(container)
-        .setName(t("MODAL_LABEL_MAINTAIN_ASPECT"))
-        .addToggle(toggle => toggle.setValue(resize.maintainAspectRatio).onChange(async value => {
-            resize.maintainAspectRatio = value;
-            await context.plugin.saveSettings();
-        }));
-
-    if (resize.resizeDimension !== "none") {
-        new Setting(container)
-            .setName(t("SETTING_RESPECT_EDITOR_MAX_WIDTH"))
-            .setDesc(t("SETTING_RESPECT_EDITOR_MAX_WIDTH_DESC"))
-            .addToggle(toggle => toggle
-                .setValue(resize.respectEditorMaxWidth)
-                .onChange(async value => {
-                    resize.respectEditorMaxWidth = value;
-                    await context.plugin.saveSettings();
-                }));
-    }
 }
 
 function getActiveAvifEncoder(tools: LocalExternalToolSettings): AvifEncoder | undefined {

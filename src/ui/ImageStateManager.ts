@@ -7,14 +7,20 @@ import { ImageCaption } from './ImageCaption';
 import { pipeSyntaxParser, AlignType, PipeSyntaxData } from '../utils/PipeSyntaxParser';
 import type { ReadingImageContext } from './caption/types';
 import { isElementNode, isHtmlImageElement } from './caption/CaptionDomUtils';
-import { ImageViewContextResolver } from './contextMenu/utils/ImageViewContextResolver';
+import {
+    ImageViewContextResolver,
+    type ImageViewContext
+} from './contextMenu/utils/ImageViewContextResolver';
 import { resolveImageLayout } from './ImageLayoutResolver';
 import {
     IMAGE_LAYOUT_KEY_ATTRIBUTE,
     IMAGE_SOURCE_KEY_ATTRIBUTE,
     type ImageSourceIndex
 } from '../utils/RefinedImageUtils';
-import { getImageLayoutKey } from '../utils/MarkdownSourceContext';
+import {
+    getImageLayoutKey,
+    getImageSourceKey
+} from '../utils/MarkdownSourceContext';
 import { collectUsableMarkdownViews, getMarkdownViewMode } from './MarkdownViewRegistry';
 import {
     LivePreviewImageLayoutCoordinator,
@@ -24,7 +30,11 @@ import {
     ImageDimensionRenderer,
     resolveImageDimensions
 } from './ImageDimensions';
-
+import {
+    EditorRangeMutationTransaction,
+    type EditorRangeMutationResult
+} from '../utils/EditorRangeMutationTransaction';
+import { t } from '../lang/helpers';
 
 export interface ImageState {
     align: 'left' | 'center' | 'right' | 'left-wrap' | 'right-wrap' | 'none';
@@ -38,6 +48,20 @@ export interface ImageState {
     height?: number | null;
     size?: PipeSyntaxData['size'];
     caption?: string;
+}
+
+export type ImageStateMutationStatus =
+    | 'saved'
+    | 'unchanged'
+    | 'stale'
+    | 'rolledBack'
+    | 'uncertain'
+    | 'failed';
+
+export interface ImageStateMutationResult {
+    readonly status: ImageStateMutationStatus;
+    readonly complete: boolean;
+    readonly error?: string;
 }
 
 type WorkspaceWithLayoutState = App['workspace'] & {
@@ -58,6 +82,7 @@ export class ImageStateManager {
     private readingContexts = new WeakMap<HTMLImageElement, ReadingImageContext>();
     private pendingResolutionAttempts = new WeakMap<HTMLImageElement, number>();
     private readonly dimensions = new ImageDimensionRenderer();
+    private readonly editorTransaction = new EditorRangeMutationTransaction();
 
     // Delegates
     public alignment: ImageAlignment;
@@ -440,6 +465,10 @@ export class ImageStateManager {
         const descriptor = hasDescriptor
             ? context.descriptor ?? null
             : retainedContext.descriptor ?? null;
+        if (descriptor) {
+            img.setAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE, getImageSourceKey(descriptor));
+            img.setAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE, getImageLayoutKey(descriptor));
+        }
 
         // Reading Mode DOM attributes can lose Wiki pipe fields. Prefer the
         // exact source link supplied by CaptionRenderCoordinator, then retain
@@ -546,14 +575,50 @@ export class ImageStateManager {
     /**
      * The Central Writer. Updates the markdown file with new state.
      */
-    public async updateState(img: HTMLImageElement, changes: Partial<ImageState>) {
+    public async updateState(
+        img: HTMLImageElement,
+        changes: Partial<ImageState>,
+        expectedContext?: Pick<ImageViewContext, 'view' | 'file' | 'editor'> & {
+            readonly sourceKey?: string | null;
+        }
+    ): Promise<ImageStateMutationResult> {
         const context = this.viewContextResolver.resolve(img);
-        if (!context) return;
-        const { view, editor, match: linkMatch } = context;
+        if (!context || !this.matchesExpectedContext(context, expectedContext)) {
+            return mutationResult('stale');
+        }
+        const { match: linkMatch } = context;
         const linkText = linkMatch.linkText;
+        const hasSizeChanges = changes.width !== undefined || changes.height !== undefined;
+        const hasNonSizeChanges = changes.align !== undefined
+            || changes.wrap !== undefined
+            || changes.caption !== undefined;
+
+        // Resize and size-only property edits must preserve the user's exact
+        // PipeSyntax order, escaping, title, and extension-owned attributes.
+        // Rebuilding the complete link is only safe when another property is
+        // deliberately being edited as part of the same transaction.
+        if (hasSizeChanges && !hasNonSizeChanges) {
+            const sizePatch = pipeSyntaxParser.updateSizePreservingSyntax(linkText, {
+                ...(changes.width === undefined ? {} : { width: changes.width }),
+                ...(changes.height === undefined ? {} : { height: changes.height })
+            });
+            if (sizePatch.status === 'ambiguous') {
+                return mutationResult(
+                    'failed',
+                    t('MSG_RESIZE_PIPE_AMBIGUOUS')
+                );
+            }
+            if (sizePatch.status === 'invalid') {
+                return mutationResult(
+                    'failed',
+                    t('MSG_RESIZE_PIPE_INVALID')
+                );
+            }
+            return this.writeUpdatedLinkText(context, img, expectedContext, sizePatch.linkText);
+        }
 
         const parsed = pipeSyntaxParser.parsePipeSyntax(linkText);
-        if (!parsed) return;
+        if (!parsed) return mutationResult('failed', 'Image link could not be parsed');
 
         // Merge Changes
         // 1. Align & Wrap
@@ -599,29 +664,58 @@ export class ImageStateManager {
             parsed.alt = changes.caption.replace(/\|/g, '\\|');
         }
 
-        // Rebuild and Write
-        // Rebuild and Write
+        // Rebuild and write deliberate multi-property edits.
         const newLinkText = pipeSyntaxParser.buildPipeSyntax(parsed);
 
-        // Check if content actually changed to avoid unnecessary writes
-        if (linkText !== newLinkText) {
-            this.app.workspace.onLayoutReady(() => {
-                if (this.unloaded) return;
-                if (view.contentEl && !view.contentEl.contains(img)) return;
-                if (linkMatch.line < 0 || linkMatch.line >= editor.lineCount()) return;
+        return this.writeUpdatedLinkText(context, img, expectedContext, newLinkText);
+    }
 
-                const currentLine = editor.getLine(linkMatch.line);
-                if (linkMatch.start < 0 || linkMatch.end > currentLine.length || linkMatch.start > linkMatch.end) return;
-                if (currentLine.slice(linkMatch.start, linkMatch.end) !== linkText) return;
-
-                editor.replaceRange(
-                    newLinkText,
-                    { line: linkMatch.line, ch: linkMatch.start },
-                    { line: linkMatch.line, ch: linkMatch.end }
-                );
-            });
+    private async writeUpdatedLinkText(
+        context: ImageViewContext,
+        img: HTMLImageElement,
+        expectedContext: (Pick<ImageViewContext, 'view' | 'file' | 'editor'> & {
+            readonly sourceKey?: string | null;
+        }) | undefined,
+        newLinkText: string
+    ): Promise<ImageStateMutationResult> {
+        const { view, editor, match: linkMatch } = context;
+        const linkText = linkMatch.linkText;
+        if (linkText === newLinkText) return mutationResult('unchanged');
+        if (this.unloaded
+            || !view.contentEl.contains(img)
+            || !this.matchesExpectedContext(context, expectedContext)) {
+            return mutationResult('stale');
         }
 
+        const result = await this.editorTransaction.run(
+            {
+                view,
+                editor,
+                file: context.file
+            },
+            {
+                line: linkMatch.line,
+                start: linkMatch.start,
+                end: linkMatch.end,
+                expectedText: linkText,
+                replacement: newLinkText
+            }
+        );
+        return mapEditorMutationResult(result);
+    }
+
+    private matchesExpectedContext(
+        context: ImageViewContext,
+        expected?: Pick<ImageViewContext, 'view' | 'file' | 'editor'> & {
+            readonly sourceKey?: string | null;
+        }
+    ): boolean {
+        if (!expected) return true;
+        return expected.view === context.view
+            && expected.editor === context.editor
+            && expected.file.path === context.file.path
+            && (!expected.sourceKey
+                || expected.sourceKey === context.match.sourceKey);
     }
 
     public onunload() {
@@ -692,4 +786,27 @@ export class ImageStateManager {
         }, delay);
         this.pendingTimers.add(timer);
     }
+}
+
+function mapEditorMutationResult(
+    result: EditorRangeMutationResult
+): ImageStateMutationResult {
+    if (result.saved) return mutationResult('saved');
+    if (result.stale) return mutationResult('stale', result.error);
+    if (result.uncertain) return mutationResult('uncertain', result.error);
+    if (result.rolledBack && result.rollbackSaved) {
+        return mutationResult('rolledBack', result.error);
+    }
+    return mutationResult('failed', result.error);
+}
+
+function mutationResult(
+    status: ImageStateMutationStatus,
+    error?: string
+): ImageStateMutationResult {
+    return Object.freeze({
+        status,
+        complete: status === 'saved' || status === 'unchanged',
+        ...(error ? { error } : {})
+    });
 }

@@ -1,15 +1,13 @@
 import { RefinedImageUtils } from '../../../src/utils/RefinedImageUtils';
-import { App, Editor, MarkdownView, TFile } from 'obsidian';
+import { Editor } from 'obsidian';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 describe('RefinedImageUtils', () => {
-    let app: App;
     let utils: RefinedImageUtils;
     let mockEditor: Editor;
 
     beforeEach(() => {
-        app = {} as App;
-        utils = new RefinedImageUtils(app);
+        utils = new RefinedImageUtils();
 
         mockEditor = {
             getValue: vi.fn(),
@@ -156,9 +154,6 @@ describe('RefinedImageUtils', () => {
         const img = document.createElement('img');
         img.setAttribute('src', 'app://local/assets/pic.png');
         container.appendChild(img);
-        (app as any).workspace = {
-            getActiveViewOfType: vi.fn(() => ({ contentEl: container }))
-        };
 
         expect(utils.getImageLinkMatchFromEditor(img, mockEditor)).toBeNull();
     });
@@ -331,23 +326,10 @@ describe('RefinedImageUtils', () => {
             .toBe('![[photo.png|Admonition caption]]');
     });
 
-    it('should find line number correctly', () => {
-        const content = [
-            'Line 0',
-            'Line 1: ![[test.png]]',
-            'Line 2'
-        ];
-        (mockEditor.lineCount as any).mockReturnValue(content.length);
-        (mockEditor.getLine as any).mockImplementation((n: number) => content[n]);
-
-        const line = utils.findLinkLineNumber(mockEditor, '![[test.png]]');
-        expect(line).toBe(1);
-    });
-
     it('shares one descriptor index per editor source across utility instances', () => {
         let content = '![[photo.png|Caption|right]]';
         (mockEditor.getValue as any).mockImplementation(() => content);
-        const other = new RefinedImageUtils(app);
+        const other = new RefinedImageUtils();
 
         const first = utils.getImageSourceIndex(mockEditor);
         const shared = other.getImageSourceIndex(mockEditor);

@@ -227,7 +227,10 @@ export function fakeVault(options: {
     adapter: {
       exists: vi.fn(async (path: string) => {
         if (path === '/' || path === '') return true;
-        return files.some(fileItem => fileItem.path === path) || folders.some(folderItem => folderItem.path === path);
+        return files.some(fileItem => fileItem.path === path)
+          || folders.some(folderItem => folderItem.path === path)
+          || fileContents.has(path)
+          || binaryContents.has(path);
       }),
       
       stat: vi.fn(async (path: string) => {
@@ -288,6 +291,21 @@ export function fakeVault(options: {
         const folderIndex = folders.findIndex(folderItem => folderItem.path === path);
         if (folderIndex > -1) {
           folders.splice(folderIndex, 1);
+        }
+        fileContents.delete(path);
+        binaryContents.delete(path);
+      }),
+
+      rename: vi.fn(async (oldPath: string, newPath: string) => {
+        if (fileContents.has(oldPath)) {
+          const content = fileContents.get(oldPath)!;
+          fileContents.delete(oldPath);
+          fileContents.set(newPath, content);
+        }
+        if (binaryContents.has(oldPath)) {
+          const content = binaryContents.get(oldPath)!;
+          binaryContents.delete(oldPath);
+          binaryContents.set(newPath, content);
         }
       })
     },

@@ -1,6 +1,14 @@
 import { App, TFile, normalizePath } from 'obsidian';
-import type { CaptionLinkDescriptor } from '../../utils/MarkdownSourceContext';
+import {
+    getImageLayoutKey,
+    getImageSourceKey,
+    type CaptionLinkDescriptor
+} from '../../utils/MarkdownSourceContext';
 import { isHttpUrl, isSameHttpUrl } from '../../utils/NetworkPolicy';
+import {
+    imageSourceBindingRegistry,
+    type ReadingImageSourceBinding
+} from '../ImageSourceBindingRegistry';
 import { CaptionSourceScanner } from './CaptionSourceScanner';
 
 export interface CaptionSectionBinding {
@@ -18,7 +26,11 @@ export class CaptionRenderCoordinator {
 
     constructor(private readonly app: App) { }
 
-    createSectionBinding(sourceText: string | null | undefined, sourcePath: string): CaptionSectionBinding | null {
+    createSectionBinding(
+        sourceText: string | null | undefined,
+        sourcePath: string,
+        sectionLineStart = 0
+    ): CaptionSectionBinding | null {
         if (!sourceText) return null;
 
         const descriptors = this.scanner.scan(sourceText).descriptors;
@@ -32,7 +44,12 @@ export class CaptionRenderCoordinator {
                 if (!images.includes(oldImage)) this.imageLinks.delete(oldImage);
             }
             trackedImages = [...images];
-            return this.resolveSectionImages(images, descriptors, sourcePath);
+            return this.resolveSectionImages(
+                images,
+                descriptors,
+                sourcePath,
+                sectionLineStart
+            );
         };
 
         return {
@@ -46,6 +63,7 @@ export class CaptionRenderCoordinator {
             releaseImage: image => {
                 trackedImages = trackedImages.filter(candidate => candidate !== image);
                 this.imageLinks.delete(image);
+                imageSourceBindingRegistry.release(image);
             }
         };
     }
@@ -56,37 +74,107 @@ export class CaptionRenderCoordinator {
 
     forgetImage(image: HTMLImageElement): void {
         this.imageLinks.delete(image);
+        imageSourceBindingRegistry.release(image);
     }
 
     private resolveSectionImages(
         images: readonly HTMLImageElement[],
         descriptors: CaptionLinkDescriptor[],
-        sourcePath: string
+        sourcePath: string,
+        sectionLineStart: number
     ): Map<HTMLImageElement, CaptionLinkDescriptor> {
         const resolved = new Map<HTMLImageElement, CaptionLinkDescriptor>();
         const available = new Set(descriptors.map((_descriptor, index) => index));
+        const directDescriptorIndices = new Map<HTMLImageElement, number>();
+        const unresolvedImages: Array<{
+            image: HTMLImageElement;
+            domIndex: number;
+        }> = [];
 
-        for (const image of images) {
+        images.forEach((image, domIndex) => {
             const candidates = this.getImageCandidates(image);
-            let matchIndex = descriptors.findIndex((descriptor, index) =>
+            const matchIndex = descriptors.findIndex((descriptor, index) =>
                 available.has(index) && this.matchesDescriptor(descriptor, candidates, sourcePath)
             );
 
-            if (matchIndex < 0 && available.size === 1 && images.length === descriptors.length) {
-                matchIndex = available.values().next().value ?? -1;
-            }
             if (matchIndex < 0) {
-                this.imageLinks.delete(image);
-                continue;
+                unresolvedImages.push({ image, domIndex });
+                return;
             }
 
             const descriptor = descriptors[matchIndex];
             available.delete(matchIndex);
-            resolved.set(image, descriptor);
-            this.imageLinks.set(image, descriptor);
+            directDescriptorIndices.set(image, matchIndex);
+            this.bindImage(
+                image,
+                descriptor,
+                sourcePath,
+                sectionLineStart,
+                resolved
+            );
+        });
+
+        if (unresolvedImages.length === available.size && unresolvedImages.length > 0) {
+            const remainingIndices = [...available].sort((left, right) => left - right);
+            const fallbackIndices = new Map(
+                unresolvedImages.map(({ image }, index) => [
+                    image,
+                    remainingIndices[index]
+                ])
+            );
+            const descriptorOrder = images.map(image =>
+                directDescriptorIndices.get(image) ?? fallbackIndices.get(image)
+            );
+            const orderIsStable = descriptorOrder.every((index, position) =>
+                index !== undefined
+                && (position === 0 || index > (descriptorOrder[position - 1] ?? -1))
+            );
+            if (orderIsStable) {
+                unresolvedImages.forEach(({ image }, index) => {
+                    this.bindImage(
+                        image,
+                        descriptors[remainingIndices[index]],
+                        sourcePath,
+                        sectionLineStart,
+                        resolved
+                    );
+                });
+            } else {
+                unresolvedImages.forEach(({ image }) => {
+                    this.imageLinks.delete(image);
+                    imageSourceBindingRegistry.release(image);
+                });
+            }
+        } else {
+            unresolvedImages.forEach(({ image }) => {
+                this.imageLinks.delete(image);
+                imageSourceBindingRegistry.release(image);
+            });
         }
 
         return resolved;
+    }
+
+    private bindImage(
+        image: HTMLImageElement,
+        descriptor: CaptionLinkDescriptor,
+        sourcePath: string,
+        sectionLineStart: number,
+        resolved: Map<HTMLImageElement, CaptionLinkDescriptor>
+    ): void {
+        const start = descriptor.index - descriptor.lineStart;
+        const binding: ReadingImageSourceBinding = Object.freeze({
+            descriptor,
+            sourcePath,
+            line: sectionLineStart + descriptor.line,
+            start,
+            end: start + descriptor.source.length,
+            sourceKey: getImageSourceKey(descriptor),
+            layoutKey: getImageLayoutKey(descriptor)
+        });
+        resolved.set(image, descriptor);
+        this.imageLinks.set(image, descriptor);
+        imageSourceBindingRegistry.bindReading(image, binding);
     }
 
     private getImageCandidates(image: HTMLImageElement): string[] {

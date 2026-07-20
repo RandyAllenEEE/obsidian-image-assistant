@@ -1,6 +1,7 @@
 import { App, Editor } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { PasteHandler } from "./PasteHandler";
+import type { EditorImageInsertionContext } from "../../core/EditorImageInsertionContext";
 
 /**
  * DropHandler for Local mode.
@@ -18,7 +19,11 @@ export class DropHandler {
         this.pasteHandler = new PasteHandler(app, plugin);
     }
 
-    async handleDrop(evt: DragEvent, editor: Editor): Promise<void> {
+    async handleDrop(
+        evt: DragEvent,
+        editor: Editor,
+        context?: EditorImageInsertionContext
+    ): Promise<void> {
         if (evt.defaultPrevented) return;
         if (!evt.dataTransfer) return;
 
@@ -38,7 +43,7 @@ export class DropHandler {
 
         if (supportedFiles.length === 0) return;
         if (supportedFiles.length !== fileData.length) return;
-        if (!this.pasteHandler.canProcessFiles()) return;
+        if (!this.pasteHandler.canProcessFiles(context)) return;
 
         // For Drop, we must ensure cursor is where drop happened
         editor.setCursor(pos);
@@ -46,6 +51,6 @@ export class DropHandler {
         evt.preventDefault();
 
         // Delegate to PasteHandler's processFiles method
-        await this.pasteHandler.processFiles(supportedFiles, editor);
+        await this.pasteHandler.processFiles(supportedFiles, editor, context);
     }
 }

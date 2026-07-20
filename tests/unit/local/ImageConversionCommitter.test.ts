@@ -3,6 +3,8 @@ import {
     ImageConversionCommitError,
     ImageConversionCommitter,
 } from "../../../src/local/ImageConversionCommitter";
+import { sha256Hex } from "../../../src/utils/BinaryHash";
+import { createReferenceMutationScanPolicy } from "../../../src/utils/ReferenceScanPolicy";
 import { fakeTFile } from "../../factories/obsidian";
 
 interface FixtureOptions {
@@ -61,6 +63,7 @@ function makeFixture(options: FixtureOptions = {}) {
     });
     const referenceManager: Record<string, unknown> = {
         scanReferencesDetailed,
+        getFilesReferencingImage: vi.fn(async () => []),
         updateReferencesDetailed,
     };
     if (options.useLocationUpdater) {
@@ -153,6 +156,49 @@ describe("ImageConversionCommitter", () => {
         expect(fixture.createUniqueBinary).not.toHaveBeenCalled();
     });
 
+    it("blocks conversion before target creation when ordinary fenced references are protected", async () => {
+        const fixture = makeFixture({ preflightLocations: 1 });
+        const committer = new ImageConversionCommitter(
+            fixture.app,
+            { createUniqueBinary: fixture.createUniqueBinary } as any,
+            {
+                scanReferencesDetailed: vi.fn(async (
+                    _path: string,
+                    policy: { kind: "safety" | "mutation" }
+                ) => ({
+                    locations: policy.kind === "safety"
+                        ? [{
+                            file: fakeTFile({ path: "notes/protected.md", extension: "md" }),
+                            start: 12,
+                            end: 39,
+                            original: "![[assets/photo.png]]",
+                            link: fixture.source.path,
+                            line: 2
+                        }]
+                        : [],
+                    complete: true,
+                    uncertainFiles: []
+                })),
+                getFilesReferencingImage: vi.fn(async () => []),
+                updateReferencesDetailed: vi.fn()
+            } as any,
+            createReferenceMutationScanPolicy(false)
+        );
+
+        const error = await expectCommitError(
+            committer.commit(fixture.source, "photo.webp", new ArrayBuffer(1)),
+            "preflight"
+        );
+
+        expect(error.report).toMatchObject({
+            protectedReferences: 1,
+            protectedFiles: ["notes/protected.md"]
+        });
+        expect(error.report).not.toHaveProperty("targetPath");
+        expect(fixture.createUniqueBinary).not.toHaveBeenCalled();
+        expect(fixture.app.vault.trash).not.toHaveBeenCalled();
+    });
+
     it.each([
         ["throw", "target disk full"],
         ["null", "Could not create converted image"],
@@ -220,6 +266,36 @@ describe("ImageConversionCommitter", () => {
 
         expect(error.message).toContain("trash unavailable");
         expect(error.report.targetPath).toBe(fixture.target.path);
+    });
+
+    it("preserves the source when its content changes before final deletion", async () => {
+        const fixture = makeFixture();
+        const original = new Uint8Array([1, 2, 3, 4]).buffer;
+        const changed = new Uint8Array([9, 8, 7, 6]).buffer;
+        fixture.app.vault.readBinary = vi.fn()
+            .mockResolvedValueOnce(original)
+            .mockResolvedValueOnce(original)
+            .mockResolvedValueOnce(changed);
+        const revision = {
+            path: fixture.source.path,
+            size: original.byteLength,
+            mtime: fixture.source.stat.mtime,
+            sha256: await sha256Hex(original)
+        };
+
+        const error = await expectCommitError(
+            fixture.committer.commit(
+                fixture.source,
+                "photo.webp",
+                new Uint8Array([4, 5, 6]).buffer,
+                revision
+            ),
+            "preflight"
+        );
+
+        expect(error.message).toContain("changed before conversion");
+        expect(fixture.createUniqueBinary).toHaveBeenCalledOnce();
+        expect(fixture.app.vault.trash).not.toHaveBeenCalled();
     });
 
     it("uses the location updater and deletes the source only after clean postflight scans", async () => {

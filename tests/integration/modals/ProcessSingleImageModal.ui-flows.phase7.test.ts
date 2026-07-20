@@ -151,9 +151,11 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
     expect((modal as any).previewImageUrl).toBeNull();
   });
 
-  it('refreshes and restores the same workspace leaf without opening another leaf', async () => {
+  it('refreshes the target resource without resetting a workspace leaf', async () => {
     const plugin = await makePlugin(app);
     (plugin as any).imageStateManager = { refreshAllImages: vi.fn() };
+    const refreshFile = vi.fn().mockResolvedValue({ matched: 1, refreshed: 1 });
+    (plugin as any).imageResourceRefreshService = { refreshFile };
     const currentState = { type: 'markdown', state: { file: img.path } };
     const leaf = {
       getViewState: vi.fn(() => currentState),
@@ -165,15 +167,18 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
 
     await modal.refreshActiveNote();
 
-    expect(leaf.setViewState).toHaveBeenNthCalledWith(1, { type: 'empty', state: {} });
-    expect(leaf.setViewState).toHaveBeenNthCalledWith(2, currentState);
+    expect(refreshFile).toHaveBeenCalledWith(img);
+    expect(leaf.setViewState).not.toHaveBeenCalled();
     expect(getLeaf).not.toHaveBeenCalled();
-    expect((plugin as any).imageStateManager.refreshAllImages).toHaveBeenCalledOnce();
+    expect((plugin as any).imageStateManager.refreshAllImages).not.toHaveBeenCalled();
   });
 
-  it('attempts to restore the note when the first restoration fails', async () => {
+  it('falls back to state refresh when target resource refresh fails', async () => {
     const plugin = await makePlugin(app);
     (plugin as any).imageStateManager = { refreshAllImages: vi.fn() };
+    (plugin as any).imageResourceRefreshService = {
+      refreshFile: vi.fn().mockRejectedValue(new Error('resource refresh failed'))
+    };
     const currentState = { type: 'markdown', state: { file: img.path } };
     const leaf = {
       getViewState: vi.fn(() => currentState),
@@ -186,10 +191,9 @@ describe('ProcessSingleImageModal UI flows (Phase 7: 7.1–7.14 subset)', () => 
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
 
-    await expect(modal.refreshActiveNote()).resolves.toBeUndefined();
+    await expect(modal.refreshActiveNote()).resolves.toBe(false);
 
-    expect(leaf.setViewState).toHaveBeenCalledTimes(3);
-    expect(leaf.setViewState).toHaveBeenLastCalledWith(currentState);
+    expect(leaf.setViewState).not.toHaveBeenCalled();
     expect((plugin as any).imageStateManager.refreshAllImages).toHaveBeenCalledOnce();
   });
 
@@ -523,7 +527,20 @@ const [crfSlider] = sliders;
     };
     (plugin as any).showSizeComparisonNotification = vi.fn();
     (plugin as any).vaultReferenceManager = {
-      updateReferencesDetailed: vi.fn(async () => ({ found: 0, replaced: 0 }))
+      scanReferencesDetailed: vi.fn(async () => ({
+        locations: [],
+        complete: true,
+        uncertainFiles: []
+      })),
+      getFilesReferencingImage: vi.fn(async () => []),
+      updateReferencesDetailed: vi.fn(async () => ({
+        found: 0,
+        replaced: 0,
+        complete: true,
+        files: [],
+        failedFiles: [],
+        uncertainFiles: []
+      }))
     };
 
     // Prepare workspace editor
@@ -585,7 +602,20 @@ const [crfSlider] = sliders;
     };
     (plugin as any).showSizeComparisonNotification = vi.fn();
     (plugin as any).vaultReferenceManager = {
-      updateReferencesDetailed: vi.fn(async () => ({ found: 0, replaced: 0 }))
+      scanReferencesDetailed: vi.fn(async () => ({
+        locations: [],
+        complete: true,
+        uncertainFiles: []
+      })),
+      getFilesReferencingImage: vi.fn(async () => []),
+      updateReferencesDetailed: vi.fn(async () => ({
+        found: 0,
+        replaced: 0,
+        complete: true,
+        files: [],
+        failedFiles: [],
+        uncertainFiles: []
+      }))
     };
 
     // Prepare workspace editor with markdown link to image
@@ -652,6 +682,30 @@ const [crfSlider] = sliders;
     // Settings saved with current modal state
     expect(saveSpy).toHaveBeenCalled();
     expect((plugin as any).settings.operationDefaults.singleImage.quality).toBe(77);
+  });
+
+  it('does not process or write when closed while the source image is being read', async () => {
+    const plugin = await makePlugin(app);
+    const processImageDetailed = vi.fn(async (_file, format) => processedResult(format));
+    (plugin as any).imageProcessor = { processImageDetailed };
+    const modal = new ProcessSingleImageModal(app, plugin as any, img);
+    await modal.onOpen();
+    processImageDetailed.mockClear();
+
+    let finishRead: ((data: ArrayBuffer) => void) | null = null;
+    (app.vault.readBinary as any) = vi.fn(() => new Promise<ArrayBuffer>(resolve => {
+      finishRead = resolve;
+    }));
+
+    const processing = (modal as any).processImage();
+    modal.onClose();
+    expect(finishRead).not.toBeNull();
+    (finishRead as unknown as (data: ArrayBuffer) => void)(new ArrayBuffer(16));
+    await processing;
+
+    expect(processImageDetailed).not.toHaveBeenCalled();
+    expect((app.vault.modifyBinary as any)).not.toHaveBeenCalled();
+    expect((app.vault.createBinary as any)).not.toHaveBeenCalled();
   });
 
   it('7.9 Settings persistence loads on open and saves on close', async () => {

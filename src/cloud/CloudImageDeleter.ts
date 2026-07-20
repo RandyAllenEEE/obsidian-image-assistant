@@ -2,12 +2,13 @@ import { requestUrl } from "obsidian";
 import type ImageConverterPlugin from "../main";
 import { withTimeout } from "../utils/NetworkRequestUtils";
 import { isHttpUrl } from "../utils/NetworkPolicy";
+import { t } from "../lang/helpers";
 
 const CLOUD_REQUEST_TIMEOUT_MS = 60_000;
 
 export interface CloudImageInfo {
     url: string;
-    configMap?: Record<string, any>;
+    configMap?: Record<string, unknown>;
 }
 
 export type CloudDeleteFailureReason =
@@ -22,6 +23,7 @@ export interface CloudDeleteResult {
     reason?: CloudDeleteFailureReason;
     message?: string;
     uploader?: string;
+    historyUpdated?: boolean;
 }
 
 export class CloudImageDeleter {
@@ -107,9 +109,26 @@ export class CloudImageDeleter {
             }
 
             if ((data as { success?: unknown }).success === true) {
-                // Remove from history
-                await this.plugin.historyManager.removeRecord(imageInfo.url);
-                return { success: true };
+                try {
+                    await this.plugin.historyManager.removeRecord(imageInfo.url);
+                    return { success: true, historyUpdated: true };
+                } catch (error) {
+                    const message = error instanceof Error
+                        ? error.message
+                        : String(error);
+                    console.error(
+                        "[Cloud Delete] Remote object was deleted, but upload history could not be updated:",
+                        error
+                    );
+                    return {
+                        success: true,
+                        historyUpdated: false,
+                        message: t("REFERENCE_WORKFLOW_SOURCE_DELETED_HISTORY_STALE", [
+                            message
+                        ]),
+                        uploader: cloudSettings.uploader
+                    };
+                }
             } else {
                 const message = getDeleteResponseMessage(data);
                 console.error('[Cloud Delete] Delete failed:', message);
@@ -129,14 +148,6 @@ export class CloudImageDeleter {
                 uploader: cloudSettings.uploader
             };
         }
-    }
-
-    /**
-     * Delete an image from cloud storage and return only success status.
-     * Kept for callers that do not need failure details.
-     */
-    async deleteImage(imageInfo: CloudImageInfo): Promise<boolean> {
-        return (await this.deleteImageDetailed(imageInfo)).success;
     }
 
     /**

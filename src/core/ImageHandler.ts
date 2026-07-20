@@ -1,7 +1,16 @@
 
-import { Editor } from "obsidian";
+import type { Editor } from "obsidian";
+import type { EditorImageInsertionContext } from "./EditorImageInsertionContext";
 
 export interface ImageHandler {
-    handlePaste(event: ClipboardEvent, editor: Editor): Promise<void>;
-    handleDrop(event: DragEvent, editor: Editor): Promise<void>;
+    handlePaste(
+        event: ClipboardEvent,
+        editor: Editor,
+        context: EditorImageInsertionContext
+    ): Promise<void>;
+    handleDrop(
+        event: DragEvent,
+        editor: Editor,
+        context: EditorImageInsertionContext
+    ): Promise<void>;
 }

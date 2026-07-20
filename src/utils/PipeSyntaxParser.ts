@@ -36,6 +36,24 @@ export interface PipeSyntaxData {
     linkType: 'wiki' | 'markdown';      // 链接类型
 }
 
+/** A dimension-only update used by interactive resizing. */
+export interface PipeSyntaxSizeUpdate {
+    readonly width?: number | null;
+    readonly height?: number | null;
+}
+
+export type PipeSyntaxSizePatchStatus =
+    | 'updated'
+    | 'unchanged'
+    | 'ambiguous'
+    | 'invalid';
+
+/** Result of a source-preserving size update. */
+export interface PipeSyntaxSizePatchResult {
+    readonly status: PipeSyntaxSizePatchStatus;
+    readonly linkText: string;
+}
+
 export type PipeAttributeParseMode = 'storage' | 'display';
 
 export interface PipeSyntaxParseOptions {
@@ -476,6 +494,143 @@ export class PipeSyntaxParser {
         };
 
         return this.buildPipeSyntax(updated);
+    }
+
+    /**
+     * Updates only the size token while retaining the original link shell and
+     * every non-size pipe segment verbatim. This is intentionally stricter
+     * than buildPipeSyntax(): interactive resize must not reorder or discard a
+     * caption, title, escaped pipe, or an extension-owned segment.
+     */
+    public updateSizePreservingSyntax(
+        linkText: string,
+        updates: PipeSyntaxSizeUpdate
+    ): PipeSyntaxSizePatchResult {
+        const target = this.getSizePatchTarget(linkText);
+        if (!target) return { status: 'invalid', linkText };
+
+        const segments = this.splitByUnescapedPipe(target.attributes);
+        const sizeIndexes = this.getSizeTokenIndexes(target.linkType, segments);
+        if (sizeIndexes === null || sizeIndexes.length > 1) {
+            return { status: 'ambiguous', linkText };
+        }
+
+        const existingSize = sizeIndexes.length === 1
+            ? this.parseSizeAttribute(segments[sizeIndexes[0]].trim())
+            : undefined;
+        const nextSize = this.resolveSizeUpdate(existingSize, updates);
+        if (nextSize === null) return { status: 'invalid', linkText };
+
+        if (sizeIndexes.length === 1) {
+            const index = sizeIndexes[0];
+            if (!nextSize) {
+                segments.splice(index, 1);
+            } else {
+                const nextValue = this.formatSizeAttribute(nextSize);
+                segments[index] = this.replaceSegmentValue(segments[index], nextValue);
+            }
+        } else if (nextSize) {
+            segments.push(this.formatSizeAttribute(nextSize));
+        }
+
+        const nextLinkText = `${target.prefix}${segments.join('|')}${target.suffix}`;
+        return {
+            status: nextLinkText === linkText ? 'unchanged' : 'updated',
+            linkText: nextLinkText
+        };
+    }
+
+    private getSizePatchTarget(linkText: string): {
+        readonly linkType: PipeSyntaxData['linkType'];
+        readonly prefix: string;
+        readonly attributes: string;
+        readonly suffix: string;
+    } | null {
+        if (linkText.startsWith('![[') && linkText.endsWith(']]')) {
+            return {
+                linkType: 'wiki',
+                prefix: '![[',
+                attributes: linkText.slice(3, -2),
+                suffix: ']]'
+            };
+        }
+
+        const markdownMatch = linkText.match(/^!\[([^\]]*)\]\(([\s\S]*)\)$/);
+        if (!markdownMatch) return null;
+        return {
+            linkType: 'markdown',
+            prefix: '![',
+            attributes: markdownMatch[1],
+            suffix: `](${markdownMatch[2]})`
+        };
+    }
+
+    private getSizeTokenIndexes(
+        linkType: PipeSyntaxData['linkType'],
+        segments: readonly string[]
+    ): number[] | null {
+        if (linkType === 'wiki') {
+            return this.getMatchingSegmentIndexes(segments, (segment, index) =>
+                index > 0 && this.isSizeAttribute(segment.trim())
+            );
+        }
+
+        // Standard Markdown treats the first segment as alt text. A numeric
+        // first segment followed by other segments is therefore ambiguous:
+        // it may be a legacy numeric caption or a non-standard size-first
+        // syntax. Refuse to alter it rather than guessing.
+        if (segments.length > 1 && this.isSizeAttribute(segments[0].trim())) {
+            return null;
+        }
+
+        return this.getMatchingSegmentIndexes(segments, (segment, index) =>
+            index > 0 && this.isSizeAttribute(segment.trim())
+        );
+    }
+
+    private getMatchingSegmentIndexes(
+        segments: readonly string[],
+        matches: (segment: string, index: number) => boolean
+    ): number[] {
+        const indexes: number[] = [];
+        segments.forEach((segment, index) => {
+            if (matches(segment, index)) indexes.push(index);
+        });
+        return indexes;
+    }
+
+    private resolveSizeUpdate(
+        existing: SizeData | undefined,
+        updates: PipeSyntaxSizeUpdate
+    ): SizeData | undefined | null {
+        const width = updates.width === undefined
+            ? existing?.width
+            : updates.width ?? undefined;
+        const height = updates.height === undefined
+            ? existing?.height
+            : updates.height ?? undefined;
+
+        if (!this.isValidDimension(width) || !this.isValidDimension(height)) {
+            return null;
+        }
+        if (width === undefined && height === undefined) return undefined;
+        return {
+            ...(width === undefined ? {} : { width }),
+            ...(height === undefined ? {} : { height }),
+            format: width !== undefined && height !== undefined
+                ? 'WxH'
+                : width !== undefined ? 'W' : 'xH'
+        };
+    }
+
+    private isValidDimension(value: number | undefined): boolean {
+        return value === undefined || (Number.isInteger(value) && value > 0);
+    }
+
+    private replaceSegmentValue(rawSegment: string, value: string): string {
+        const leadingWhitespace = rawSegment.match(/^\s*/)?.[0] ?? '';
+        const trailingWhitespace = rawSegment.match(/\s*$/)?.[0] ?? '';
+        return `${leadingWhitespace}${value}${trailingWhitespace}`;
     }
 
     /**

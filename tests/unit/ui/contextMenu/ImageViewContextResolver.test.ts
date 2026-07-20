@@ -53,4 +53,75 @@ describe("ImageViewContextResolver", () => {
 
         expect(resolver.resolve(document.createElement("img"))).toBeNull();
     });
+
+    it("does not let an active view claim a connected image when leaf enumeration is empty", () => {
+        const file = fakeTFile({ path: "notes/current.md", extension: "md" });
+        const contentEl = document.createElement("div");
+        const foreignContainer = document.createElement("div");
+        const image = foreignContainer.createEl("img");
+        document.body.append(contentEl, foreignContainer);
+        const view = {
+            file,
+            editor: makeEditor("![[image.png]]"),
+            contentEl,
+            getMode: () => "source"
+        };
+        const workspace = fakeWorkspace({ activeFile: file, activeView: view });
+        workspace.getLeavesOfType = vi.fn(() => []);
+        const resolver = new ImageViewContextResolver(fakeApp({ workspace }) as any);
+
+        expect(resolver.resolveDetailed(image)).toEqual({ status: "pending" });
+    });
+
+    it("uses a unique official URL hint to bind a Blob proxy", () => {
+        const url = "https://cdn.example.com/image?id=42";
+        const source = `![Caption](${url})`;
+        const file = fakeTFile({ path: "notes/current.md", extension: "md" });
+        const contentEl = document.createElement("div");
+        const image = contentEl.createEl("img", {
+            attr: { src: "blob:https://obsidian.local/cache-id" }
+        });
+        const view = {
+            file,
+            editor: makeEditor(source),
+            contentEl,
+            getMode: () => "source"
+        };
+        const workspace = fakeWorkspace({ activeFile: file, activeView: view });
+        workspace.getLeavesOfType = vi.fn(() => [{ view }] as any);
+        const resolver = new ImageViewContextResolver(fakeApp({ workspace }) as any);
+
+        expect(resolver.resolveWithUrlHint(image, url)).toMatchObject({
+            status: "resolved",
+            context: {
+                file,
+                match: {
+                    linkText: source,
+                    descriptor: { path: url }
+                }
+            }
+        });
+    });
+
+    it("does not guess between repeated occurrences of an official URL hint", () => {
+        const url = "https://cdn.example.com/shared";
+        const source = `![](${url})\n![](${url})`;
+        const file = fakeTFile({ path: "notes/current.md", extension: "md" });
+        const contentEl = document.createElement("div");
+        const image = contentEl.createEl("img", {
+            attr: { src: "blob:https://obsidian.local/cache-id" }
+        });
+        const editor = {
+            lineCount: vi.fn(() => 2),
+            getLine: vi.fn((line: number) => source.split("\n")[line]),
+            getValue: vi.fn(() => source)
+        };
+        const view = { file, editor, contentEl, getMode: () => "source" };
+        const workspace = fakeWorkspace({ activeFile: file, activeView: view });
+        workspace.getLeavesOfType = vi.fn(() => [{ view }] as any);
+        const resolver = new ImageViewContextResolver(fakeApp({ workspace }) as any);
+
+        expect(resolver.resolveWithUrlHint(image, url))
+            .toEqual({ status: "pending" });
+    });
 });

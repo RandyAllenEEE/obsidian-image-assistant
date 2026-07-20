@@ -1,6 +1,7 @@
 
-import { App, Editor, MarkdownView } from "obsidian";
+import { App, Editor } from "obsidian";
 import ImageConverterPlugin from "../main";
+import type { EditorImageInsertionContext } from "./EditorImageInsertionContext";
 
 export interface ClipboardItemData {
     kind: string;
@@ -18,7 +19,11 @@ export abstract class BasePasteHandler {
      * Entry point for paste events.
      * Can be overridden by subclasses if they need specific handling (e.g. text paste).
      */
-    async handlePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
+    async handlePaste(
+        evt: ClipboardEvent,
+        editor: Editor,
+        context?: EditorImageInsertionContext
+    ): Promise<void> {
         if (evt.defaultPrevented) return;
         if (!evt.clipboardData) return;
 
@@ -28,19 +33,23 @@ export abstract class BasePasteHandler {
 
         if (supportedFiles.length > 0) {
             if (supportedFiles.length !== fileItemCount) return;
-            if (!this.canProcessFiles()) return;
+            if (!this.canProcessFiles(context)) return;
             evt.preventDefault();
-            await this.processFiles(supportedFiles, editor);
+            await this.processFiles(supportedFiles, editor, context);
         } else {
             // Give subclasses a chance to handle non-file paste (e.g. text/network links)
-            await this.handleNonFilePaste(evt, editor);
+            await this.handleNonFilePaste(evt, editor, context);
         }
     }
 
     /**
      * Optional hook for subclasses to handle non-file paste events
      */
-    protected async handleNonFilePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
+    protected async handleNonFilePaste(
+        evt: ClipboardEvent,
+        editor: Editor,
+        context?: EditorImageInsertionContext
+    ): Promise<void> {
         // Default implementation does nothing
     }
 
@@ -75,14 +84,17 @@ export abstract class BasePasteHandler {
      * Only consume native editor input when we have the same writable Markdown
      * context that processFiles requires. Otherwise Obsidian remains in charge.
      */
-    public canProcessFiles(): boolean {
-        return !!this.app.workspace.getActiveFile()
-            && !!this.app.workspace.getActiveViewOfType(MarkdownView);
+    public canProcessFiles(context?: EditorImageInsertionContext): boolean {
+        return context?.file.extension === "md";
     }
 
     /**
      * Abstract method to process the filtered files.
      * Must be implemented by subclasses (Local/Cloud).
      */
-    abstract processFiles(files: File[], editor: Editor): Promise<void>;
+    abstract processFiles(
+        files: File[],
+        editor: Editor,
+        context?: EditorImageInsertionContext
+    ): Promise<void>;
 }

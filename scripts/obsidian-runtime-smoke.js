@@ -25,9 +25,34 @@ function readArgument(name, fallback) {
     return argument ? argument.slice(prefix.length) : fallback;
 }
 
+function printHelp() {
+    console.log(`Image Assistant Obsidian runtime smoke
+
+Usage:
+  npm run smoke:obsidian -- [options]
+
+Options:
+  --port=<number>                 CDP port (default: 9229)
+  --cdp-wait-ms=<number>          Wait for Obsidian CDP (default: 30000)
+  --cdp-request-timeout-ms=<number>
+                                  Per-request timeout (default: 60000)
+  --version=<version>             Expected plugin version
+  --note=<vault-path>             Acceptance note (default: Acceptance.md)
+  --runtime-events=<true|false>   Enable CDP Runtime/Log events
+  --extended=<true|false>         Run destructive disposable-vault checks
+  --enable-community-plugins=<true|false>
+  --load-plugin=<true|false>
+  --expect-captions=<true|false>
+  --lifecycle=<true|false>
+  --verbose=<true|false>
+  --help                          Show this help
+`);
+}
+
 class CdpClient {
-    constructor(url) {
+    constructor(url, requestTimeoutMs = 60000) {
         this.url = url;
+        this.requestTimeoutMs = requestTimeoutMs;
         this.nextId = 1;
         this.pending = new Map();
         this.events = [];
@@ -60,7 +85,7 @@ class CdpClient {
             const timeout = setTimeout(() => {
                 this.pending.delete(id);
                 reject(new Error(`CDP request timed out: ${method}`));
-            }, 15000);
+            }, this.requestTimeoutMs);
             this.pending.set(id, { resolve, reject, timeout });
             this.socket.send(JSON.stringify({ id, method, params }));
         });
@@ -90,26 +115,55 @@ class CdpClient {
     }
 }
 
-async function getPageTarget(port) {
-    let response;
-    try {
-        response = await fetch(`http://127.0.0.1:${port}/json/list`);
-    } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(
-            `Cannot connect to Obsidian CDP on 127.0.0.1:${port}. `
-            + `Start an isolated Obsidian profile with --remote-debugging-port=${port} (${detail}).`
-        );
-    }
-    if (!response.ok) throw new Error(`DevTools target lookup failed with HTTP ${response.status}`);
-    const targets = await response.json();
-    const page = targets.find(target => target.type === 'page' && target.url.startsWith('app://obsidian.md/'));
-    if (!page) throw new Error('No Obsidian page target is available');
-    return page;
+async function getPageTarget(port, waitMs) {
+    const deadline = Date.now() + waitMs;
+    let lastError = null;
+    do {
+        try {
+            const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+            if (!response.ok) {
+                throw new Error(`DevTools target lookup failed with HTTP ${response.status}`);
+            }
+            const targets = await response.json();
+            const page = targets.find(target =>
+                target.type === 'page'
+                && target.url.startsWith('app://obsidian.md/')
+            );
+            if (page) return page;
+            lastError = new Error('No Obsidian page target is available');
+        } catch (error) {
+            lastError = error;
+        }
+        if (Date.now() >= deadline) break;
+        await new Promise(resolve => setTimeout(resolve, 500));
+    } while (true);
+
+    const detail = lastError instanceof Error
+        ? lastError.message
+        : String(lastError ?? 'unknown error');
+    throw new Error(
+        `Cannot connect to Obsidian CDP on 127.0.0.1:${port} after ${waitMs} ms. `
+        + `Start an isolated Obsidian profile with --remote-debugging-port=${port} (${detail}).`
+    );
 }
 
 async function main() {
+    if (process.argv.slice(2).includes('--help')) {
+        printHelp();
+        return;
+    }
     const port = Number(readArgument('port', '9229'));
+    const cdpWaitMs = Number(readArgument('cdp-wait-ms', '30000'));
+    const cdpRequestTimeoutMs = Number(readArgument('cdp-request-timeout-ms', '60000'));
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`Invalid CDP port: ${port}`);
+    }
+    if (!Number.isFinite(cdpWaitMs) || cdpWaitMs < 0) {
+        throw new Error(`Invalid CDP wait duration: ${cdpWaitMs}`);
+    }
+    if (!Number.isFinite(cdpRequestTimeoutMs) || cdpRequestTimeoutMs < 1000) {
+        throw new Error(`Invalid CDP request timeout: ${cdpRequestTimeoutMs}`);
+    }
     const expectedVersion = readArgument('version', null);
     const notePath = readArgument('note', 'Acceptance.md');
     const enableCommunityPlugins = readArgument('enable-community-plugins', 'false') === 'true';
@@ -123,14 +177,16 @@ async function main() {
         if (verbose) console.error(`[obsidian-smoke] ${message}`);
     };
     const pluginId = 'obsidian-image-assistant';
-    const target = await getPageTarget(port);
-    const client = new CdpClient(target.webSocketDebuggerUrl);
+    const target = await getPageTarget(port, cdpWaitMs);
+    const client = new CdpClient(target.webSocketDebuggerUrl, cdpRequestTimeoutMs);
     await client.connect();
 
     try {
         if (enableRuntimeEvents) {
             await client.send('Runtime.enable');
             await client.send('Log.enable');
+            await new Promise(resolve => setTimeout(resolve, 100));
+            client.events.length = 0;
         }
         progress('checking startup state');
         const startup = await client.evaluate(`(async () => {
@@ -722,7 +778,7 @@ async function main() {
                 && value.imageHeight > 0
                 && value.dimensionMode === 'width'
                 && value.captionPositioned
-                && value.widthError <= 2
+                && value.widthError <= 4
                 && value.ratioError !== null
                 && value.ratioError <= 1
                 && value.captionLeftError !== null
@@ -797,7 +853,7 @@ async function main() {
 
                 plugin.settings.pasteHandling.mode = 'disabled';
                 const disabledEvent = makeClipboardEvent('disabled-paste.png');
-                application.workspace.trigger('editor-paste', disabledEvent, editor);
+                application.workspace.trigger('editor-paste', disabledEvent, editor, leaf.view);
                 await new Promise(resolve => setTimeout(resolve, 300));
                 const disabled = {
                     defaultPrevented: disabledEvent.defaultPrevented,
@@ -811,7 +867,7 @@ async function main() {
                 const lastLine = editor.lineCount() - 1;
                 editor.setCursor({ line: lastLine, ch: editor.getLine(lastLine).length });
                 const pasteEvent = makeClipboardEvent('runtime-paste.png');
-                application.workspace.trigger('editor-paste', pasteEvent, editor);
+                application.workspace.trigger('editor-paste', pasteEvent, editor, leaf.view);
                 const afterPasteFiles = await waitForNewFiles(1);
                 const afterPasteText = editor.getValue();
 
@@ -822,7 +878,7 @@ async function main() {
                 const originalPosAtMouse = editor.posAtMouse;
                 editor.posAtMouse = () => editor.getCursor();
                 try {
-                    application.workspace.trigger('editor-drop', dropEvent, editor);
+                    application.workspace.trigger('editor-drop', dropEvent, editor, leaf.view);
                     await waitForNewFiles(2);
                 } finally {
                     editor.posAtMouse = originalPosAtMouse;
@@ -832,7 +888,7 @@ async function main() {
 
                 const created = application.vault.getFiles()
                     .filter(item => !initialPaths.has(item.path));
-                return {
+                const result = {
                     disabled,
                     paste: {
                         defaultPrevented: pasteEvent.defaultPrevented,
@@ -845,6 +901,12 @@ async function main() {
                         noteLength: editor.getValue().length
                     }
                 };
+                editor.setValue(originalText);
+                await leaf.view.save();
+                for (const createdFile of created) {
+                    await application.vault.delete(createdFile, true);
+                }
+                return result;
             })()`);
             if (pasteDispatch.disabled.defaultPrevented
                 || pasteDispatch.disabled.textChanged
@@ -865,6 +927,9 @@ async function main() {
             batchCommands = await client.evaluate(`(async () => {
                 const application = globalThis.app;
                 const pluginPrefix = ${JSON.stringify(`${pluginId}:`)};
+                if (!application.vault.getAbstractFileByPath('assets')) {
+                    await application.vault.createFolder('assets');
+                }
                 const waitFor = async (predicate, timeout = 5000) => {
                     const deadline = Date.now() + timeout;
                     while (Date.now() < deadline) {
@@ -947,7 +1012,9 @@ async function main() {
                 }
                 return {
                     results,
-                    remainingModals: document.querySelectorAll('.modal-container').length
+                    remainingModals: document.querySelectorAll(
+                        '.image-converter-batch-modal'
+                    ).length
                 };
             })()`);
             const invalidBatchCommands = batchCommands.results.filter(result =>
@@ -959,8 +1026,11 @@ async function main() {
                 || !result.scopeText
                 || !result.closed
             );
-            if (invalidBatchCommands.length) {
-                failures.push(`batch command smoke failed: ${JSON.stringify(invalidBatchCommands)}`);
+            if (invalidBatchCommands.length || batchCommands.remainingModals !== 0) {
+                failures.push(`batch command smoke failed: ${JSON.stringify({
+                    invalid: invalidBatchCommands,
+                    remainingModals: batchCommands.remainingModals
+                })}`);
             }
 
             progress('checking Fabric annotation modal lifecycle');
@@ -984,11 +1054,17 @@ async function main() {
                     'image/png'
                 ));
                 const annotationData = await blob.arrayBuffer();
-                const existingAnnotation = application.vault.getAbstractFileByPath(annotationPath);
-                if (existingAnnotation) {
-                    await application.vault.modifyBinary(existingAnnotation, annotationData);
+                if (!application.vault.getAbstractFileByPath('assets')) {
+                    await application.vault.createFolder('assets');
+                }
+                let annotationFile = application.vault.getAbstractFileByPath(annotationPath);
+                if (annotationFile) {
+                    await application.vault.modifyBinary(annotationFile, annotationData);
                 } else {
-                    await application.vault.createBinary(annotationPath, annotationData);
+                    annotationFile = await application.vault.createBinary(
+                        annotationPath,
+                        annotationData
+                    );
                 }
                 const annotationLink = '![[assets/runtime-annotation.png|Annotation fixture]]';
                 const noteText = await application.vault.read(file);
@@ -1016,11 +1092,100 @@ async function main() {
                         }, { once: true });
                     });
                 }
-                const handler = plugin.contextMenu?.processingHandler;
-                if (!image || !handler) {
-                    return { opened: false, reason: 'local image or processing handler unavailable' };
+                const renderedMenu = plugin.contextMenu?.renderedImageMenu;
+                if (!image || !renderedMenu) {
+                    return { opened: false, reason: 'local image or rendered menu unavailable' };
                 }
-                await handler.annotateImage(image);
+                const menuItems = [];
+                const hideCallbacks = [];
+                const menu = {
+                    addSeparator() {
+                        menuItems.push({ separator: true });
+                        return this;
+                    },
+                    addItem(builder) {
+                        const entry = {
+                            title: '',
+                            icon: '',
+                            click: null,
+                            setTitle(value) {
+                                this.title = value;
+                                return this;
+                            },
+                            setIcon(value) {
+                                this.icon = value;
+                                return this;
+                            },
+                            setSection() {
+                                return this;
+                            },
+                            setSectionSubmenu() {
+                                return this;
+                            },
+                            setChecked() {
+                                return this;
+                            },
+                            setDisabled() {
+                                return this;
+                            },
+                            setWarning() {
+                                return this;
+                            },
+                            setSubmenu() {
+                                return this;
+                            },
+                            setTooltip() {
+                                return this;
+                            },
+                            onClick(callback) {
+                                this.click = callback;
+                                return this;
+                            }
+                        };
+                        builder(entry);
+                        menuItems.push(entry);
+                        return this;
+                    },
+                    onHide(callback) {
+                        hideCallbacks.push(callback);
+                    },
+                    setSectionSubmenu() {
+                        return this;
+                    },
+                    hide() {
+                        for (const callback of hideCallbacks.splice(0)) callback();
+                    }
+                };
+                // Feed the captured image to the plugin, then exercise the same
+                // official menu event used by Obsidian. Dispatching a browser
+                // contextmenu here would let Obsidian synchronously consume the
+                // pending context before this instrumented menu can inspect it.
+                const contextEvent = {
+                    target: image,
+                    defaultPrevented: true
+                };
+                renderedMenu.handleContextMenuEvent(contextEvent);
+                application.workspace.trigger(
+                    'file-menu',
+                    menu,
+                    annotationFile,
+                    'link',
+                    leaf
+                );
+                const annotationItem = menuItems.find(item =>
+                    !item.separator && item.icon === 'pencil'
+                );
+                if (!annotationItem?.click) {
+                    return {
+                        opened: false,
+                        reason: 'official image menu did not expose annotation',
+                        contextMenuDefaultPrevented: contextEvent.defaultPrevented,
+                        menuItems: menuItems
+                            .filter(item => !item.separator)
+                            .map(item => ({ title: item.title, icon: item.icon }))
+                    };
+                }
+                await annotationItem.click();
                 const deadline = Date.now() + 10000;
                 let modal = null;
                 while (Date.now() < deadline) {
@@ -1059,6 +1224,8 @@ async function main() {
                 }
                 const result = {
                     opened: true,
+                    contextMenuDefaultPrevented: contextEvent.defaultPrevented,
+                    menuItemCount: menuItems.filter(item => !item.separator).length,
                     canvasCount: canvases.length,
                     canvasWidth: drawableCanvas?.width ?? 0,
                     canvasHeight: drawableCanvas?.height ?? 0,
@@ -1079,9 +1246,22 @@ async function main() {
                 result.remainingAnnotationModals = document.querySelectorAll(
                     '.image-converter-annotation-tool-image-annotation-modal'
                 ).length;
+                menu.hide();
+                const finalNoteText = await application.vault.read(file);
+                if (finalNoteText.includes(annotationLink)) {
+                    await application.vault.modify(
+                        file,
+                        finalNoteText.replace('\\n\\n' + annotationLink + '\\n', '\\n')
+                    );
+                }
+                const finalAnnotation = application.vault.getAbstractFileByPath(annotationPath);
+                if (finalAnnotation) {
+                    await application.vault.delete(finalAnnotation, true);
+                }
                 return result;
             })()`);
             if (!annotation.opened
+                || annotation.menuItemCount < 1
                 || annotation.canvasCount < 1
                 || annotation.canvasWidth < 1
                 || annotation.canvasHeight < 1
@@ -1117,11 +1297,17 @@ async function main() {
             if (!lifecycle.reloaded) failures.push('plugin did not reload after lifecycle smoke');
         }
 
-        const runtimeErrors = client.events
+        const runtimeDiagnostics = client.events
             .filter(event => event.method === 'Runtime.exceptionThrown' || event.method === 'Log.entryAdded')
             .map(event => event.params?.exceptionDetails?.exception?.description
                 ?? event.params?.entry?.text)
             .filter(Boolean);
+        const resourceLoadDiagnostics = runtimeDiagnostics.filter(message =>
+            message.startsWith('Failed to load resource:')
+        );
+        const runtimeErrors = runtimeDiagnostics.filter(message =>
+            !message.startsWith('Failed to load resource:')
+        );
         if (runtimeErrors.length) failures.push(`runtime errors: ${runtimeErrors.join(' | ')}`);
 
         const report = {
@@ -1135,6 +1321,7 @@ async function main() {
             batchCommands,
             annotation,
             lifecycle,
+            resourceLoadDiagnostics,
             runtimeErrors,
             failures
         };

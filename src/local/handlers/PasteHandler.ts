@@ -1,4 +1,4 @@
-import { App, Editor, Notice, MarkdownView } from "obsidian";
+import { App, Editor, Notice } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
 import { EditorContentInserter } from "../../utils/EditorContentInserter";
@@ -6,9 +6,9 @@ import {
     ResizeMode
 } from "../../settings/types";
 import { BasePasteHandler } from "../../core/BasePasteHandler";
-import { NotificationManager } from "../../utils/NotificationManager";
 import { ConcurrentQueue } from "../../utils/AsyncLock";
 import type { ProcessedImageResult } from "../ImageProcessor";
+import type { EditorImageInsertionContext } from "../../core/EditorImageInsertionContext";
 
 function replaceFilenameExtension(filename: string, sourceFilename: string): string {
     const sourceDot = sourceFilename.lastIndexOf(".");
@@ -29,24 +29,21 @@ export class PasteHandler extends BasePasteHandler {
 
     // handlePaste is inherited from BasePasteHandler
 
-    async processFiles(files: File[], editor: Editor): Promise<void> {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!activeFile) {
-            NotificationManager.showWarning("No active file found!", 3000);
-            return;
-        }
-
-        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!activeView) {
-            new Notice(t("MSG_NO_ACTIVE_VIEW") || "No active Markdown view detected.");
-            return;
-        }
-
+    async processFiles(
+        files: File[],
+        editor: Editor,
+        context?: EditorImageInsertionContext
+    ): Promise<void> {
+        if (!context) return;
+        const sourceFile = context.file;
         const filePromises = files.map((file) => {
-            const inserter = new EditorContentInserter(activeView);
+            const inserter = new EditorContentInserter(
+                context.view ?? editor,
+                sourceFile
+            );
             inserter.insertLoadingText(`${t("LOADING_PROCESS") || "Processing"} ${file.name}...`);
 
-            return async () => {
+            return async () => inserter.runWithCurrentPlaceholder(async () => {
                 const localProcessing = this.plugin.settings.localProcessing;
                 const { conversion, filename, destination, link, embedResize, externalTools } = localProcessing;
 
@@ -54,7 +51,7 @@ export class PasteHandler extends BasePasteHandler {
                     // Determine Destination
                     const destinationResult = await this.plugin.folderAndFilenameManagement.determineDestination(
                         file,
-                        activeFile,
+                        sourceFile,
                         conversion,
                         filename,
                         destination
@@ -69,8 +66,20 @@ export class PasteHandler extends BasePasteHandler {
                     if (filename?.conflictResolution === 'skip') {
                         const fullPath = this.plugin.folderAndFilenameManagement.combinePath(destinationPath, newFilename);
                         if (await this.app.vault.adapter.exists(fullPath)) {
-                            new Notice(`Skipping "${file.name}" (already exists).`);
-                            await this.plugin.insertLinkWithInserter(inserter, editor, fullPath, link, embedResize);
+                            new Notice(t("MSG_LOCAL_PASTE_SKIPPED_EXISTS", [
+                                file.name
+                            ]));
+                            const inserted = await this.plugin.insertLinkWithInserter(
+                                inserter,
+                                fullPath,
+                                sourceFile,
+                                link,
+                                embedResize,
+                                context
+                            );
+                            if (!inserted) {
+                                new Notice(t("MSG_LOCAL_PASTE_LINK_STALE", [fullPath]));
+                            }
                             return;
                         }
                     }
@@ -102,7 +111,10 @@ export class PasteHandler extends BasePasteHandler {
                         } catch (error) {
                             const message = error instanceof Error ? error.message : String(error);
                             console.error(`Processing ${file.name} failed; preserving the original image:`, error);
-                            new Notice(`Using the original image for "${file.name}": ${message}`);
+                            new Notice(t("MSG_LOCAL_PASTE_USING_ORIGINAL", [
+                                file.name,
+                                message
+                            ]));
                             finalBuffer = await file.arrayBuffer();
                             newFilename = replaceFilenameExtension(newFilename, file.name);
                             processedImage = null;
@@ -122,7 +134,10 @@ export class PasteHandler extends BasePasteHandler {
                                 finalBuffer = processedImage.data;
                                 newFilename = replaceFilenameExtension(newFilename, file.name);
                             } else if (shouldRevertIfLarger && processedImage.data.byteLength + (minSavingsKB * 1024) > originalSize) {
-                                new Notice(`Using original image for "${file.name}" because size reduction was less than ${minSavingsKB} KB.`);
+                                new Notice(t("MSG_LOCAL_PASTE_SAVINGS_TOO_SMALL", [
+                                    file.name,
+                                    minSavingsKB
+                                ]));
                                 finalBuffer = await file.arrayBuffer();
                                 newFilename = replaceFilenameExtension(newFilename, file.name);
                             } else {
@@ -133,7 +148,9 @@ export class PasteHandler extends BasePasteHandler {
                     }
 
                     if (!finalBuffer) {
-                        throw new Error(`No image data was produced for ${file.name}`);
+                        throw new Error(t("MSG_LOCAL_PASTE_NO_DATA", [
+                            file.name
+                        ]));
                     }
 
                     // Atomic Creation / Conflict Resolution
@@ -146,21 +163,33 @@ export class PasteHandler extends BasePasteHandler {
                     );
 
                     if (savedFile) {
-                        await this.plugin.insertLinkWithInserter(inserter, editor, savedFile.path, link, embedResize);
+                        const inserted = await this.plugin.insertLinkWithInserter(
+                            inserter,
+                            savedFile.path,
+                            sourceFile,
+                            link,
+                            embedResize,
+                            context
+                        );
+                        if (!inserted) {
+                            new Notice(t("MSG_LOCAL_PASTE_LINK_STALE", [
+                                savedFile.path
+                            ]));
+                        }
                     } else {
                         if (conflictMode === 'skip') {
-                            new Notice(`Skipping "${file.name}" (File exists)`);
+                            new Notice(t("MSG_LOCAL_PASTE_SKIPPED_EXISTS", [
+                                file.name
+                            ]));
                         }
                     }
 
                 } catch (error) {
                     console.error("Processing failed:", error);
                     const message = error instanceof Error ? error.message : String(error);
-                    new Notice(`Processing failed: ${message}`);
-                } finally {
-                    inserter.removeLoadingText();
+                    new Notice(t("MSG_LOCAL_PASTE_FAILED", [message]));
                 }
-            };
+            });
         });
 
         // Execute with concurrency

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPlaceholderSession } from "../../../src/utils/EditorReplacement";
+import {
+    createPlaceholderSession,
+    createTrackedRangeSession
+} from "../../../src/utils/EditorReplacement";
 
 function makeEditor(initialValue = "0123456789\nabcdefghij\nABCDEFGHIJ", cursor = { line: 2, ch: 4 }) {
     let value = initialValue;
@@ -151,5 +154,53 @@ describe("EditorReplacement", () => {
         expect(second.replace("B\nline-2")).toBe(true);
         expect(first.replace("A")).toBe(true);
         expect(editor.getValue()).toBe("prefix AB\nline-2suffix");
+    });
+
+    it("tracks an existing fallback range without inserting duplicate text", () => {
+        const editor = makeEditor("prefix original suffix", { line: 0, ch: 0 });
+        editor.replaceRange.mockClear();
+
+        const session = createTrackedRangeSession(
+            editor as any,
+            "original",
+            { line: 0, ch: 7 }
+        );
+
+        expect(session.inserted).toBe(false);
+        expect(session.active).toBe(true);
+        expect(editor.replaceRange).not.toHaveBeenCalled();
+        expect(session.replace("updated")).toBe(true);
+        expect(editor.getValue()).toBe("prefix updated suffix");
+    });
+
+    it("can release an existing fallback range while preserving its text", () => {
+        const editor = makeEditor("prefix original suffix", { line: 0, ch: 0 });
+        const session = createTrackedRangeSession(
+            editor as any,
+            "original",
+            { line: 0, ch: 7 }
+        );
+
+        expect(session.release()).toBe(true);
+        expect(session.status).toBe("completed");
+        expect(session.release()).toBe(false);
+        expect(session.remove()).toBe(false);
+        expect(editor.getValue()).toBe("prefix original suffix");
+    });
+
+    it("returns an inactive session when an existing fallback range is stale", () => {
+        const editor = makeEditor("prefix changed suffix", { line: 0, ch: 0 });
+        const session = createTrackedRangeSession(
+            editor as any,
+            "original",
+            { line: 0, ch: 7 }
+        );
+
+        expect(session.status).toBe("stale");
+        expect(session.active).toBe(false);
+        expect(session.replace("updated")).toBe(false);
+        expect(session.remove()).toBe(false);
+        expect(session.release()).toBe(false);
+        expect(editor.getValue()).toBe("prefix changed suffix");
     });
 });

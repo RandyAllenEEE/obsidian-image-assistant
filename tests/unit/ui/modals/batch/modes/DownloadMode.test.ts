@@ -134,6 +134,44 @@ describe("DownloadMode", () => {
         await expect(mode.processTask(task)).resolves.toMatchObject({ status: "failed", error: "worker crashed" });
     });
 
+    it("skips an unverified Canvas URL when downloaded bytes are not an image", async () => {
+        const note = fakeTFile({ path: "boards/current.canvas", extension: "canvas" });
+        const url = "https://example.com/article";
+        const plugin = makeDownloadPlugin({
+            folderAndFilenameManagement: { ensureFolderExists: vi.fn() },
+            cloudImageHandler: {
+                downloadImageToFolder: vi.fn().mockResolvedValue({
+                    success: false,
+                    url,
+                    error: "not an image",
+                    errorCode: "not-image"
+                })
+            }
+        });
+        const mode = new DownloadMode(fakeApp() as any, plugin, note, "note");
+
+        await expect(mode.processTask({
+            id: url,
+            name: "article",
+            path: url,
+            source: {
+                url,
+                verification: "unverified",
+                origins: [{
+                    file: note,
+                    targetFolder: "assets",
+                    verification: "unverified"
+                }]
+            },
+            selected: true,
+            status: "pending"
+        })).resolves.toMatchObject({
+            status: "skipped",
+            skipped: true,
+            item: url
+        });
+    });
+
     it("handles malformed URL helpers and exposes uploader-appropriate review actions", () => {
         const plugin = makeDownloadPlugin();
         const mode = new DownloadMode(fakeApp() as any, plugin, null, "vault");
@@ -142,7 +180,6 @@ describe("DownloadMode", () => {
         expect((mode as any).isAllowedNetworkImageUrl("ftp://example.com/image.png")).toBe(false);
         expect((mode as any).isAllowedNetworkImageUrl("not a url")).toBe(false);
         expect((mode as any).extractImageNameFromUrl("https://example.com/%E0%A4%A")).toBe("%E0%A4%A");
-        expect((mode as any).isLikelyCanvasImageUrl("not a url")).toBe(false);
 
         plugin.settings.pasteHandling.cloud.uploader = "PicGo";
         expect(mode.getReviewActions().map(action => action.id)).toEqual(["replace_only", "undo"]);
@@ -169,20 +206,18 @@ describe("DownloadMode", () => {
         const note = fakeTFile({ path: "notes/current.md", name: "current.md", extension: "md" });
         const url = "https://cdn.example.com/photo.png";
         const skipped = {
-            status: "skipped",
             success: false,
             skipped: true,
-            item: url,
+            url,
             error: "Destination exists"
         } as const;
         const plugin = makeDownloadPlugin({
             folderAndFilenameManagement: {
-                getDefaultAttachmentFolderPath: vi.fn(async () => "attachments")
+                getDefaultAttachmentFolderPath: vi.fn(async () => "attachments"),
+                ensureFolderExists: vi.fn()
             },
             cloudImageHandler: {
-                batchDownload: vi.fn(async () => ({
-                    successful: [], failed: [], skipped: [skipped], cancelled: false
-                }))
+                downloadImageToFolder: vi.fn(async () => skipped)
             }
         });
         const mode = new DownloadMode(fakeApp() as any, plugin, note, "note");
@@ -194,7 +229,13 @@ describe("DownloadMode", () => {
             source: { url, file: note },
             selected: true,
             status: "pending"
-        })).resolves.toBe(skipped);
+        })).resolves.toMatchObject({
+            status: "skipped",
+            success: false,
+            skipped: true,
+            item: url,
+            error: "Destination exists"
+        });
     });
 
     it("accepts metadata image embeds regardless of URL extension and strips query text from task names", async () => {
@@ -365,7 +406,7 @@ describe("DownloadMode", () => {
         }));
     });
 
-    it("discovers network images in Canvas text and likely-image link nodes", async () => {
+    it("discovers Canvas image syntax and marks all native URL nodes for execution-time verification", async () => {
         const canvas = fakeTFile({ path: "boards/media.canvas", name: "media.canvas", extension: "canvas" });
         const textUrl = "https://cdn.example.com/render?id=42";
         const nativeUrl = "https://cdn.example.com/photo.webp";
@@ -385,7 +426,15 @@ describe("DownloadMode", () => {
 
         const { tasks } = await new DownloadMode(app, plugin, canvas, "note").loadTasks();
 
-        expect(tasks.map(task => task.path).sort()).toEqual([nativeUrl, textUrl].sort());
+        expect(tasks.map(task => task.path).sort()).toEqual([
+            nativeUrl,
+            textUrl,
+            "https://example.com/article"
+        ].sort());
+        expect(tasks.find(task => task.path === "https://example.com/article")?.source)
+            .toEqual(expect.objectContaining({ verification: "unverified" }));
+        expect(tasks.find(task => task.path === textUrl)?.source)
+            .toEqual(expect.objectContaining({ verification: "verified" }));
     });
 
     it("uses the note where a URL was found when choosing the download attachment folder", async () => {
@@ -401,19 +450,20 @@ describe("DownloadMode", () => {
             metadataCache,
             workspace: fakeWorkspace({ activeFile: activeNote })
         }) as any;
-        const batchDownload = vi.fn(async () => ({
-            successful: [{ status: "success", success: true, item: url, output: { vaultPath: "project/assets/photo.png" } }],
-            failed: [],
-            skipped: [],
-            cancelled: false
+        const downloadImageToFolder = vi.fn(async () => ({
+            success: true,
+            url,
+            vaultPath: "project/assets/photo.png",
+            disposition: "created"
         }));
         const getDefaultAttachmentFolderPath = vi.fn(async (file: any) => `attachments-for/${file.basename}`);
         const plugin = makeDownloadPlugin({
             folderAndFilenameManagement: {
-                getDefaultAttachmentFolderPath
+                getDefaultAttachmentFolderPath,
+                ensureFolderExists: vi.fn()
             },
             cloudImageHandler: {
-                batchDownload
+                downloadImageToFolder
             }
         });
         plugin.settings.global.codeBlockImageLinkIndexing = false;
@@ -424,14 +474,12 @@ describe("DownloadMode", () => {
 
         expect(getDefaultAttachmentFolderPath).toHaveBeenCalledWith(sourceNote);
         expect(getDefaultAttachmentFolderPath).not.toHaveBeenCalledWith(activeNote);
-        expect(batchDownload).toHaveBeenCalledWith([
-            {
-                url,
-                targetFolder: "attachments-for/source",
-                suggestedName: "photo.png",
-                activeFile: sourceNote
-            }
-        ]);
+        expect(downloadImageToFolder).toHaveBeenCalledWith(
+            url,
+            "attachments-for/source",
+            "photo.png",
+            sourceNote
+        );
     });
 
     it("stores one copy for a conflicting URL when the batch chooses the first source folder", async () => {
@@ -638,7 +686,10 @@ describe("DownloadMode", () => {
             cancelled: false,
         });
 
-        expect(plugin.vaultReferenceManager.scanReferencesDetailed).toHaveBeenCalledWith(url);
+        expect(plugin.vaultReferenceManager.scanReferencesDetailed).toHaveBeenCalledWith(
+            url,
+            { kind: "safety", includeFencedCode: true }
+        );
         expect(updateReferenceLocationsDetailed).toHaveBeenCalledWith(inScopeLocations, expect.any(Function));
         expect(noticeMock).toHaveBeenCalledWith("Replaced 2 links in 1 notes.");
     });
@@ -722,6 +773,8 @@ describe("DownloadMode", () => {
                 isUrlUploaded: vi.fn(() => true),
             },
         } as any;
+        plugin.settings.pasteHandling.cloud.uploader = "PicList";
+        plugin.settings.pasteHandling.cloud.deleteServer = "http://127.0.0.1:36677/delete";
         const mode = new DownloadMode(app, plugin, noteInScope, "note");
 
         const completed = await mode.handleReviewAction("replace_delete_cloud", {
@@ -748,7 +801,7 @@ describe("DownloadMode", () => {
             settings: structuredClone(DEFAULT_SETTINGS),
             vaultReferenceManager: {
                 scanReferencesDetailed: vi.fn(async () => ({
-                    locations: scanCount++ === 0 ? [{
+                    locations: scanCount++ < 2 ? [{
                         file: noteInScope, start: 0, end: 1, original: `![](${url})`, link: url, line: 0
                     }] : [],
                     complete: true,
@@ -766,6 +819,8 @@ describe("DownloadMode", () => {
                 isUrlUploaded: vi.fn(() => true),
             },
         } as any;
+        plugin.settings.pasteHandling.cloud.uploader = "PicList";
+        plugin.settings.pasteHandling.cloud.deleteServer = "http://127.0.0.1:36677/delete";
         const mode = new DownloadMode(app, plugin, noteInScope, "note");
 
         await mode.handleReviewAction("replace_delete_cloud", {

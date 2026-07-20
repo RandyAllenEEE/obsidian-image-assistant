@@ -1,265 +1,290 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { RenameHandler } from '../../../../src/ui/contextMenu/handlers/RenameHandler';
-import { fakeApp, fakeTFile, fakeVault, fakeWorkspace } from '../../../factories/obsidian';
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { RenameHandler } from "../../../../src/ui/contextMenu/handlers/RenameHandler";
+import {
+    fakeApp,
+    fakeTFile,
+    fakeVault,
+    fakeWorkspace
+} from "../../../factories/obsidian";
 
-function input(value: string): HTMLInputElement {
-  const el = document.createElement('input');
-  el.value = value;
-  return el;
-}
+describe("RenameHandler", () => {
+    beforeEach(() => vi.clearAllMocks());
 
-describe('RenameHandler', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+    function makeFixture(
+        source = "![[assets/pic.png|Old caption|right|500x300]]"
+    ) {
+        const imageFile = fakeTFile({
+            path: "assets/pic.png",
+            name: "pic.png",
+            extension: "png"
+        });
+        const note = fakeTFile({
+            path: "notes/current.md",
+            name: "current.md",
+            extension: "md"
+        });
+        const vault = fakeVault({ files: [imageFile, note] }) as any;
+        const app = fakeApp({
+            vault,
+            workspace: fakeWorkspace({ activeFile: note })
+        }) as any;
+        let line = source;
+        const editor = {
+            getLine: vi.fn(() => line),
+            getValue: vi.fn(() => line),
+            lineCount: vi.fn(() => 1),
+            replaceRange: vi.fn((
+                replacement: string,
+                start: { ch: number },
+                end: { ch: number }
+            ) => {
+                line = line.slice(0, start.ch)
+                    + replacement
+                    + line.slice(end.ch);
+            })
+        };
+        const view = {
+            file: note,
+            editor,
+            save: vi.fn().mockResolvedValue(undefined),
+            contentEl: document.createElement("div")
+        };
+        const match = {
+            line: 0,
+            start: 0,
+            end: source.length,
+            linkText: source
+        };
+        const context = {
+            image: document.createElement("img"),
+            ownerDocument: document,
+            ownerWindow: window,
+            renderedSrc: "app://local/assets/pic.png",
+            sourceKind: "local",
+            resolution: "resolved",
+            owner: { view, file: note, editor },
+            viewContext: { view, file: note, editor, match },
+            descriptor: null,
+            localFile: imageFile,
+            url: null,
+            dataReference: null
+        } as any;
+        const plugin = {
+            imageStateManager: { refreshAllImages: vi.fn() },
+            imageCaption: { refreshAllViews: vi.fn() }
+        } as any;
+        const folderManagement = {
+            ensureFolderExists: vi.fn().mockResolvedValue(undefined),
+            safeRenameFile: vi.fn().mockResolvedValue(true),
+            sanitizeFilename: vi.fn((value: string) => value.trim())
+        };
+        const renameCoordinator = {
+            execute: vi.fn(async (request: { rename: () => Promise<boolean> }) => {
+                try {
+                    const fileMoved = await request.rename();
+                    return {
+                        complete: fileMoved,
+                        fileMoved,
+                        compatibilityCopyCreated: false,
+                        compatibilityCopyPreserved: false,
+                        repairedReferences: 0,
+                        failedFiles: [],
+                        uncertainFiles: [],
+                        error: fileMoved ? undefined : "File rename was not completed"
+                    };
+                } catch (error) {
+                    return {
+                        complete: false,
+                        fileMoved: false,
+                        compatibilityCopyCreated: false,
+                        compatibilityCopyPreserved: false,
+                        repairedReferences: 0,
+                        failedFiles: [],
+                        uncertainFiles: [],
+                        error: error instanceof Error ? error.message : String(error)
+                    };
+                }
+            })
+        };
+        const handler = new RenameHandler(
+            app,
+            plugin,
+            folderManagement as any,
+            {
+                processTemplate: vi.fn(async (value: string) => value)
+            } as any,
+            renameCoordinator as any
+        );
+        return {
+            app,
+            context,
+            editor,
+            folderManagement,
+            getLine: () => line,
+            handler,
+            imageFile,
+            plugin,
+            renameCoordinator,
+            view
+        };
+    }
 
-  function makeHandler(options: {
-    imagePath?: string;
-    imageName?: string;
-  } = {}) {
-    const imageFile = fakeTFile({
-      path: options.imagePath ?? 'assets/pic.png',
-      name: options.imageName ?? 'pic.png',
-      extension: (options.imageName ?? 'pic.png').split('.').pop() ?? 'png'
-    });
-    const activeFile = fakeTFile({ path: 'notes/current.md', name: 'current.md', extension: 'md' });
-    const vault = fakeVault({ files: [imageFile, activeFile] }) as any;
-    vault.getResourcePath = vi.fn((file: any) => `app://local/${file.path}`);
-    const app = fakeApp({
-      vault,
-      workspace: fakeWorkspace({ activeFile })
-    }) as any;
-    const plugin = {
-      imageStateManager: {
-        updateState: vi.fn().mockResolvedValue(undefined),
-        refreshAllImages: vi.fn()
-      }
-    } as any;
-    const folderManagement = {
-      ensureFolderExists: vi.fn().mockResolvedValue(undefined),
-      safeRenameFile: vi.fn().mockResolvedValue(true),
-      sanitizeFilename: vi.fn((value: string) => value.trim())
-    };
-    const handler = new RenameHandler(
-      app,
-      plugin,
-      folderManagement as any,
-      {
-        processTemplate: vi.fn(async (value: string) => value)
-      } as any
-    );
-    const menu = {
-      hide: vi.fn()
-    } as any;
-    const img = document.createElement('img') as HTMLImageElement;
+    it("writes caption, one-sided dimensions and alignment through the exact link", async () => {
+        const fixture = makeFixture();
+        const result = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "pic",
+                directory: "assets",
+                caption: "New caption",
+                width: 500,
+                height: null,
+                alignment: "center"
+            }
+        );
 
-    return { app, folderManagement, handler, imageFile, img, menu, plugin, activeFile };
-  }
-
-  it('passes null dimensions when width and height inputs are cleared', async () => {
-    const { handler, img, menu, plugin, activeFile } = makeHandler();
-
-    await handler.handleDimensionsAndCaptionUpdate(
-      menu,
-      input('Caption'),
-      input(''),
-      input(''),
-      'center',
-      img,
-      activeFile,
-      true
-    );
-
-    expect(plugin.imageStateManager.updateState).toHaveBeenCalledWith(img, {
-      caption: 'Caption',
-      width: null,
-      height: null,
-      align: 'center'
-    });
-    expect(menu.hide).toHaveBeenCalled();
-  });
-
-  it('does not update state when dimensions are not positive integers', async () => {
-    const { handler, img, menu, plugin, activeFile } = makeHandler();
-
-    await handler.handleDimensionsAndCaptionUpdate(
-      menu,
-      input('Caption'),
-      input('12.5'),
-      input(''),
-      'center',
-      img,
-      activeFile,
-      true
-    );
-
-    expect(plugin.imageStateManager.updateState).not.toHaveBeenCalled();
-    expect(menu.hide).not.toHaveBeenCalled();
-  });
-
-  it('renames and moves an image with a single fileManager operation', async () => {
-    const { app, folderManagement, handler, imageFile, img, menu, activeFile } = makeHandler();
-
-    await handler.handleRenameAndMove(
-      menu,
-      input('renamed'),
-      input('images'),
-      img,
-      true,
-      'pic',
-      '.png',
-      'assets/pic.png',
-      imageFile,
-      activeFile
-    );
-
-    expect(folderManagement.ensureFolderExists).toHaveBeenCalledWith('images');
-    expect(app.fileManager.renameFile).toHaveBeenCalledTimes(1);
-    expect(app.fileManager.renameFile).toHaveBeenCalledWith(imageFile, 'images/renamed.png');
-    expect(app.vault.getAbstractFileByPath('assets/pic.png')).toBeNull();
-    expect(imageFile.path).toBe('images/renamed.png');
-    expect(img.src).toContain('images/renamed.png');
-    expect(menu.hide).toHaveBeenCalled();
-  });
-
-  it('moves an image without renaming when only the folder changes', async () => {
-    const { app, handler, imageFile, img, menu, activeFile } = makeHandler();
-
-    await handler.handleRenameAndMove(
-      menu,
-      input('pic'),
-      input('images'),
-      img,
-      true,
-      'pic',
-      '.png',
-      'assets/pic.png',
-      imageFile,
-      activeFile
-    );
-
-    expect(app.fileManager.renameFile).toHaveBeenCalledTimes(1);
-    expect(app.fileManager.renameFile).toHaveBeenCalledWith(imageFile, 'images/pic.png');
-  });
-
-  it('writes root targets without a leading slash', async () => {
-    const { app, folderManagement, handler, imageFile, img, menu, activeFile } = makeHandler();
-
-    await handler.handleRenameAndMove(
-      menu,
-      input('root-name'),
-      input('/'),
-      img,
-      true,
-      'pic',
-      '.png',
-      'assets/pic.png',
-      imageFile,
-      activeFile
-    );
-
-    expect(folderManagement.ensureFolderExists).not.toHaveBeenCalled();
-    expect(app.fileManager.renameFile).toHaveBeenCalledWith(imageFile, 'root-name.png');
-  });
-
-  it('uses safeRenameFile for case-only path changes', async () => {
-    const { app, folderManagement, handler, imageFile, img, menu, activeFile } = makeHandler({
-      imagePath: 'assets/pic.png',
-      imageName: 'pic.png'
+        expect(result).toEqual({
+            complete: true,
+            linkUpdated: true,
+            fileMoved: false
+        });
+        expect(fixture.getLine()).toBe(
+            "![[assets/pic.png|New caption|center|500]]"
+        );
+        expect(fixture.view.save).toHaveBeenCalledOnce();
+        expect(fixture.app.fileManager.renameFile).not.toHaveBeenCalled();
     });
 
-    await handler.handleRenameAndMove(
-      menu,
-      input('Pic'),
-      input('assets'),
-      img,
-      true,
-      'pic',
-      '.png',
-      'assets/pic.png',
-      imageFile,
-      activeFile
-    );
+    it("saves property changes before moving the exact local file", async () => {
+        const fixture = makeFixture();
+        const result = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "renamed",
+                directory: "images",
+                caption: "Updated",
+                width: null,
+                height: 240,
+                alignment: "left-wrap"
+            }
+        );
 
-    expect(app.fileManager.renameFile).not.toHaveBeenCalled();
-    expect(folderManagement.safeRenameFile).toHaveBeenCalledWith(imageFile, 'assets/Pic.png');
-  });
+        expect(result).toEqual({
+            complete: true,
+            linkUpdated: true,
+            fileMoved: true
+        });
+        expect(fixture.folderManagement.ensureFolderExists)
+            .toHaveBeenCalledWith("images");
+        expect(fixture.app.fileManager.renameFile).toHaveBeenCalledWith(
+            fixture.imageFile,
+            "images/renamed.png"
+        );
+        expect(fixture.view.save.mock.invocationCallOrder[0]).toBeLessThan(
+            fixture.app.fileManager.renameFile.mock.invocationCallOrder[0]
+        );
+    });
 
-  it('does not rename when sanitization leaves an empty filename', async () => {
-    const { app, folderManagement, handler, imageFile, img, menu, activeFile } = makeHandler();
-    folderManagement.sanitizeFilename.mockReturnValue('');
+    it("does not write when the original source range changed", async () => {
+        const fixture = makeFixture();
+        fixture.editor.getLine.mockReturnValue(
+            "![[assets/other.png|Old caption|right|500x300]]"
+        );
 
-    await handler.handleRenameAndMove(
-      menu,
-      input('...'),
-      input('images'),
-      img,
-      true,
-      'pic',
-      '.png',
-      'assets/pic.png',
-      imageFile,
-      activeFile
-    );
+        const result = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "renamed",
+                directory: "images",
+                caption: "Changed",
+                width: null,
+                height: null,
+                alignment: null
+            }
+        );
 
-    expect(app.fileManager.renameFile).not.toHaveBeenCalled();
-    expect(folderManagement.ensureFolderExists).not.toHaveBeenCalled();
-    expect(menu.hide).not.toHaveBeenCalled();
-  });
+        expect(result.complete).toBe(false);
+        expect(fixture.editor.replaceRange).not.toHaveBeenCalled();
+        expect(fixture.app.fileManager.renameFile).not.toHaveBeenCalled();
+    });
 
-  it('rejects a target directory that traverses outside the vault', async () => {
-    const { app, folderManagement, handler, imageFile, img, menu, activeFile } = makeHandler();
+    it("rolls back an editor mutation and skips rename when saving fails", async () => {
+        const fixture = makeFixture();
+        fixture.view.save.mockRejectedValueOnce(new Error("disk full"));
 
-    await handler.handleRenameAndMove(
-      menu,
-      input('renamed'),
-      input('../outside'),
-      img,
-      true,
-      'pic',
-      '.png',
-      imageFile.path,
-      imageFile,
-      activeFile
-    );
+        const result = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "renamed",
+                directory: "images",
+                caption: "Changed",
+                width: null,
+                height: null,
+                alignment: null
+            }
+        );
 
-    expect(folderManagement.ensureFolderExists).not.toHaveBeenCalled();
-    expect(app.fileManager.renameFile).not.toHaveBeenCalled();
-  });
+        expect(result.complete).toBe(false);
+        expect(fixture.getLine()).toBe(
+            "![[assets/pic.png|Old caption|right|500x300]]"
+        );
+        expect(fixture.app.fileManager.renameFile).not.toHaveBeenCalled();
+    });
 
-  it('does not report a completed rename as failed when view refresh needs recovery', async () => {
-    const { app, handler, imageFile, img, menu, plugin, activeFile } = makeHandler();
-    const currentState = { type: 'markdown', state: { file: activeFile.path } };
-    const leaf = {
-      getViewState: vi.fn(() => currentState),
-      setViewState: vi.fn()
-        .mockResolvedValueOnce(undefined)
-        .mockRejectedValueOnce(new Error('refresh failed'))
-        .mockResolvedValueOnce(undefined)
-    };
-    app.workspace.getMostRecentLeaf = vi.fn(() => leaf);
-    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    it("reports partial success when rename fails after a saved property update", async () => {
+        const fixture = makeFixture();
+        fixture.app.fileManager.renameFile.mockRejectedValueOnce(
+            new Error("target exists")
+        );
 
-    await handler.handleRenameAndMove(
-      menu,
-      input('renamed'),
-      input('images'),
-      img,
-      true,
-      'pic',
-      '.png',
-      imageFile.path,
-      imageFile,
-      activeFile
-    );
+        const result = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "renamed",
+                directory: "images",
+                caption: "Changed",
+                width: null,
+                height: null,
+                alignment: null
+            }
+        );
 
-    expect(app.fileManager.renameFile).toHaveBeenCalledWith(imageFile, 'images/renamed.png');
-    expect(leaf.setViewState.mock.calls).toEqual([
-      [{ type: 'empty', state: {} }],
-      [currentState],
-      [currentState]
-    ]);
-    expect(menu.hide).toHaveBeenCalledOnce();
-    expect(plugin.imageStateManager.refreshAllImages).toHaveBeenCalledOnce();
-  });
+        expect(result).toMatchObject({
+            complete: false,
+            linkUpdated: true,
+            fileMoved: false,
+            error: "target exists"
+        });
+        expect(fixture.getLine()).toBe("![[assets/pic.png|Changed]]");
+    });
+
+    it("rejects invalid dimensions and target traversal without changing data", async () => {
+        const fixture = makeFixture();
+        const invalidSize = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "pic",
+                directory: "assets",
+                caption: "Old caption",
+                width: -1,
+                height: null,
+                alignment: "right"
+            }
+        );
+        expect(invalidSize.complete).toBe(false);
+
+        const invalidPath = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "renamed",
+                directory: "../outside",
+                caption: "Old caption",
+                width: 500,
+                height: 300,
+                alignment: "right"
+            }
+        );
+        expect(invalidPath.complete).toBe(false);
+        expect(fixture.app.fileManager.renameFile).not.toHaveBeenCalled();
+    });
 });

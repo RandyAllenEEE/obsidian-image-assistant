@@ -1,7 +1,7 @@
 {
   "id": "obsidian-image-assistant",
   "name": "Image Assistant",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "minAppVersion": "1.11.4",
   "description": "Convert, compress, resize, annotate, upload, download, caption, and OCR images directly in Obsidian.",
   "author": "RandyAllen",

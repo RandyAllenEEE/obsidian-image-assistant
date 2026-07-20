@@ -68,14 +68,15 @@ export class VaultReferenceManager {
         return !!this.plugin?.settings?.global?.codeBlockImageLinkIndexing;
     }
 
-    private getSourceScanOptions(): MarkdownSourceScanOptions {
+    private getSourceScanOptions(overrides: MarkdownSourceScanOptions = {}): MarkdownSourceScanOptions {
         return {
             // Standalone consumers historically scanned fences. Plugin-owned
             // instances honor the user setting; the default keeps the helper
             // backward compatible for callers without plugin settings.
             includeFencedCode: this.plugin
                 ? this.isCodeBlockImageLinkIndexingEnabled()
-                : true
+                : true,
+            ...overrides
         };
     }
 
@@ -88,8 +89,11 @@ export class VaultReferenceManager {
      * Destructive operations use this instead of relying on potentially stale
      * metadata-cache offsets.
      */
-    async scanReferencesDetailed(imagePath: string): Promise<ReferenceScanResult> {
-        const result = await this.scanReferencesForTargetsDetailed([imagePath]);
+    async scanReferencesDetailed(
+        imagePath: string,
+        options: MarkdownSourceScanOptions = {}
+    ): Promise<ReferenceScanResult> {
+        const result = await this.scanReferencesForTargetsDetailed([imagePath], options);
         return {
             locations: result.references.get(imagePath) ?? [],
             complete: result.complete,
@@ -97,12 +101,16 @@ export class VaultReferenceManager {
         };
     }
 
-    async scanReferencesForTargetsDetailed(targets: string[]): Promise<MultiReferenceScanResult> {
+    async scanReferencesForTargetsDetailed(
+        targets: string[],
+        options: MarkdownSourceScanOptions = {}
+    ): Promise<MultiReferenceScanResult> {
         const references = new Map<string, ReferenceLocation[]>();
         const uncertainFiles: string[] = [];
         const localTargets = new Map<string, string[]>();
         const localTargetsByBasename = new Map<string, string[]>();
         const urlTargets: string[] = [];
+        const scanOptions = this.getSourceScanOptions(options);
 
         for (const target of targets) {
             if (references.has(target)) continue;
@@ -126,7 +134,7 @@ export class VaultReferenceManager {
             try {
                 const content = await this.app.vault.read(file);
                 let hasUnresolvedCandidate = false;
-                const parsedLinks = getContextualReferenceLinks(content, this.getSourceScanOptions());
+                const parsedLinks = getContextualReferenceLinks(content, scanOptions);
                 for (const link of parsedLinks) {
                     const linkPath = this.stripSubpath(link.path);
                     const matchedTargets = new Set<string>();
@@ -164,7 +172,7 @@ export class VaultReferenceManager {
                     for (const target of matchedTargets) references.get(target)?.push(location);
                 }
                 for (const target of urlTargets) {
-                    if (this.hasUnparsedUrlCandidate(content, target, parsedLinks, this.getSourceScanOptions())) {
+                    if (this.hasUnparsedUrlCandidate(content, target, parsedLinks, scanOptions)) {
                         hasUnresolvedCandidate = true;
                     }
                 }
@@ -246,72 +254,6 @@ export class VaultReferenceManager {
         }
 
         return merged;
-    }
-
-    async getFilesReferencingImages(imagePaths: string[]): Promise<Map<string, ReferenceLocation[]>> {
-        const normalizedToOriginal = new Map<string, string>();
-        const results = new Map<string, ReferenceLocation[]>();
-        for (const imagePath of imagePaths) {
-            const normalized = normalizePath(imagePath);
-            normalizedToOriginal.set(normalized, imagePath);
-            results.set(imagePath, []);
-        }
-        if (normalizedToOriginal.size === 0) return results;
-
-        const addLocation = (
-            file: TFile,
-            linkPath: string,
-            original: string,
-            start: number,
-            end: number,
-            line: number
-        ) => {
-            const syntax = inferLocalReferenceSyntax(original);
-            const destination = this.localTargetResolver.resolve(linkPath, file, { syntax });
-            if (destination.status !== "resolved" || !destination.file) return;
-            const originalPath = normalizedToOriginal.get(normalizePath(destination.file.path));
-            if (!originalPath) return;
-            results.get(originalPath)?.push({ file, start, end, original, link: linkPath, line });
-        };
-
-        for (const file of this.app.vault.getMarkdownFiles()) {
-            const cache = this.app.metadataCache.getFileCache(file);
-            for (const link of [...(cache?.embeds ?? []), ...(cache?.links ?? [])]) {
-                addLocation(
-                    file,
-                    this.getCacheLinkPath(link),
-                    link.original,
-                    link.position.start.offset,
-                    link.position.end.offset,
-                    link.position.start.line
-                );
-            }
-
-            const content = await this.app.vault.read(file);
-            for (const link of getContextualReferenceLinks(content, this.getSourceScanOptions())) {
-                const line = content.slice(0, link.index).split('\n').length - 1;
-                addLocation(
-                    file,
-                    link.path,
-                    link.source,
-                    link.index,
-                    link.index + link.source.length,
-                    line
-                );
-            }
-        }
-
-        for (const [imagePath, locations] of results.entries()) {
-            const seen = new Set<string>();
-            results.set(imagePath, locations.filter(location => {
-                const key = `${location.file.path}:${location.start}-${location.end}`;
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-            }));
-        }
-
-        return results;
     }
 
     /**

@@ -2,14 +2,15 @@ import { App, TFile } from "obsidian";
 import {
     CanvasFileReference,
     getCanvasFileReferenceIndexDetailed,
-    getCanvasUrlReferencesDetailed,
-    type CanvasReferenceScanOptions
+    getCanvasUrlReferencesDetailed
 } from "./CanvasReferenceUtils";
 import {
     ReferenceLocation,
     ReferenceScanResult,
     VaultReferenceManager
 } from "./VaultReferenceManager";
+import { REFERENCE_SAFETY_SCAN_POLICY } from "./ReferenceScanPolicy";
+import type { ImageReferenceIndexService } from "./ImageReferenceIndexService";
 
 export interface ReferenceSafetyReport {
     complete: boolean;
@@ -20,46 +21,59 @@ export interface ReferenceSafetyReport {
     safeToDelete: boolean;
 }
 
-export interface ReferenceSafetyOptions {
-    ignoreMarkdownPaths?: Iterable<string>;
-}
-
 export class ReferenceSafetyService {
     constructor(
         private readonly app: App,
         private readonly referenceManager: VaultReferenceManager,
-        private readonly canvasScanOptions: CanvasReferenceScanOptions = {}
+        private readonly referenceIndex?: ImageReferenceIndexService
     ) { }
 
-    async inspectLocalFile(
-        file: TFile,
-        options: ReferenceSafetyOptions = {}
-    ): Promise<ReferenceSafetyReport> {
-        const ignored = new Set(options.ignoreMarkdownPaths ?? []);
+    async inspectLocalFile(file: TFile): Promise<ReferenceSafetyReport> {
+        if (this.referenceIndex) {
+            const snapshot = await this.referenceIndex.inspectLocalFile(file, {
+                includeFencedCode: true
+            });
+            return {
+                complete: snapshot.complete,
+                markdown: [...snapshot.markdown],
+                canvas: [...snapshot.canvas],
+                uncertainFiles: [...snapshot.uncertainFiles],
+                referenceCount: snapshot.referenceCount,
+                safeToDelete: snapshot.safeToDelete
+            };
+        }
         const uncertainFiles = new Set<string>();
         const markdown = new Map<string, ReferenceLocation>();
 
         const rawScan = await this.safeRawScan(file.path);
         rawScan.uncertainFiles.forEach(path => uncertainFiles.add(path));
         if (!rawScan.complete && rawScan.uncertainFiles.length === 0) uncertainFiles.add("Raw Markdown scan");
-        this.addMarkdownLocations(markdown, rawScan.locations, ignored);
+        this.addMarkdownLocations(markdown, rawScan.locations);
 
         try {
             const indexed = await this.referenceManager.getFilesReferencingImage(file.path);
-            this.addMarkdownLocations(markdown, indexed, ignored);
+            this.addMarkdownLocations(markdown, indexed);
         } catch (error) {
+            // The raw source scan above is authoritative. Metadata cache is an
+            // optional supplement and must not invalidate a complete raw scan.
             console.warn(`[ReferenceSafetyService] Indexed reference scan failed for ${file.path}:`, error);
-            uncertainFiles.add("Markdown reference index");
         }
 
-        const canvasScan = await getCanvasFileReferenceIndexDetailed(
-            this.app,
-            [file],
-            this.canvasScanOptions
-        );
-        canvasScan.uncertainFiles.forEach(path => uncertainFiles.add(path));
-        if (!canvasScan.complete && canvasScan.uncertainFiles.length === 0) uncertainFiles.add("Canvas scan");
-        const canvas = canvasScan.references.get(file.path) ?? [];
+        let canvas: CanvasFileReference[] = [];
+        try {
+            const canvasScan = await getCanvasFileReferenceIndexDetailed(
+                this.app,
+                [file],
+                REFERENCE_SAFETY_SCAN_POLICY
+            );
+            canvasScan.uncertainFiles.forEach(path => uncertainFiles.add(path));
+            if (!canvasScan.complete && canvasScan.uncertainFiles.length === 0) {
+                uncertainFiles.add("Canvas scan");
+            }
+            canvas = canvasScan.references.get(file.path) ?? [];
+        } catch (error) {
+            uncertainFiles.add(`Canvas scan: ${getErrorMessage(error)}`);
+        }
 
         return this.createReport(
             [...markdown.values()],
@@ -68,37 +82,61 @@ export class ReferenceSafetyService {
         );
     }
 
-    async inspectUrl(
-        url: string,
-        options: ReferenceSafetyOptions = {}
-    ): Promise<ReferenceSafetyReport> {
-        const ignored = new Set(options.ignoreMarkdownPaths ?? []);
+    async inspectUrl(url: string): Promise<ReferenceSafetyReport> {
+        if (this.referenceIndex) {
+            const snapshot = await this.referenceIndex.inspectUrl(url, {
+                includeFencedCode: true
+            });
+            return {
+                complete: snapshot.complete,
+                markdown: [...snapshot.markdown],
+                canvas: [...snapshot.canvas],
+                uncertainFiles: [...snapshot.uncertainFiles],
+                referenceCount: snapshot.referenceCount,
+                safeToDelete: snapshot.safeToDelete
+            };
+        }
         const uncertainFiles = new Set<string>();
         const markdown = new Map<string, ReferenceLocation>();
 
         const rawScan = await this.safeRawScan(url);
         rawScan.uncertainFiles.forEach(path => uncertainFiles.add(path));
         if (!rawScan.complete && rawScan.uncertainFiles.length === 0) uncertainFiles.add("Raw Markdown scan");
-        this.addMarkdownLocations(markdown, rawScan.locations, ignored);
+        this.addMarkdownLocations(markdown, rawScan.locations);
 
         try {
             const indexed = await this.referenceManager.getFilesReferencingUrl(url);
-            this.addMarkdownLocations(markdown, indexed, ignored);
+            this.addMarkdownLocations(markdown, indexed);
         } catch (error) {
+            // URL safety is also grounded in the raw source scan.
             console.warn(`[ReferenceSafetyService] Indexed URL scan failed for ${url}:`, error);
-            uncertainFiles.add("Markdown URL reference index");
         }
 
-        const canvasScan = await getCanvasUrlReferencesDetailed(this.app, url, this.canvasScanOptions);
-        canvasScan.uncertainFiles.forEach(path => uncertainFiles.add(path));
-        if (!canvasScan.complete && canvasScan.uncertainFiles.length === 0) uncertainFiles.add("Canvas scan");
+        let canvas: CanvasFileReference[] = [];
+        try {
+            const canvasScan = await getCanvasUrlReferencesDetailed(
+                this.app,
+                url,
+                REFERENCE_SAFETY_SCAN_POLICY
+            );
+            canvasScan.uncertainFiles.forEach(path => uncertainFiles.add(path));
+            if (!canvasScan.complete && canvasScan.uncertainFiles.length === 0) {
+                uncertainFiles.add("Canvas scan");
+            }
+            canvas = canvasScan.references;
+        } catch (error) {
+            uncertainFiles.add(`Canvas scan: ${getErrorMessage(error)}`);
+        }
 
-        return this.createReport([...markdown.values()], canvasScan.references, [...uncertainFiles]);
+        return this.createReport([...markdown.values()], canvas, [...uncertainFiles]);
     }
 
     private async safeRawScan(target: string): Promise<ReferenceScanResult> {
         try {
-            return await this.referenceManager.scanReferencesDetailed(target);
+            return await this.referenceManager.scanReferencesDetailed(
+                target,
+                REFERENCE_SAFETY_SCAN_POLICY
+            );
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             return {
@@ -111,11 +149,9 @@ export class ReferenceSafetyService {
 
     private addMarkdownLocations(
         target: Map<string, ReferenceLocation>,
-        locations: ReferenceLocation[],
-        ignored: Set<string>
+        locations: ReferenceLocation[]
     ): void {
         for (const location of locations) {
-            if (ignored.has(location.file.path)) continue;
             const key = `${location.file.path}:${location.start}-${location.end}`;
             target.set(key, location);
         }
@@ -137,4 +173,8 @@ export class ReferenceSafetyService {
             safeToDelete: complete && referenceCount === 0
         };
     }
+}
+
+function getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
 }

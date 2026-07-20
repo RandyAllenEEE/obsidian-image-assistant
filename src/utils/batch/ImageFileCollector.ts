@@ -1,6 +1,5 @@
 import { App, TFile, TFolder } from 'obsidian';
 import ImageConverterPlugin from '../../main';
-import { CollectedFiles, FileCollectorOptions } from './types';
 import { isHttpUrl } from '../NetworkPolicy';
 import { getContextualReferenceLinks } from '../MarkdownSourceContext';
 
@@ -13,27 +12,6 @@ export class ImageFileCollector {
         private app: App,
         private plugin: ImageConverterPlugin
     ) { }
-
-    // ============ Note-based Collection ============
-
-    /**
-     * Get all image files linked in a note.
-     */
-    getLinkedImageFiles(noteFile: TFile): TFile[] {
-        const { resolvedLinks } = this.app.metadataCache;
-        const linksInCurrentNote = resolvedLinks[noteFile.path];
-
-        if (!linksInCurrentNote) return [];
-
-        return Object.keys(linksInCurrentNote)
-            .map(link => this.app.vault.getAbstractFileByPath(link))
-            .filter((file): file is TFile =>
-                file instanceof TFile &&
-                this.plugin.supportedImageFormats.isSupported(undefined, file.name)
-            );
-    }
-
-    // ============ Folder-based Collection ============
 
     /**
      * Get image files from a folder.
@@ -62,80 +40,44 @@ export class ImageFileCollector {
         });
     }
 
-    /**
-     * Get image files from a folder by path string.
-     */
-    getImageFilesInFolderPath(folderPath: string, recursive: boolean): TFile[] {
-        const folder = this.app.vault.getAbstractFileByPath(folderPath);
-        if (!(folder instanceof TFolder)) {
-            return [];
-        }
-        return this.getImageFilesInFolder(folder, recursive);
-    }
-
-    // ============ Vault-wide Collection ============
-
-    /**
-     * Get all image files in the vault.
-     */
-    async getAllImageFiles(): Promise<TFile[]> {
-        const allFiles = this.app.vault.getFiles();
-        const imageFiles = allFiles.filter(file =>
-            this.plugin.supportedImageFormats.isSupported(undefined, file.name)
-        );
-
-        // Also include images from canvas files
-        const canvasFiles = allFiles.filter(file =>
-            file instanceof TFile &&
-            file.extension === 'canvas'
-        );
-
-        for (const canvasFile of canvasFiles) {
-            const canvasImages = await this.getImagesFromCanvas(canvasFile);
-            for (const imagePath of canvasImages) {
-                const imageFile = this.app.vault.getAbstractFileByPath(imagePath);
-                if (imageFile instanceof TFile && this.plugin.supportedImageFormats.isSupported(undefined, imageFile.name)) {
-                    if (!imageFiles.find(existing => existing.path === imageFile.path)) {
-                        imageFiles.push(imageFile);
-                    }
-                }
-            }
-        }
-
-        return imageFiles;
-    }
-
-    // ============ Canvas Support ============
-
-    /**
-     * Get images from a canvas file.
-     */
-    async getImagesFromCanvas(file: TFile): Promise<string[]> {
+    async getImagesFromCanvasDetailed(file: TFile): Promise<{
+        paths: string[];
+        complete: boolean;
+        error?: string;
+    }> {
         const images = new Set<string>();
         try {
             const content = await this.app.vault.read(file);
-            const canvasData = JSON.parse(content);
+            const canvasData = JSON.parse(content) as { nodes?: unknown };
 
-            if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
-                for (const node of canvasData.nodes) {
-                    if (node?.type === "file" && typeof node.file === "string") {
-                        images.add(this.resolveCanvasFilePath(node.file, file));
-                    }
-                    if (typeof node?.text === "string") {
-                        for (const link of getContextualReferenceLinks(node.text, {
-                            includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
-                        })) {
-                            if (isHttpUrl(link.path)) continue;
-                            images.add(this.resolveCanvasFilePath(link.path, file));
-                        }
+            if (!Array.isArray(canvasData.nodes)) {
+                throw new Error("Canvas nodes are invalid");
+            }
+            for (const rawNode of canvasData.nodes) {
+                if (!rawNode || typeof rawNode !== "object") continue;
+                const node = rawNode as { type?: unknown; file?: unknown; text?: unknown };
+                if (node.type === "file" && typeof node.file === "string") {
+                    images.add(this.resolveCanvasFilePath(node.file, file));
+                }
+                if (typeof node.text === "string") {
+                    for (const link of getContextualReferenceLinks(node.text, {
+                        includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
+                    })) {
+                        if (isHttpUrl(link.path)) continue;
+                        images.add(this.resolveCanvasFilePath(link.path, file));
                     }
                 }
             }
         } catch (error) {
             console.error(`Error reading canvas file ${file.path}:`, error);
+            return {
+                paths: [...images].sort(),
+                complete: false,
+                error: error instanceof Error ? error.message : String(error)
+            };
         }
 
-        return [...images];
+        return { paths: [...images].sort(), complete: true };
     }
 
     private resolveCanvasFilePath(canvasPath: string, canvasFile: TFile): string {
@@ -153,13 +95,6 @@ export class ImageFileCollector {
     }
 
     // ============ Validation & Filtering ============
-
-    /**
-     * Validate that a file exists.
-     */
-    async validateFileExists(file: TFile): Promise<boolean> {
-        return await this.app.vault.adapter.exists(file.path);
-    }
 
     /**
      * Check if an image should be processed based on format settings.
@@ -198,60 +133,4 @@ export class ImageFileCollector {
             .filter(format => format.length > 0);
     }
 
-    /**
-     * De-duplicate files by path while preserving order.
-     */
-    deduplicateFiles(files: TFile[]): TFile[] {
-        const seen = new Set<string>();
-        return files.filter((file) => {
-            if (seen.has(file.path)) return false;
-            seen.add(file.path);
-            return true;
-        });
-    }
-
-    // ============ Advanced Collection with Options ============
-
-    /**
-     * Collect files with validation and filtering options.
-     */
-    async collectFilesWithOptions(
-        files: TFile[],
-        options: Partial<FileCollectorOptions> = {}
-    ): Promise<CollectedFiles> {
-        const result: CollectedFiles = {
-            files: [],
-            skipped: [],
-            errors: []
-        };
-
-        const skipFormats = options.skipFormats || [];
-
-        for (const file of files) {
-            // Check skip formats
-            if (skipFormats.includes(file.extension.toLowerCase())) {
-                result.skipped.push({ file, reason: 'Format in skip list' });
-                continue;
-            }
-
-            // Validate exists
-            if (options.validateExists) {
-                const exists = await this.validateFileExists(file);
-                if (!exists) {
-                    result.errors.push({ path: file.path, error: 'File not found' });
-                    continue;
-                }
-            }
-
-            // Custom filter
-            if (options.filterCallback && !options.filterCallback(file)) {
-                result.skipped.push({ file, reason: 'Filtered by custom callback' });
-                continue;
-            }
-
-            result.files.push(file);
-        }
-
-        return result;
-    }
 }

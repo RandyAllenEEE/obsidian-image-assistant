@@ -62,4 +62,36 @@ describe('EditorContentInserter', () => {
 
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
+
+  it('removes a still-owned placeholder when the operation fails', async () => {
+    await expect(inserter.runWithLoadingText('...', async () => {
+      throw new Error('service unavailable');
+    })).rejects.toThrow('service unavailable');
+
+    expect(editor.replaceRange).toHaveBeenLastCalledWith(
+      '',
+      cursor,
+      { line: 5, ch: 13 }
+    );
+  });
+
+  it('does not remove placeholder text changed by the user', async () => {
+    editor.getRange = vi.fn().mockReturnValue('user edit');
+
+    await expect(inserter.runWithLoadingText('...', async () => {
+      throw new Error('service unavailable');
+    })).rejects.toThrow('service unavailable');
+
+    expect(editor.replaceRange).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up when an operation completes without replacing its placeholder', async () => {
+    await inserter.runWithLoadingText('...', async () => undefined);
+
+    expect(editor.replaceRange).toHaveBeenLastCalledWith(
+      '',
+      cursor,
+      { line: 5, ch: 13 }
+    );
+  });
 });

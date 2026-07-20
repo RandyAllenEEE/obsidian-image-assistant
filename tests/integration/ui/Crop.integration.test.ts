@@ -265,7 +265,7 @@ describe('Crop integration behaviors (21.1–21.10)', () => {
     expect(spy).toHaveBeenCalled();
   });
 
-  it('recovers the active view when refresh fails after a successful write', async () => {
+  it('does not reset the active view while refreshing a saved image', async () => {
     const { crop, app } = openCropWithImage();
     const currentState = { type: 'markdown', state: { file: 'note.md' } };
     const leaf = {
@@ -278,13 +278,9 @@ describe('Crop integration behaviors (21.1–21.10)', () => {
     (app.workspace as any).getMostRecentLeaf = vi.fn(() => leaf);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    await expect((crop as any).refreshActiveView()).resolves.toBeUndefined();
+    await expect((crop as any).refreshActiveView()).resolves.toBe(true);
 
-    expect(leaf.setViewState.mock.calls).toEqual([
-      [{ type: 'empty', state: {} }],
-      [currentState],
-      [currentState]
-    ]);
+    expect(leaf.setViewState).not.toHaveBeenCalled();
   });
 
   it('ignores a duplicate crop save while one is already running', async () => {
@@ -294,6 +290,47 @@ describe('Crop integration behaviors (21.1–21.10)', () => {
     await (crop as any).saveImage();
 
     expect((app.vault as any).modifyBinary).not.toHaveBeenCalled();
+  });
+
+  it('does not write when the crop modal closes during canvas export', async () => {
+    const { crop, app } = openCropWithImage();
+    const opening = crop.onOpen();
+    await Promise.resolve();
+    const originalImg = crop.contentEl.querySelector('.crop-original-image') as HTMLImageElement;
+    originalImg.dispatchEvent(new Event('load'));
+    await opening;
+
+    let finishExport: ((blob: Blob | null) => void) | null = null;
+    const realToBlob = HTMLCanvasElement.prototype.toBlob;
+    const realGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toBlob = function(callback) {
+      finishExport = callback;
+    };
+    HTMLCanvasElement.prototype.getContext = function() {
+      return {
+        drawImage: () => {},
+        translate: () => {},
+        rotate: () => {},
+        scale: () => {},
+        clearRect: () => {}
+      } as any;
+    };
+
+    try {
+      const saving = (crop as any).saveImage();
+      await Promise.resolve();
+      crop.onClose();
+      expect(finishExport).not.toBeNull();
+      (finishExport as unknown as (blob: Blob | null) => void)(
+        new Blob([makeJpegBytes({ w: 1, h: 1 })], { type: 'image/jpeg' })
+      );
+      await saving;
+
+      expect((app.vault as any).modifyBinary).not.toHaveBeenCalled();
+    } finally {
+      HTMLCanvasElement.prototype.toBlob = realToBlob;
+      HTMLCanvasElement.prototype.getContext = realGetContext;
+    }
   });
 
   it('21.10 Reset clears current selection and keeps modal open', async () => {

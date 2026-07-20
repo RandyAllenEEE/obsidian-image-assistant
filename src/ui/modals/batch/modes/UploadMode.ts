@@ -3,20 +3,11 @@ import ImageConverterPlugin from "../../../../main";
 import { BatchTask, BatchItemResult, BatchResult, BatchScope, BatchTaskDiscoveryResult } from "../../../../types/BatchTypes";
 import { IBatchMode, ReviewAction } from "./IBatchMode";
 import { t } from "../../../../lang/helpers";
-import { CloudImageDeleter } from "../../../../cloud/CloudImageDeleter";
-import { ImageLinkPathReplacer } from "../../../../utils/ImageLinkPathReplacer";
-import { getContextualReferenceLinks } from "../../../../utils/MarkdownSourceContext";
-import { buildAllowedPathSet } from "../../../../utils/batch";
-import { ImageFileCollector } from "../../../../utils/batch/ImageFileCollector";
-import { ReferenceSafetyService } from "../../../../utils/ReferenceSafetyService";
+import { BatchScopeResolver } from "../../../../utils/batch/BatchScopeResolver";
 import { ConfirmDialog } from "../../../../settings/SettingsModals";
 import { OperationResultModal } from "../../OperationResultModal";
 import { getErrorMessage } from "../../../../utils/ErrorUtils";
-import { isHttpUrl } from "../../../../utils/NetworkPolicy";
-import {
-    getCanvasFileReferenceIndexDetailed,
-    replaceCanvasFileReferencesWithUrl
-} from "../../../../utils/CanvasReferenceUtils";
+import { ImageReferenceWorkflowCoordinator } from "../../../../utils/ImageReferenceWorkflowCoordinator";
 
 export class UploadMode implements IBatchMode {
     id = "upload" as const;
@@ -40,79 +31,11 @@ export class UploadMode implements IBatchMode {
 
     async loadTasks(): Promise<BatchTaskDiscoveryResult> {
         const tasks: BatchTask[] = [];
-        let files: TFile[] = [];
-        const failedFiles: string[] = [];
-        const uncertainFiles: string[] = [];
-
-        // Identify files based on scope
-        try {
-        if (this.scope === "note" && this.target instanceof TFile) {
-            const resolvedFiles: Map<string, TFile> = new Map();
-            const useContentScan = !!this.plugin.settings.global.codeBlockImageLinkIndexing;
-
-            if (this.target.extension === "canvas") {
-                const imagePaths = await new ImageFileCollector(this.app, this.plugin).getImagesFromCanvas(this.target);
-                for (const imagePath of imagePaths) {
-                    const abstract = this.app.vault.getAbstractFileByPath(imagePath);
-                    if (!(abstract instanceof TFile)) continue;
-                    if (!this.plugin.supportedImageFormats.isSupported(abstract.extension, abstract.name)) continue;
-                    resolvedFiles.set(abstract.path, abstract);
-                }
-            } else {
-                const cache = this.app.metadataCache.getFileCache(this.target);
-                for (const cacheLink of [...(cache?.embeds ?? []), ...(cache?.links ?? [])]) {
-                    const file = this.app.metadataCache.getFirstLinkpathDest(cacheLink.link, this.target.path);
-                    if (file instanceof TFile
-                        && this.plugin.supportedImageFormats.isSupported(file.extension, file.name)) {
-                        resolvedFiles.set(file.path, file);
-                    }
-                }
-
-                const content = await this.app.vault.read(this.target);
-                const links = getContextualReferenceLinks(content, {
-                    includeFencedCode: useContentScan
-                });
-                for (const link of links) {
-                    const linkPath = (link.path ?? '').trim();
-                    if (!linkPath) continue;
-                    if (isHttpUrl(linkPath)) continue; // local upload only
-
-                    const dest = this.app.metadataCache.getFirstLinkpathDest(linkPath, this.target.path);
-                    if (!dest?.path) continue;
-
-                    const abstract = this.app.vault.getAbstractFileByPath(dest.path);
-                    if (!(abstract instanceof TFile)) continue;
-                    if (!this.plugin.supportedImageFormats.isSupported(abstract.extension, abstract.name)) continue;
-                    resolvedFiles.set(abstract.path, abstract);
-                }
-            }
-
-            files = Array.from(resolvedFiles.values());
-        } else if (this.scope === "folder" && this.target instanceof TFolder) {
-            const collectImages = (folder: TFolder) => {
-                for (const child of folder.children) {
-                    if (child instanceof TFile && this.plugin.supportedImageFormats.isSupported(child.extension, child.name)) {
-                        files.push(child);
-                    } else if (child instanceof TFolder) {
-                        collectImages(child);
-                    }
-                }
-            };
-            collectImages(this.target);
-        } else if (this.scope === "vault") {
-            files = this.app.vault.getFiles().filter(f => this.plugin.supportedImageFormats.isSupported(f.extension, f.name));
-        }
-        } catch (error) {
-            const targetPath = this.target?.path ?? this.scope;
-            failedFiles.push(`${targetPath}: ${error instanceof Error ? error.message : String(error)}`);
-            uncertainFiles.push(targetPath);
-        }
-
-        // Deduplicate
-        files = [...new Set(files)];
+        const resolver = new BatchScopeResolver(this.app, this.plugin);
+        const discovery = await resolver.collectLocalAssets(this.scope, this.target);
 
         // Create tasks
-        for (const file of files) {
+        for (const file of discovery.items) {
             // Skip already uploaded?
             if (this.plugin.historyManager.isLocalPathUploaded(file.path)) {
                 continue;
@@ -128,7 +51,12 @@ export class UploadMode implements IBatchMode {
             });
         }
 
-        return { tasks, complete: failedFiles.length === 0 && uncertainFiles.length === 0, failedFiles, uncertainFiles };
+        return {
+            tasks,
+            complete: discovery.complete,
+            failedFiles: [...discovery.failedFiles],
+            uncertainFiles: [...discovery.uncertainFiles]
+        };
     }
 
     async processTask(task: BatchTask): Promise<BatchItemResult> {
@@ -186,10 +114,7 @@ export class UploadMode implements IBatchMode {
             }
 
             new Notice(t("MSG_UNDOING_UPLOAD"));
-            const deleter = new CloudImageDeleter(this.plugin);
-            const safetyService = new ReferenceSafetyService(this.app, this.plugin.vaultReferenceManager, {
-                includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
-            });
+            const coordinator = new ImageReferenceWorkflowCoordinator(this.app, this.plugin);
             const blocked: string[] = [];
             for (const item of result.successful) {
                 const url = typeof item.output === "string" ? item.output.trim() : "";
@@ -198,20 +123,15 @@ export class UploadMode implements IBatchMode {
                     continue;
                 }
 
-                const safety = await safetyService.inspectUrl(url);
-                if (!safety.safeToDelete) {
-                    const reason = safety.complete
-                        ? t("BATCH_REFERENCES_REMAIN", [safety.referenceCount.toString()])
-                        : t("BATCH_REFERENCE_VERIFY_INCOMPLETE_FILES", [safety.uncertainFiles.join(", ")]);
-                    blocked.push(`${url}: ${reason}`);
-                    continue;
-                }
-
-                const deletion = await deleter.deleteImageDetailed({ url });
-                if (!deletion.success) {
+                const deletion = await coordinator.deleteSource({ kind: "url", url });
+                if (!deletion.sourceDeleted) {
+                    const details = [...deletion.failedFiles, ...deletion.uncertainFiles]
+                        .join(", ");
                     blocked.push(t("BATCH_CLOUD_DELETE_FAILED", [
                         url,
-                        deletion.message ?? deletion.reason ?? t("MSG_UNKNOWN_ERROR")
+                        details || t("BATCH_REFERENCES_REMAIN", [
+                            deletion.found.toString()
+                        ])
                     ]));
                 }
             }
@@ -228,15 +148,12 @@ export class UploadMode implements IBatchMode {
             return true;
         }
 
-        // Build scope boundary: collect files within the current scope
-        const allowedPathSet = buildAllowedPathSet(this.scope, this.target, this.app);
-
         let count = 0;
         const zeroReferenceCandidates: TFile[] = [];
         const blocked: string[] = [];
-        const safetyService = new ReferenceSafetyService(this.app, this.plugin.vaultReferenceManager, {
-            includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
-        });
+        const scopeResolver = new BatchScopeResolver(this.app, this.plugin);
+        const allowedDocumentPaths = [...scopeResolver.getAllowedDocumentPaths(this.scope, this.target)];
+        const coordinator = new ImageReferenceWorkflowCoordinator(this.app, this.plugin);
         let deletionCancelled = false;
 
         for (const item of result.successful) {
@@ -247,47 +164,26 @@ export class UploadMode implements IBatchMode {
                 continue;
             }
 
-            const scan = await this.plugin.vaultReferenceManager.scanReferencesDetailed(file.path);
-            const canvasScan = await getCanvasFileReferenceIndexDetailed(this.app, [file], {
-                includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
-            });
-            const canvasLocations = canvasScan.references.get(file.path) ?? [];
-            const scopedLocations = scan.locations.filter(location => allowedPathSet.has(location.file.path));
-            const outOfScopeLocations = scan.locations.filter(location => !allowedPathSet.has(location.file.path));
-            const updateResult = await this.plugin.vaultReferenceManager.updateReferenceLocationsDetailed(scopedLocations, (loc) => {
-                return ImageLinkPathReplacer.replacePath(loc.original, cloudUrl);
-            });
-            const canvasUpdateResult = await replaceCanvasFileReferencesWithUrl(
-                this.app,
-                file,
-                cloudUrl,
+            const inventory = await coordinator.inspect(
+                { kind: "local", file },
                 {
-                    allowedCanvasPaths: allowedPathSet,
-                    includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
+                    mutationBoundary: { allowedDocumentPaths }
                 }
             );
-            const outOfScopeCanvasLocations = canvasLocations.filter(reference =>
-                !allowedPathSet.has(reference.canvasFile.path)
+            const updateResult = await coordinator.replace(
+                inventory,
+                { kind: "url", url: cloudUrl },
+                "all"
             );
-            count += updateResult.replaced + canvasUpdateResult.replaced;
-
-            const scanIncomplete = !scan.complete || !canvasScan.complete;
-            const updateIncomplete = updateResult.complete === false
-                || updateResult.replaced !== updateResult.found
-                || updateResult.failedFiles.length > 0
-                || updateResult.uncertainFiles.length > 0
-                || canvasUpdateResult.complete === false
-                || canvasUpdateResult.replaced !== canvasUpdateResult.found
-                || canvasUpdateResult.failedFiles.length > 0
-                || canvasUpdateResult.uncertainFiles.length > 0;
-            if (scanIncomplete) {
-                const uncertain = [...scan.uncertainFiles, ...canvasScan.uncertainFiles];
-                blocked.push(t("BATCH_UPLOAD_SCAN_INCOMPLETE", [file.path, uncertain.join(", ")]));
-            }
-            if (updateIncomplete) {
-                const replaced = updateResult.replaced + canvasUpdateResult.replaced;
-                const found = updateResult.found + canvasUpdateResult.found;
-                blocked.push(t("BATCH_UPLOAD_REPLACE_INCOMPLETE", [file.path, replaced.toString(), found.toString()]));
+            count += updateResult.changed;
+            if (!updateResult.complete) {
+                blocked.push(t("BATCH_UPLOAD_REPLACE_INCOMPLETE", [
+                    file.path,
+                    updateResult.changed.toString(),
+                    updateResult.found.toString()
+                ]));
+                blocked.push(...updateResult.failedFiles.map(path => `${file.path}: ${path}`));
+                blocked.push(...updateResult.uncertainFiles.map(path => `${file.path}: ${path}`));
             }
 
             if (action !== "replace_delete") continue;
@@ -295,31 +191,25 @@ export class UploadMode implements IBatchMode {
                 blocked.push(t("BATCH_DELETE_BLOCKED_DISCOVERY", [file.path]));
                 continue;
             }
-            if (scanIncomplete || updateIncomplete) continue;
-            const outOfScopeCount = outOfScopeLocations.length + outOfScopeCanvasLocations.length;
-            if (outOfScopeCount > 0) {
-                blocked.push(t("BATCH_UPLOAD_OUT_OF_SCOPE", [file.path, outOfScopeCount.toString()]));
+            if (!updateResult.complete) continue;
+            if (inventory.totalReferences > 0 && inventory.mutableReferences === 0) {
+                blocked.push(t("BATCH_UPLOAD_OUT_OF_SCOPE", [
+                    file.path,
+                    inventory.totalReferences.toString()
+                ]));
                 continue;
             }
-
-            const safety = await safetyService.inspectLocalFile(file);
-            if (!safety.safeToDelete) {
-                const reason = safety.complete
-                    ? t("BATCH_REFERENCES_REMAIN", [safety.referenceCount.toString()])
-                    : t("BATCH_REFERENCE_VERIFY_INCOMPLETE_FILES", [safety.uncertainFiles.join(", ")]);
-                blocked.push(`${file.path}: ${reason}`);
-                continue;
-            }
-
-            if (scan.locations.length + canvasLocations.length === 0) {
+            if (inventory.totalReferences === 0) {
                 zeroReferenceCandidates.push(file);
-            } else {
-                try {
-                    await this.app.vault.trash(file, true);
-                } catch (error) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    blocked.push(t("BATCH_UPLOAD_LOCAL_DELETE_FAILED", [file.path, message]));
-                }
+                continue;
+            }
+
+            const deletion = await coordinator.deleteSource({ kind: "local", file });
+            if (!deletion.sourceDeleted) {
+                const details = [...deletion.failedFiles, ...deletion.uncertainFiles].join(", ");
+                blocked.push(`${file.path}: ${details || t("BATCH_REFERENCES_REMAIN", [
+                    deletion.found.toString()
+                ])}`);
             }
         }
 
@@ -327,21 +217,17 @@ export class UploadMode implements IBatchMode {
             const confirmed = await this.confirmZeroReferenceDeletion(zeroReferenceCandidates);
             if (confirmed) {
                 for (const file of zeroReferenceCandidates) {
-                    const safety = await safetyService.inspectLocalFile(file);
-                    if (safety.safeToDelete) {
-                        try {
-                            await this.app.vault.trash(file, true);
-                        } catch (error) {
-                            const message = error instanceof Error ? error.message : String(error);
-                            blocked.push(t("BATCH_UPLOAD_LOCAL_DELETE_FAILED", [file.path, message]));
-                        }
-                    } else {
+                    const deletion = await coordinator.deleteSource({ kind: "local", file });
+                    if (!deletion.sourceDeleted) {
                         blocked.push(t("BATCH_UPLOAD_REFERENCES_CHANGED", [file.path]));
+                        blocked.push(...deletion.uncertainFiles.map(path => `${file.path}: ${path}`));
                     }
                 }
             } else {
                 deletionCancelled = true;
-                zeroReferenceCandidates.forEach(file => blocked.push(t("BATCH_UPLOAD_ZERO_CANCELLED", [file.path])));
+                zeroReferenceCandidates.forEach(file =>
+                    blocked.push(t("BATCH_UPLOAD_ZERO_CANCELLED", [file.path]))
+                );
             }
         }
 

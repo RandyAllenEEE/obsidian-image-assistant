@@ -369,7 +369,9 @@ export class UnusedFileCleanerModal extends Modal {
     /**
      * 按笔记路径分组引用
      */
-    private groupReferencesByNote(references: ReferenceLocation[]): Record<string, ReferenceLocation[]> {
+    private groupReferencesByNote(
+        references: readonly ReferenceLocation[]
+    ): Record<string, ReferenceLocation[]> {
         const grouped: Record<string, ReferenceLocation[]> = {};
 
         for (const ref of references) {

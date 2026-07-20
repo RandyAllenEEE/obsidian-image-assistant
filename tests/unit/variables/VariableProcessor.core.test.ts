@@ -107,17 +107,19 @@ describe('VariableProcessor core variables', () => {
     expect(out).toBe('1024');
   });
 
-  it('2.4–2.6 sizeb/sizekb/sizemb with TFile stat; unknown when stat unavailable', async () => {
+  it('2.4–2.6 sizeb/sizekb/sizemb with TFile stat; fails closed when stat is unavailable', async () => {
     const tfile = fakeTFile({ path: 'img/pic.png', name: 'pic.png', extension: 'png', stat: { mtime: Date.now(), ctime: Date.now(), size: 2048 } });
     // Mock adapter.stat to return known value for this TFile
     (app.vault.adapter.stat as any).mockResolvedValue({ mtime: Date.now(), ctime: Date.now(), size: 2048 });
     const out1 = await processor.processTemplate('{sizeb}-{sizekb}-{sizemb}', { file: tfile as any, activeFile: activeNote });
     expect(out1).toBe('2048-2.00-0.00');
 
-    // Stat unavailable -> unknown
+    // Required template data must not silently become a collision-prone name.
     (app.vault.adapter.stat as any).mockResolvedValueOnce(null);
-    const out2 = await processor.processTemplate('{sizeb}|{sizekb}|{sizemb}', { file: tfile as any, activeFile: activeNote });
-    expect(out2).toBe('unknown|unknown|unknown');
+    await expect(processor.processTemplate(
+      '{sizeb}|{sizekb}|{sizemb}',
+      { file: tfile as any, activeFile: activeNote }
+    )).rejects.toThrow(/unavailable/i);
   });
 
   it('2.7–2.8 notename and notename_nospaces', async () => {
@@ -140,13 +142,17 @@ describe('VariableProcessor core variables', () => {
     expect(outB).toMatch(/^2025-01-02$/);
   });
 
-  it('2.41 unknown variables left unchanged; 2.42 empty template -> empty string; 2.43 malformed tokens unchanged', async () => {
+  it('2.41 unknown and malformed variables fail before writing; empty templates remain empty', async () => {
     const file = new File([new Uint8Array([1])], 'x.png', { type: 'image/png' });
-    const strA = await processor.processTemplate('prefix {unknown} suffix', { file, activeFile: activeNote });
-    expect(strA).toBe('prefix {unknown} suffix');
+    await expect(processor.processTemplate(
+      'prefix {unknown} suffix',
+      { file, activeFile: activeNote }
+    )).rejects.toThrow(/unknown template token/i);
     const strB = await processor.processTemplate('', { file, activeFile: activeNote });
     expect(strB).toBe('');
-    const strC = await processor.processTemplate('{date:YYYY-MM', { file, activeFile: activeNote });
-    expect(strC).toBe('{date:YYYY-MM');
+    await expect(processor.processTemplate(
+      '{date:YYYY-MM',
+      { file, activeFile: activeNote }
+    )).rejects.toThrow(/unclosed template token/i);
   });
 });

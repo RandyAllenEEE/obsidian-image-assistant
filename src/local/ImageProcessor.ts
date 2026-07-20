@@ -8,6 +8,7 @@ import { LocalExternalToolSettings, ResizeMode, EnlargeReduce, AvifEncoder } fro
 import { ImageAssistantSettings, DEFAULT_SETTINGS } from "../settings/defaults";
 import { normalizeExecutablePath } from "../utils/ffmpegPath";
 import { detectImageBinaryType } from "../utils/ImageBinaryType";
+import { createUniqueOperationId } from "../utils/UniqueOperationId";
 import * as piexif from "piexifjs"; // Import piexif library
 
 
@@ -918,7 +919,7 @@ export class ImageProcessor {
 
         // Create a temporary file path
         const tempDir = os.tmpdir(); // Get the system's temporary directory
-        const tempFileName = `obsidian_image_converter_${Date.now()}.avif`; // Unique filename
+        const tempFileName = `${createUniqueOperationId("obsidian_image_converter_")}.avif`;
         const tempFilePath = path.join(tempDir, tempFileName);
 
 
