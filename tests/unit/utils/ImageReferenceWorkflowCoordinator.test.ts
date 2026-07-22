@@ -472,4 +472,113 @@ describe("ImageReferenceWorkflowCoordinator", () => {
             new Set(["cancel", "keep-transfer"])
         );
     });
+
+    it("removes the clicked occurrence without an inventory query or image read", async () => {
+        const image = fakeTFile({ path: "assets/photo.png", extension: "png" });
+        const note = fakeTFile({ path: "notes/source.md", extension: "md" });
+        const source = "![[assets/photo.png|Caption]]";
+        const contents = new Map([[note.path, source]]);
+        const { app, coordinator } = createFixture({
+            files: [image, note],
+            contents
+        });
+        let editorValue = source;
+        const editor = {
+            getValue: () => editorValue,
+            getLine: () => editorValue,
+            lineCount: () => 1,
+            replaceRange: (
+                replacement: string,
+                start: { ch: number },
+                end: { ch: number }
+            ) => {
+                editorValue = editorValue.slice(0, start.ch)
+                    + replacement
+                    + editorValue.slice(end.ch);
+            }
+        };
+        const view = {
+            file: note,
+            editor,
+            save: vi.fn(async () => {
+                contents.set(note.path, editorValue);
+            })
+        };
+
+        const result = await coordinator.executeClickedOnly(
+            { kind: "local", file: image },
+            {
+                view,
+                file: note,
+                editor,
+                match: {
+                    line: 0,
+                    start: 0,
+                    end: source.length,
+                    linkText: source
+                }
+            } as any
+        );
+
+        expect(result).toMatchObject({ complete: true, changed: 1 });
+        expect(app.vault.read).not.toHaveBeenCalled();
+        expect(app.vault.readBinary).not.toHaveBeenCalled();
+        expect(contents.get(note.path)).toBe("");
+    });
+
+    it("does not hash image bytes when removing all references but keeping the source", async () => {
+        const image = fakeTFile({ path: "assets/photo.png", extension: "png" });
+        const note = fakeTFile({ path: "notes/source.md", extension: "md" });
+        const contents = new Map([[note.path, "![[assets/photo.png]]"]]);
+        const { app, coordinator } = createFixture({
+            files: [image, note],
+            contents
+        });
+        const session = await coordinator.beginSession({
+            kind: "local",
+            file: image
+        });
+
+        const result = await coordinator.executeDecision(session, {
+            action: "all-keep-source",
+            scope: "all",
+            deleteSource: false
+        });
+
+        expect(result).toMatchObject({ complete: true, changed: 1 });
+        expect(app.vault.readBinary).not.toHaveBeenCalled();
+        expect(app.vault.trash).not.toHaveBeenCalled();
+    });
+
+    it("reads local source bytes at most twice when deleting the source", async () => {
+        const image = fakeTFile({
+            path: "assets/photo.png",
+            extension: "png",
+            stat: { ctime: 1, mtime: 1, size: 3 }
+        });
+        const note = fakeTFile({ path: "notes/source.md", extension: "md" });
+        const contents = new Map([[note.path, "![[assets/photo.png]]"]]);
+        const { app, coordinator } = createFixture({
+            files: [image, note],
+            contents
+        });
+        app.vault.readBinary.mockResolvedValue(
+            new Uint8Array([1, 2, 3]).buffer
+        );
+        const session = await coordinator.beginSession({
+            kind: "local",
+            file: image
+        });
+
+        const result = await coordinator.executeDecision(session, {
+            action: "all-delete-source",
+            scope: "all",
+            deleteSource: true
+        });
+
+        expect(result.sourceDeleted).toBe(true);
+        expect(app.vault.readBinary).toHaveBeenCalledTimes(2);
+        expect(app.fileManager.trashFile).toHaveBeenCalledWith(image);
+        expect(app.vault.trash).toHaveBeenCalledWith(image, true);
+    });
 });

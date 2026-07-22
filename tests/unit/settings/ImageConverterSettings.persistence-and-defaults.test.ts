@@ -21,6 +21,10 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     expect(plugin.settings.pasteHandling.mode).toBe(DEFAULT_SETTINGS.pasteHandling.mode);
     expect(plugin.settings.operationDefaults.batchLocal.convertTo).toBe(DEFAULT_SETTINGS.operationDefaults.batchLocal.convertTo);
     expect(plugin.settings.captions.enabled).toBe(DEFAULT_SETTINGS.captions.enabled);
+    expect(plugin.settings.cleanerSettings).toMatchObject({
+      enableDeleteContextMenu: true,
+      trashMode: 'follow-obsidian'
+    });
 
     [
       'showInReadingMode',
@@ -101,6 +105,8 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     expect(plugin.settings.captions.inlinePolicy).toBe('all');
     expect(plugin.settings.captions.widthMode).toBe('auto');
     expect(plugin.settings.captions.maxLines).toBe(0);
+    expect(plugin.settings.cleanerSettings.enableDeleteContextMenu).toBe(true);
+    expect(plugin.settings.cleanerSettings.trashMode).toBe('follow-obsidian');
   });
 
   it('drops the retired hideFolders setting while retaining relative-prefix state', async () => {

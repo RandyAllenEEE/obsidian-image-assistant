@@ -26,7 +26,7 @@ function setupImage(mode: "reading" | "editor" = "reading") {
     return { container, image, wrapper };
 }
 
-function makeFixture() {
+function makeFixture(readiness: "loading" | "ready" | "degraded" = "ready") {
     const note = fakeTFile({
         path: "notes/n1.md",
         name: "n1.md",
@@ -77,7 +77,8 @@ function makeFixture() {
             getImageState: vi.fn(() => null),
             refreshAllImages: vi.fn()
         },
-        imageCaption: { refreshAllViews: vi.fn() }
+        imageCaption: { refreshAllViews: vi.fn() },
+        referenceIndexService: { getReadiness: vi.fn(() => readiness) }
     } as any;
     const folderManagement = {
         ensureFolderExists: vi.fn(),
@@ -255,8 +256,7 @@ describe("ContextMenu integration", () => {
         expect(pluginMenuItems(menu).map(item => item.getTitle())).toEqual([
             "Edit image properties…",
             "Download locally…",
-            "Delete reference or source…",
-            "More image actions..."
+            "Delete reference or source…"
         ]);
         fixture.manager.unload();
     });
@@ -315,7 +315,6 @@ describe("ContextMenu integration", () => {
             "Edit image properties…",
             "Download locally…",
             "Delete reference or source…",
-            "More image actions...",
             "Copy image",
             "Reset size"
         ]);
@@ -323,8 +322,7 @@ describe("ContextMenu integration", () => {
             .toEqual([
                 "Edit image properties…",
                 "Download locally…",
-                "Delete reference or source…",
-                "More image actions..."
+                "Delete reference or source…"
             ]);
         expect((fixture.contextMenu as any).pendingByDocument.size).toBe(0);
         fixture.manager.unload();
@@ -420,11 +418,8 @@ describe("ContextMenu integration", () => {
         expect(menuTitles(menu)).toEqual([
             "Edit image properties…",
             "Download locally…",
-            "Delete reference or source…",
-            "More image actions..."
+            "Delete reference or source…"
         ]);
-        expect(submenuTitles(menu, "More image actions..."))
-            .toEqual(["Open in new window", "Cut"]);
         expect(pluginMenuItems(menu).map(item => item.getTitle())).toEqual(
             menuTitles(menu)
         );
@@ -479,15 +474,11 @@ describe("ContextMenu integration", () => {
         );
         expect(menuTitles(menu)).toEqual([
             "Copy image",
-            "Download locally…",
-            "More image actions..."
+            "Download locally…"
         ]);
         expect(pluginMenuItems(menu).map(item => item.getTitle())).toEqual([
-            "Download locally…",
-            "More image actions..."
+            "Download locally…"
         ]);
-        expect(submenuTitles(menu, "More image actions..."))
-            .toEqual(["Open in new window"]);
         fixture.manager.unload();
     });
 

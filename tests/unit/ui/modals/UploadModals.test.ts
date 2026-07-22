@@ -105,6 +105,23 @@ describe("upload and reference workflow modals", () => {
         );
     });
 
+    it("shows the configured deletion destination only for a source-deletion action", () => {
+        const modal = new ImageReferenceDecisionModal({} as any, {
+            operation: "delete",
+            inventory: makeInventory(),
+            sourceLabel: "assets/image.png",
+            sourceDeletionLabel: "Follow the current Obsidian deletion setting",
+            allowedActions: new Set(["all-delete-source", "cancel"]),
+            onDecision: vi.fn()
+        });
+
+        modal.onOpen();
+
+        expect(modal.contentEl.textContent).toContain(
+            "Local source deletion destination: Follow the current Obsidian deletion setting"
+        );
+    });
+
     it("reports every authorized generic action with separate scope and source semantics", async () => {
         const actions: ReferenceWorkflowDecisionAction[] = [
             "clicked-keep-source",
@@ -187,5 +204,59 @@ describe("upload and reference workflow modals", () => {
             scope: "none",
             deleteSource: false
         });
+    });
+
+    it("shows clicked-only immediately and adds vault actions when inventory arrives", () => {
+        const modal = new ImageReferenceDecisionModal({} as any, {
+            operation: "delete",
+            sourceLabel: "assets/image.png",
+            sourceDeletionLabel: "system trash",
+            allowedActions: new Set(["clicked-keep-source", "cancel"]),
+            onDecision: vi.fn()
+        });
+        modal.onOpen();
+
+        expect(modal.contentEl.textContent).toContain("Preparing the vault");
+        expect(modal.contentEl.textContent).toContain("source-deletion actions are hidden");
+        expect(modal.contentEl.textContent).not.toContain("system trash");
+        expect(modal.contentEl.querySelectorAll("button")).toHaveLength(2);
+
+        const inventory = makeInventory({
+            protectedFencedReferences: 0,
+            mutableReferences: 3,
+            canDeleteAfterAll: true
+        });
+        modal.updateInventory(inventory, new Set([
+            "clicked-keep-source",
+            "all-keep-source",
+            "all-delete-source",
+            "cancel"
+        ]));
+
+        expect(modal.contentEl.textContent).not.toContain("Preparing the vault");
+        expect(modal.contentEl.textContent).toContain("3 total");
+        expect(modal.contentEl.textContent).toContain("system trash");
+        expect(modal.contentEl.querySelectorAll("button")).toHaveLength(4);
+    });
+
+    it("keeps source-deletion actions absent when inventory preparation degrades", () => {
+        const modal = new ImageReferenceDecisionModal({} as any, {
+            operation: "delete",
+            sourceLabel: "assets/image.png",
+            sourceDeletionLabel: "system trash",
+            allowedActions: new Set(["clicked-keep-source", "cancel"]),
+            onDecision: vi.fn()
+        });
+        modal.onOpen();
+        modal.markInventoryUnavailable();
+
+        expect(modal.contentEl.textContent).toContain("inventory is unavailable");
+        expect(modal.contentEl.textContent).toContain("source-deletion actions are hidden");
+        expect(modal.contentEl.textContent).not.toContain("system trash");
+        expect([...modal.contentEl.querySelectorAll("button")].map(button =>
+            button.textContent)).toEqual([
+            "Remove clicked reference, keep source",
+            "Cancel"
+        ]);
     });
 });

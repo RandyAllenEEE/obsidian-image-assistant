@@ -1,5 +1,29 @@
 # Changelog
 
+## 5.1.1 - 2026-07-22
+
+### Reference Index and Responsiveness
+
+- Moved V3 index hydration, Markdown/Canvas parsing, reverse-bucket construction, and serialization into a persistent Worker so delayed plugin startup no longer performs the heavy parse on Obsidian's UI thread.
+- Prefer a Chromium Blob Web Worker in Obsidian and retain Node `worker_threads` only as a fallback, covering Electron builds whose V8 platform cannot construct Node Workers.
+- Added activity-aware warmup, bounded main-thread Vault reads, incremental dirty updates, open-editor overlays, basename lookup buckets, topology reconciliation, and idle atomic persistence.
+- Added a single controlled restart for runtime Worker failures with full cache rehydration; environments that support neither transport degrade immediately without repeating the same failed construction.
+
+### Deletion and Menu Safety
+
+- Reused reverse-index inventory generations across deletion phases, added cancellable preflight/progress handling, and limited final checks to changed topology and the target reference buckets.
+- Kept source deletion blocked by ordinary fenced-code references, Canvas uncertainty, stale open documents, ambiguous paths, incomplete scans, or changed source revisions.
+- Added configurable local deletion destinations, including Obsidian's own trash preference, vault trash, system trash, and a collision-safe custom folder.
+- Hid mutation, transfer, batch, and source-deletion menu entries while the index is loading or degraded; execution also rechecks readiness and fails closed if service state changes after the menu opens.
+- Made readiness lookup failures non-fatal to Obsidian's official menus and kept safe read-only image actions available where their source context is reliable.
+- Removed duplicate reveal, system-explorer, cut, and new-window actions from rendered-image menus, relying on Obsidian's native navigation and editor interactions while keeping URL menus free of empty overflow groups.
+
+### Networking and Delivery
+
+- Unified remote deletion with the abortable Electron HTTP transport, bounded response handling, redirect rejection, timeout cancellation, and ownership-history validation.
+- Preserved current V3 cache compatibility and the canonical `obsidian-image-assistant` plugin identity; no settings or note migration is required.
+- Passed lint, source and test TypeScript checks, focused recovery/menu regressions, and the full automated delivery pipeline. Runtime smoke was intentionally not executed for this release.
+
 ## 5.1.0 - 2026-07-20
 
 ### Source-Aware Editing and Layout

@@ -273,7 +273,10 @@ export function normalizeSettings(settings: ImageAssistantSettings): ImageAssist
         0.01,
         10
     );
-    if (!isOneOf(settings.cleanerSettings.trashMode, ["system", "obsidian", "custom"] as const)) {
+    if (!isOneOf(
+        settings.cleanerSettings.trashMode,
+        ["follow-obsidian", "system", "obsidian", "custom"] as const
+    )) {
         settings.cleanerSettings.trashMode = DEFAULT_SETTINGS.cleanerSettings.trashMode;
     }
 

@@ -1,8 +1,17 @@
 import { App, normalizePath, TFile } from "obsidian";
 import { isHttpUrl } from "./NetworkPolicy";
+import {
+    getSharedVaultFileLookupService,
+    type VaultFileLookupService
+} from "./VaultFileLookupService";
 
 export type LocalReferenceSyntax = "markdown" | "wiki" | "native";
-export type LocalTargetResolutionStatus = "resolved" | "ambiguous" | "unresolved" | "invalid";
+export type LocalTargetResolutionStatus =
+    | "resolved"
+    | "ambiguous"
+    | "unresolved"
+    | "invalid"
+    | "pending";
 
 export interface LocalTargetResolution {
     status: LocalTargetResolutionStatus;
@@ -18,7 +27,26 @@ export interface LocalTargetResolveOptions {
 
 /** Resolves a local link path without depending solely on the metadata cache. */
 export class LocalImageTargetResolver {
-    constructor(private readonly app: App) { }
+    private readonly fileLookup: VaultFileLookupService;
+
+    constructor(
+        private readonly app: App,
+        fileLookup?: VaultFileLookupService
+    ) {
+        this.fileLookup = fileLookup ?? getSharedVaultFileLookupService(app);
+    }
+
+    async resolveAsync(
+        referencePath: string,
+        source: TFile | string,
+        options: LocalTargetResolveOptions = {},
+        signal?: AbortSignal
+    ): Promise<LocalTargetResolution> {
+        const immediate = this.resolve(referencePath, source, options);
+        if (immediate.status !== "pending") return immediate;
+        await this.fileLookup.ensureReady(signal);
+        return this.resolve(referencePath, source, options);
+    }
 
     resolve(
         referencePath: string,
@@ -95,7 +123,16 @@ export class LocalImageTargetResolver {
 
         const suffix = normalized ?? path;
         const basename = getPathBasename(suffix);
-        for (const file of this.getVaultFiles()) {
+        const lookupCandidates = this.fileLookup.getCandidates(basename);
+        if (!lookupCandidates) {
+            return {
+                status: "pending",
+                candidates: [],
+                normalizedPath: normalized ?? path,
+                reason: "Vault basename index is not ready"
+            };
+        }
+        for (const file of lookupCandidates) {
             const filePath = normalizePath(file.path);
             if (file.name === basename
                 && (filePath === suffix || filePath.endsWith(`/${suffix}`) || !suffix.includes("/"))) {
@@ -145,10 +182,6 @@ export class LocalImageTargetResolver {
         }
     }
 
-    private getVaultFiles(): TFile[] {
-        const files = this.app.vault.getFiles?.() ?? [];
-        return files.filter((file): file is TFile => file instanceof TFile);
-    }
 }
 
 export function inferLocalReferenceSyntax(source: string): LocalReferenceSyntax {

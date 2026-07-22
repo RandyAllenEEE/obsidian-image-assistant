@@ -2,6 +2,7 @@ import {
     App,
     Component,
     Menu,
+    Notice,
     type Editor,
     type MarkdownFileInfo,
     type MarkdownView,
@@ -16,7 +17,6 @@ import type ImageConverterPlugin from "../../main";
 import { ImageContextMenuPolicy } from "./ImageContextMenuPolicy";
 import { ClipboardHandler } from "./handlers/ClipboardHandler";
 import { DeleteHandler } from "./handlers/DeleteHandler";
-import { NavigationHandler } from "./handlers/NavigationHandler";
 import { ProcessingHandler } from "./handlers/ProcessingHandler";
 import { RenameHandler } from "./handlers/RenameHandler";
 import { UploadDownloadHandler } from "./handlers/UploadDownloadHandler";
@@ -57,7 +57,6 @@ export class RenderedImageContextMenu extends Component {
     private readonly uploadDownloadHandler: UploadDownloadHandler;
     private readonly clipboardHandler: ClipboardHandler;
     private readonly processingHandler: ProcessingHandler;
-    private readonly navigationHandler: NavigationHandler;
     private readonly renameHandler: RenameHandler;
     private readonly propertiesBuilder: RenameInputBuilder;
     private registered = false;
@@ -73,7 +72,9 @@ export class RenderedImageContextMenu extends Component {
         super();
         this.editCapabilities = new CanvasEditCapabilityService(plugin);
         this.policy = new ImageContextMenuPolicy(
-            extension => this.editCapabilities.peek(extension)
+            extension => this.editCapabilities.peek(extension),
+            () => plugin.settings.cleanerSettings.enableDeleteContextMenu,
+            () => this.isReferenceInventoryReady()
         );
         void this.editCapabilities.primeAvifCapability();
         const imageMatchFinder = new ImageMatchFinder();
@@ -89,7 +90,6 @@ export class RenderedImageContextMenu extends Component {
             plugin,
             this.editCapabilities
         );
-        this.navigationHandler = new NavigationHandler(app);
         this.renameHandler = new RenameHandler(
             app,
             plugin,
@@ -340,6 +340,11 @@ export class RenderedImageContextMenu extends Component {
         id: ImageContextMenuItemId,
         context: ImageContextMenuContext
     ): void | Promise<void> {
+        if (REFERENCE_INVENTORY_REQUIRED_ITEMS.has(id)
+            && !this.isReferenceInventoryReady()) {
+            new Notice(t("REFERENCE_INDEX_MENU_ACTIONS_UNAVAILABLE"));
+            return;
+        }
         switch (id) {
             case "properties":
                 this.propertiesBuilder.openModal(
@@ -350,14 +355,6 @@ export class RenderedImageContextMenu extends Component {
                     )
                 );
                 return;
-            case "open":
-                context.ownerWindow?.open(
-                    context.url ?? context.renderedSrc,
-                    "_blank"
-                );
-                return;
-            case "cut":
-                return this.clipboardHandler.cutImageAndLink(context);
             case "copy":
                 return this.clipboardHandler.copyImage(context);
             case "copy-base64":
@@ -374,10 +371,14 @@ export class RenderedImageContextMenu extends Component {
                 return this.uploadDownloadHandler.downloadNetworkImage(context);
             case "delete":
                 return this.deleteHandler.deleteImageAndLink(context);
-            case "show-navigation":
-                return this.navigationHandler.showImageInNavigation(context);
-            case "show-explorer":
-                return this.navigationHandler.showImageInSystemExplorer(context);
+        }
+    }
+
+    private isReferenceInventoryReady(): boolean {
+        try {
+            return this.plugin.referenceIndexService?.getReadiness?.() === "ready";
+        } catch {
+            return false;
         }
     }
 
@@ -582,6 +583,16 @@ export class RenderedImageContextMenu extends Component {
     }
 }
 
+const REFERENCE_INVENTORY_REQUIRED_ITEMS = new Set<ImageContextMenuItemId>([
+    "properties",
+    "process",
+    "crop",
+    "annotate",
+    "upload",
+    "download",
+    "delete"
+]);
+
 function matchesEditorMenu(
     pending: PendingImageMenu,
     editor: Editor,
@@ -620,10 +631,6 @@ function getMenuItemDefinition(id: ImageContextMenuItemId): {
     switch (id) {
         case "properties":
             return { title: "MENU_EDIT_IMAGE_PROPERTIES", icon: "sliders-horizontal" };
-        case "open":
-            return { title: "MENU_OPEN_NEW_WINDOW", icon: "external-link" };
-        case "cut":
-            return { title: "MENU_CUT", icon: "scissors" };
         case "copy":
             return { title: "MENU_COPY_IMAGE", icon: "copy" };
         case "copy-base64":
@@ -640,10 +647,6 @@ function getMenuItemDefinition(id: ImageContextMenuItemId): {
             return { title: "MENU_DOWNLOAD_NETWORK_IMAGE", icon: "download" };
         case "delete":
             return { title: "MENU_DELETE_LINK", icon: "trash" };
-        case "show-navigation":
-            return { title: "MENU_SHOW_NAV", icon: "folder-open" };
-        case "show-explorer":
-            return { title: "MENU_SHOW_EXPLORER", icon: "arrow-up-right" };
     }
 }
 

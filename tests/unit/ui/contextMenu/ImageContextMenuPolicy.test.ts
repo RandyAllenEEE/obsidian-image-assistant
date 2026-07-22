@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { Platform } from "obsidian";
+import { describe, expect, it } from "vitest";
 import { ImageContextMenuPolicy } from "../../../../src/ui/contextMenu/ImageContextMenuPolicy";
 import { fakeTFile } from "../../../factories/obsidian";
 
@@ -23,10 +22,6 @@ function context(overrides: Record<string, unknown> = {}) {
     } as any;
 }
 
-afterEach(() => {
-    Platform.isMobile = false;
-});
-
 describe("ImageContextMenuPolicy", () => {
     const policy = new ImageContextMenuPolicy();
 
@@ -42,8 +37,6 @@ describe("ImageContextMenuPolicy", () => {
         });
         expect(policy.getCapabilities(local)).toEqual({
             properties: true,
-            open: true,
-            cut: true,
             copy: true,
             copyBase64: true,
             process: true,
@@ -51,9 +44,7 @@ describe("ImageContextMenuPolicy", () => {
             annotate: true,
             upload: true,
             download: false,
-            delete: true,
-            showNavigation: true,
-            showExplorer: true
+            delete: true
         });
 
         const gif = context({
@@ -79,8 +70,6 @@ describe("ImageContextMenuPolicy", () => {
         });
         expect(policy.getGroups(url).flatMap(group => group.items)).toEqual([
             "properties",
-            "open",
-            "cut",
             "download",
             "delete"
         ]);
@@ -96,11 +85,76 @@ describe("ImageContextMenuPolicy", () => {
         });
 
         expect(policy.getPrimaryItems(url)).toEqual(["download"]);
-        expect(policy.getMoreItems(url)).toEqual(["open"]);
+        expect(policy.getMoreItems(url)).toEqual([]);
         expect(policy.getCapabilities(url)).toMatchObject({
             properties: false,
-            cut: false,
             download: true,
+            delete: false
+        });
+    });
+
+    it("removes only the delete action when the cleaner child switch is off", () => {
+        const deleteDisabled = new ImageContextMenuPolicy(
+            undefined,
+            () => false
+        );
+        const local = context({
+            sourceKind: "local",
+            resolution: "resolved",
+            viewContext: {},
+            localFile: fakeTFile({
+                path: "assets/photo.png",
+                extension: "png"
+            })
+        });
+
+        expect(deleteDisabled.getPrimaryItems(local)).toEqual([
+            "properties",
+            "upload"
+        ]);
+        expect(deleteDisabled.getMoreItems(local)).toContain("process");
+        expect(deleteDisabled.getCapabilities(local).delete).toBe(false);
+    });
+
+    it("exposes only read-only actions while the reference inventory is unavailable", () => {
+        const unavailable = new ImageContextMenuPolicy(
+            undefined,
+            () => true,
+            () => false
+        );
+        const local = context({
+            sourceKind: "local",
+            resolution: "resolved",
+            owner: {},
+            viewContext: {},
+            localFile: fakeTFile({
+                path: "assets/photo.png",
+                extension: "png"
+            })
+        });
+        const url = context({
+            sourceKind: "url",
+            resolution: "resolved",
+            owner: {},
+            viewContext: {},
+            renderedSrc: "blob:https://obsidian.local/proxy",
+            url: "https://cdn.example.com/photo"
+        });
+
+        expect(unavailable.getPrimaryItems(local)).toEqual([]);
+        expect(unavailable.getMoreItems(local)).toEqual([
+            "copy",
+            "copy-base64"
+        ]);
+        expect(unavailable.getPrimaryItems(url)).toEqual([]);
+        expect(unavailable.getMoreItems(url)).toEqual([]);
+        expect(unavailable.getCapabilities(local)).toMatchObject({
+            properties: false,
+            process: false,
+            crop: false,
+            annotate: false,
+            upload: false,
+            download: false,
             delete: false
         });
     });
@@ -111,10 +165,8 @@ describe("ImageContextMenuPolicy", () => {
             renderedSrc: "data:image/png;base64,AAAA"
         });
         expect(policy.getCapabilities(unresolvedData)).toMatchObject({
-            open: true,
             copy: true,
             copyBase64: true,
-            cut: false,
             delete: false
         });
 
@@ -125,7 +177,6 @@ describe("ImageContextMenuPolicy", () => {
             dataReference: {}
         });
         expect(policy.getCapabilities(exactData)).toMatchObject({
-            cut: true,
             delete: true
         });
     });
@@ -140,28 +191,7 @@ describe("ImageContextMenuPolicy", () => {
             context()
         ]) {
             expect(policy.getGroups(candidate).flatMap(group => group.items))
-                .toEqual(["open", "copy", "copy-base64"]);
+                .toEqual(["copy", "copy-base64"]);
         }
-    });
-
-    it("removes desktop-only capabilities on mobile", () => {
-        Platform.isMobile = true;
-        const local = context({
-            sourceKind: "local",
-            resolution: "resolved",
-            viewContext: {},
-            localFile: fakeTFile({
-                path: "assets/photo.png",
-                extension: "png"
-            })
-        });
-        expect(policy.getCapabilities(local)).toMatchObject({
-            open: false,
-            cut: false,
-            showNavigation: false,
-            showExplorer: false,
-            process: true,
-            delete: true
-        });
     });
 });

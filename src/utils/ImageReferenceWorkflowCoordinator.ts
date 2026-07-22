@@ -28,12 +28,17 @@ import type {
     ReferenceLocation,
     ReferenceUpdateResult
 } from "./VaultReferenceManager";
+import { canonicalizeHttpUrl } from "./NetworkPolicy";
 import { EditorRangeMutationTransaction } from "./EditorRangeMutationTransaction";
 import {
     captureImageFileRevision,
     verifyImageFileRevision,
     type ImageFileRevision
 } from "./ImageFileRevision";
+import type {
+    ReferenceIndexToken
+} from "./ImageReferenceIndexService";
+import { LocalFileDeletionService } from "./LocalFileDeletionService";
 
 export type ImageReferenceSource =
     | { kind: "local"; file: TFile }
@@ -80,6 +85,7 @@ export interface ReferenceMutationBoundary {
 export interface ReferenceInspectionOptions {
     readonly clickedContext?: ClickedImageReferenceContext;
     readonly mutationBoundary?: ReferenceMutationBoundary;
+    readonly signal?: AbortSignal;
 }
 
 export interface ReferenceInventory {
@@ -101,6 +107,7 @@ export interface ReferenceInventory {
     readonly sourceRevision?: ImageFileRevision;
     readonly canDeleteAfterAll: boolean;
     readonly signature: string;
+    readonly indexToken?: ReferenceIndexToken;
 }
 
 export interface ReferenceWorkflowResult {
@@ -110,8 +117,35 @@ export interface ReferenceWorkflowResult {
     readonly failedFiles: readonly string[];
     readonly uncertainFiles: readonly string[];
     readonly sourceDeleted: boolean;
+    readonly changedFiles?: readonly string[];
     readonly sourceDeleteResult?: CloudDeleteResult;
     readonly staleInventory?: ReferenceInventory;
+}
+
+export type ReferenceWorkflowExecutionResult = ReferenceWorkflowResult;
+
+export type ReferenceWorkflowProgressStage =
+    | "index"
+    | "verify"
+    | "mutate"
+    | "delete";
+
+export interface ReferenceWorkflowProgress {
+    readonly stage: ReferenceWorkflowProgressStage;
+    readonly processed: number;
+    readonly total: number;
+}
+
+export interface ReferenceWorkflowSession {
+    readonly inventory: ReferenceInventory;
+    readonly createdAt: number;
+}
+
+export interface ReferenceWorkflowExecutionOptions {
+    readonly destination?: ImageReferenceDestination;
+    readonly signal?: AbortSignal;
+    readonly onProgress?: (progress: ReferenceWorkflowProgress) => void;
+    readonly onCommitStart?: () => void;
 }
 
 /**
@@ -124,6 +158,7 @@ export class ImageReferenceWorkflowCoordinator {
     private readonly safetyService: ReferenceSafetyService;
     private readonly referenceReplacer: ImageReferenceReplacer;
     private readonly cloudDeleter: CloudImageDeleter;
+    private readonly localFileDeletion: LocalFileDeletionService;
     private readonly editorTransaction = new EditorRangeMutationTransaction();
 
     constructor(
@@ -143,6 +178,10 @@ export class ImageReferenceWorkflowCoordinator {
             () => plugin.settings.localProcessing.embedResize
         );
         this.cloudDeleter = cloudDeleter ?? new CloudImageDeleter(plugin);
+        this.localFileDeletion = new LocalFileDeletionService(
+            app,
+            () => plugin.settings.cleanerSettings
+        );
     }
 
     async inspect(
@@ -159,18 +198,57 @@ export class ImageReferenceWorkflowCoordinator {
             && getClickedReferenceText(clickedContext) === clickedContext.match.linkText
             ? clickedContext
             : undefined;
+        const signal = options.signal;
         const mutationPolicy = createReferenceMutationScanPolicy(
             this.plugin.settings?.global?.codeBlockImageLinkIndexing ?? true
         );
-        const safety = source.kind === "local"
-            ? await this.safetyService.inspectLocalFile(source.file)
-            : await this.safetyService.inspectUrl(source.url);
-        let mutableMarkdownScan;
-        let mutableCanvas: CanvasFileReference[];
-        let mutableCanvasComplete: boolean;
-        let mutableCanvasUncertainFiles: string[];
+        let safety: ReferenceSafetyReport;
+        let mutableMarkdownScan: {
+            locations: ReferenceLocation[];
+            complete: boolean;
+            uncertainFiles: string[];
+        } = {
+            locations: [],
+            complete: false,
+            uncertainFiles: []
+        };
+        let mutableCanvas: CanvasFileReference[] = [];
+        let mutableCanvasComplete = false;
+        let mutableCanvasUncertainFiles: string[] = [];
+        let indexToken: ReferenceIndexToken | undefined;
 
-        if (mutationPolicy.includeFencedCode) {
+        if (this.plugin.referenceIndexService) {
+            const indexed = source.kind === "local"
+                ? await this.plugin.referenceIndexService.inspectLocalFileInventory(
+                    source.file,
+                    mutationPolicy.includeFencedCode,
+                    signal
+                )
+                : await this.plugin.referenceIndexService.inspectUrlInventory(
+                    source.url,
+                    mutationPolicy.includeFencedCode,
+                    signal
+                );
+            safety = toSafetyReport(indexed.safety);
+            indexToken = indexed.token;
+            mutableMarkdownScan = {
+                locations: [...indexed.mutation.markdown],
+                complete: indexed.mutation.complete,
+                uncertainFiles: [...indexed.mutation.uncertainFiles]
+            };
+            mutableCanvas = [...indexed.mutation.canvas];
+            mutableCanvasComplete = indexed.mutation.complete;
+            mutableCanvasUncertainFiles = [...indexed.mutation.uncertainFiles];
+        } else {
+            safety = source.kind === "local"
+                ? await this.safetyService.inspectLocalFile(source.file)
+                : await this.safetyService.inspectUrl(source.url);
+        }
+
+        if (this.plugin.referenceIndexService) {
+            // The paired v3 inventory above already projected both policies
+            // from one parsed record set.
+        } else if (mutationPolicy.includeFencedCode) {
             mutableMarkdownScan = {
                 locations: safety.markdown,
                 complete: safety.complete,
@@ -179,22 +257,6 @@ export class ImageReferenceWorkflowCoordinator {
             mutableCanvas = safety.canvas;
             mutableCanvasComplete = safety.complete;
             mutableCanvasUncertainFiles = safety.uncertainFiles;
-        } else if (this.plugin.referenceIndexService) {
-            const indexedMutable = source.kind === "local"
-                ? await this.plugin.referenceIndexService.inspectLocalFile(source.file, {
-                    includeFencedCode: false
-                })
-                : await this.plugin.referenceIndexService.inspectUrl(source.url, {
-                    includeFencedCode: false
-                });
-            mutableMarkdownScan = {
-                locations: [...indexedMutable.markdown],
-                complete: indexedMutable.complete,
-                uncertainFiles: [...indexedMutable.uncertainFiles]
-            };
-            mutableCanvas = [...indexedMutable.canvas];
-            mutableCanvasComplete = indexedMutable.complete;
-            mutableCanvasUncertainFiles = [...indexedMutable.uncertainFiles];
         } else {
             try {
                 mutableMarkdownScan = await this.plugin.vaultReferenceManager.scanReferencesDetailed(
@@ -265,17 +327,6 @@ export class ImageReferenceWorkflowCoordinator {
             boundedMutableCanvas
         );
         const sourceDeletable = this.canDeleteSource(source);
-        let sourceRevision: ImageFileRevision | undefined;
-        if (source.kind === "local" && sourceDeletable) {
-            try {
-                sourceRevision = await captureImageFileRevision(
-                    this.app,
-                    source.file
-                );
-            } catch {
-                sourceRevision = undefined;
-            }
-        }
         const inventoryBase = {
             source,
             clickedContext: verifiedClickedContext,
@@ -291,15 +342,14 @@ export class ImageReferenceWorkflowCoordinator {
             outOfBoundaryReferences,
             markdownReferences: safety.markdown.length,
             canvasReferences: safety.canvas.length,
-            sourceDeletable: sourceDeletable
-                && (source.kind === "url" || !!sourceRevision),
-            sourceRevision,
+            sourceDeletable,
+            sourceRevision: undefined,
             canDeleteAfterAll: safety.complete
                 && mutableComplete
                 && protectedFencedReferences === 0
                 && outOfBoundaryReferences === 0
-                && sourceDeletable
-                && (source.kind === "url" || !!sourceRevision)
+                && sourceDeletable,
+            indexToken
         };
         return Object.freeze({
             ...inventoryBase,
@@ -312,6 +362,164 @@ export class ImageReferenceWorkflowCoordinator {
         contextOrOptions?: ClickedImageReferenceContext | ReferenceInspectionOptions
     ): Promise<ReferenceInventory> {
         return this.inspect(source, contextOrOptions);
+    }
+
+    async beginSession(
+        source: ImageReferenceSource,
+        contextOrOptions?: ClickedImageReferenceContext | ReferenceInspectionOptions
+    ): Promise<ReferenceWorkflowSession> {
+        return Object.freeze({
+            inventory: await this.inspect(source, contextOrOptions),
+            createdAt: Date.now()
+        });
+    }
+
+    async executeDecision(
+        session: ReferenceWorkflowSession,
+        decision: ReferenceWorkflowDecision,
+        options: ReferenceWorkflowExecutionOptions = {}
+    ): Promise<ReferenceWorkflowResult> {
+        if (decision.action === "cancel" || decision.action === "keep-transfer") {
+            return emptyResult(false);
+        }
+        const signal = options.signal;
+        const inventory = session.inventory;
+        return ImageReferenceWorkflowCoordinator.sourceLock.acquire(
+            getSourceIdentity(inventory.source),
+            async () => {
+                throwIfAborted(signal);
+                if (decision.scope === "clicked") {
+                    options.onProgress?.({
+                        stage: "mutate",
+                        processed: 0,
+                        total: 1
+                    });
+                    options.onCommitStart?.();
+                    const clickedResult = options.destination
+                        ? await this.replaceClickedReference(inventory, options.destination)
+                        : await this.removeClickedReference(inventory);
+                    options.onProgress?.({
+                        stage: "mutate",
+                        processed: clickedResult.changed,
+                        total: clickedResult.found
+                    });
+                    return clickedResult;
+                }
+
+                options.onProgress?.({
+                    stage: "verify",
+                    processed: 0,
+                    total: countMutableFiles(inventory)
+                });
+                if (decision.deleteSource) {
+                    await this.plugin.referenceIndexService?.reconcile(signal);
+                    throwIfAborted(signal);
+                }
+                const fresh = await this.getFreshInventoryForExecution(
+                    inventory,
+                    signal
+                );
+                if (fresh.signature !== inventory.signature) {
+                    return staleResult(fresh);
+                }
+
+                let revision: ImageFileRevision | undefined;
+                if (decision.deleteSource && fresh.source.kind === "local") {
+                    try {
+                        revision = await captureImageFileRevision(
+                            this.app,
+                            fresh.source.file
+                        );
+                    } catch {
+                        return sourceRevisionFailure(fresh.source.file.path);
+                    }
+                }
+
+                let mutation = emptyResult(false);
+                if (decision.scope === "all") {
+                    throwIfAborted(signal);
+                    options.onProgress?.({
+                        stage: "mutate",
+                        processed: 0,
+                        total: countMutableFiles(fresh)
+                    });
+                    options.onCommitStart?.();
+                    mutation = options.destination
+                        ? await this.replaceAllReferences(fresh, options.destination)
+                        : await this.removeAllReferences(fresh);
+                    options.onProgress?.({
+                        stage: "mutate",
+                        processed: mutation.changedFiles?.length ?? 0,
+                        total: countMutableFiles(fresh)
+                    });
+                    if (!mutation.complete || mutation.changed !== mutation.found) {
+                        return mutation;
+                    }
+                }
+
+                if (!decision.deleteSource) return mutation;
+
+                options.onProgress?.({
+                    stage: "delete",
+                    processed: 0,
+                    total: 1
+                });
+                const finalSafety = await this.inspectFinalSafety(
+                    fresh.source,
+                    signal
+                );
+                if (!finalSafety.safeToDelete || !fresh.sourceDeletable) {
+                    return {
+                        ...mutation,
+                        complete: false,
+                        uncertainFiles: uniqueSorted([
+                            ...mutation.uncertainFiles,
+                            ...finalSafety.uncertainFiles
+                        ]),
+                        sourceDeleted: false
+                    };
+                }
+                if (decision.scope === "none") options.onCommitStart?.();
+                const deletion = await this.deleteSourceInternal(
+                    fresh.source,
+                    revision,
+                    signal
+                );
+                options.onProgress?.({
+                    stage: "delete",
+                    processed: deletion.sourceDeleted ? 1 : 0,
+                    total: 1
+                });
+                return mergeMutationAndDeletion(mutation, deletion);
+            },
+            signal
+        );
+    }
+
+    async executeClickedOnly(
+        source: ImageReferenceSource,
+        clickedContext: ClickedImageReferenceContext,
+        options: {
+            readonly destination?: ImageReferenceDestination;
+            readonly signal?: AbortSignal;
+            readonly onCommitStart?: () => void;
+        } = {}
+    ): Promise<ReferenceWorkflowResult> {
+        return ImageReferenceWorkflowCoordinator.sourceLock.acquire(
+            getSourceIdentity(source),
+            async () => {
+                throwIfAborted(options.signal);
+                options.onCommitStart?.();
+                return options.destination
+                    ? this.replaceClickedReferenceContext(
+                        source,
+                        clickedContext,
+                        options.destination
+                    )
+                    : this.removeClickedReferenceContext(clickedContext);
+            },
+            options.signal
+        );
     }
 
     getAllowedDecisionActions(
@@ -344,51 +552,44 @@ export class ImageReferenceWorkflowCoordinator {
     async replace(
         inventory: ReferenceInventory,
         destination: ImageReferenceDestination,
-        scope: ReferenceOperationScope
+        scope: ReferenceOperationScope,
+        signal?: AbortSignal
     ): Promise<ReferenceWorkflowResult> {
-        return ImageReferenceWorkflowCoordinator.sourceLock.acquire(
-            getSourceIdentity(inventory.source),
-            async () => {
-                const fresh = await this.inspect(inventory.source, {
-                    clickedContext: inventory.clickedContext,
-                    mutationBoundary: inventory.mutationBoundary
-                });
-                if (fresh.signature !== inventory.signature) {
-                    return staleResult(fresh);
-                }
-                if (scope === "clicked") {
-                    return this.replaceClickedReference(fresh, destination);
-                }
-                return this.replaceAllReferences(fresh, destination);
-            }
+        return this.executeDecision(
+            { inventory, createdAt: Date.now() },
+            {
+                action: scope === "clicked"
+                    ? "clicked-keep-source"
+                    : "all-keep-source",
+                scope,
+                deleteSource: false
+            },
+            { destination, signal }
         );
     }
 
     async remove(
         inventory: ReferenceInventory,
-        scope: ReferenceOperationScope
+        scope: ReferenceOperationScope,
+        signal?: AbortSignal
     ): Promise<ReferenceWorkflowResult> {
-        return ImageReferenceWorkflowCoordinator.sourceLock.acquire(
-            getSourceIdentity(inventory.source),
-            async () => {
-                const fresh = await this.inspect(inventory.source, {
-                    clickedContext: inventory.clickedContext,
-                    mutationBoundary: inventory.mutationBoundary
-                });
-                if (fresh.signature !== inventory.signature) {
-                    return staleResult(fresh);
-                }
-                if (scope === "clicked") {
-                    return this.removeClickedReference(fresh);
-                }
-                return this.removeAllReferences(fresh);
-            }
+        return this.executeDecision(
+            { inventory, createdAt: Date.now() },
+            {
+                action: scope === "clicked"
+                    ? "clicked-keep-source"
+                    : "all-keep-source",
+                scope,
+                deleteSource: false
+            },
+            { signal }
         );
     }
 
     async deleteSource(
         source: ImageReferenceSource,
-        expectedRevision?: ImageFileRevision
+        expectedRevision?: ImageFileRevision,
+        signal?: AbortSignal
     ): Promise<ReferenceWorkflowResult> {
         return ImageReferenceWorkflowCoordinator.sourceLock.acquire(
             getSourceIdentity(source),
@@ -398,76 +599,128 @@ export class ImageReferenceWorkflowCoordinator {
                     && source.file.path !== expectedRevision.path) {
                     return sourceRevisionFailure(expectedRevision.path);
                 }
-                const finalInventory = await this.inspect(source);
-                if (!finalInventory.safety.safeToDelete || !finalInventory.sourceDeletable) {
+                const finalSafety = await this.inspectFinalSafety(source, signal);
+                if (!finalSafety.safeToDelete || !this.canDeleteSource(source)) {
                     return {
-                        found: finalInventory.totalReferences,
+                        found: finalSafety.referenceCount,
                         changed: 0,
                         complete: false,
                         failedFiles: [],
-                        uncertainFiles: finalInventory.uncertainFiles,
+                        uncertainFiles: finalSafety.uncertainFiles,
                         sourceDeleted: false
                     };
                 }
 
-                if (source.kind === "local") {
-                    const revision = expectedRevision
-                        ?? finalInventory.sourceRevision;
-                    if (!revision) {
-                        return sourceRevisionFailure(source.file.path);
-                    }
-                    const revisionCheck = await verifyImageFileRevision(
-                        this.app,
-                        revision
-                    );
-                    if (!revisionCheck.matches) {
-                        return sourceRevisionFailure(source.file.path);
-                    }
-                    const currentSource = this.app.vault.getAbstractFileByPath(
-                        revision.path
-                    );
-                    if (!(currentSource instanceof TFile)) {
-                        return sourceRevisionFailure(revision.path);
-                    }
+                let revision = expectedRevision;
+                if (source.kind === "local" && !revision) {
                     try {
-                        await this.app.vault.trash(currentSource, true);
-                        return emptyResult(true);
-                    } catch (error) {
-                        return {
-                            found: 0,
-                            changed: 0,
-                            complete: false,
-                            failedFiles: [source.file.path],
-                            uncertainFiles: [getErrorMessage(error)],
-                            sourceDeleted: false
-                        };
+                        revision = await captureImageFileRevision(this.app, source.file);
+                    } catch {
+                        return sourceRevisionFailure(source.file.path);
                     }
                 }
+                return this.deleteSourceInternal(source, revision, signal);
+            },
+            signal
+        );
+    }
 
-                const sourceDeleteResult = await this.cloudDeleter.deleteImageDetailed({
-                    url: source.url
-                });
-                const historyWarning = sourceDeleteResult.success
-                    && sourceDeleteResult.historyUpdated === false
-                    ? [sourceDeleteResult.message
-                        ?? t("REFERENCE_WORKFLOW_SOURCE_DELETED_HISTORY_STALE", [
-                            t("MSG_UNKNOWN_ERROR")
-                        ])]
-                    : [];
+    private async getFreshInventoryForExecution(
+        inventory: ReferenceInventory,
+        signal?: AbortSignal
+    ): Promise<ReferenceInventory> {
+        const index = this.plugin.referenceIndexService;
+        if (index
+            && inventory.indexToken
+            && await index.isTokenCurrent(inventory.indexToken, signal)) {
+            return inventory;
+        }
+        return this.inspect(inventory.source, {
+            clickedContext: inventory.clickedContext,
+            mutationBoundary: inventory.mutationBoundary,
+            signal
+        });
+    }
+
+    private async inspectFinalSafety(
+        source: ImageReferenceSource,
+        signal?: AbortSignal
+    ): Promise<ReferenceSafetyReport> {
+        await this.plugin.referenceIndexService?.reconcile(signal);
+        throwIfAborted(signal);
+        return source.kind === "local"
+            ? this.safetyService.inspectLocalFile(source.file, signal)
+            : this.safetyService.inspectUrl(source.url, signal);
+    }
+
+    private async deleteSourceInternal(
+        source: ImageReferenceSource,
+        expectedRevision?: ImageFileRevision,
+        signal?: AbortSignal
+    ): Promise<ReferenceWorkflowResult> {
+        throwIfAborted(signal);
+        if (source.kind === "local") {
+            if (!expectedRevision) {
+                return sourceRevisionFailure(source.file.path);
+            }
+            const revisionCheck = await verifyImageFileRevision(
+                this.app,
+                expectedRevision
+            );
+            if (!revisionCheck.matches) {
+                return sourceRevisionFailure(source.file.path);
+            }
+            const currentSource = this.app.vault.getAbstractFileByPath(
+                expectedRevision.path
+            );
+            if (!(currentSource instanceof TFile)) {
+                return sourceRevisionFailure(expectedRevision.path);
+            }
+            try {
+                throwIfAborted(signal);
+                await this.localFileDeletion.delete(currentSource);
+                return emptyResult(true);
+            } catch (error) {
                 return {
                     found: 0,
                     changed: 0,
-                    complete: sourceDeleteResult.success
-                        && sourceDeleteResult.historyUpdated !== false,
-                    failedFiles: [],
-                    uncertainFiles: sourceDeleteResult.success
-                        ? historyWarning
-                        : [sourceDeleteResult.message ?? sourceDeleteResult.reason ?? "Cloud deletion failed"],
-                    sourceDeleted: sourceDeleteResult.success,
-                    sourceDeleteResult
+                    complete: false,
+                    failedFiles: [source.file.path],
+                    uncertainFiles: [getErrorMessage(error)],
+                    sourceDeleted: false
                 };
             }
-        );
+        }
+
+        const sourceDeleteResult = signal
+            ? await this.cloudDeleter.deleteImageDetailed(
+                { url: source.url },
+                signal
+            )
+            : await this.cloudDeleter.deleteImageDetailed({
+                url: source.url
+            });
+        const historyWarning = sourceDeleteResult.success
+            && sourceDeleteResult.historyUpdated === false
+            ? [sourceDeleteResult.message
+                ?? t("REFERENCE_WORKFLOW_SOURCE_DELETED_HISTORY_STALE", [
+                    t("MSG_UNKNOWN_ERROR")
+                ])]
+            : [];
+        return {
+            found: 0,
+            changed: 0,
+            complete: sourceDeleteResult.success
+                && sourceDeleteResult.historyUpdated !== false,
+            failedFiles: [],
+            uncertainFiles: sourceDeleteResult.success
+                ? historyWarning
+                : [sourceDeleteResult.message
+                    ?? sourceDeleteResult.reason
+                    ?? "Cloud deletion failed"],
+            sourceDeleted: sourceDeleteResult.success,
+            sourceDeleteResult
+        };
     }
 
     private async replaceClickedReference(
@@ -476,8 +729,21 @@ export class ImageReferenceWorkflowCoordinator {
     ): Promise<ReferenceWorkflowResult> {
         const context = inventory.clickedContext;
         if (!context) return incompleteClickedResult();
+        return this.replaceClickedReferenceContext(
+            inventory.source,
+            context,
+            destination
+        );
+    }
+
+    private async replaceClickedReferenceContext(
+        source: ImageReferenceSource,
+        context: ClickedImageReferenceContext,
+        destination: ImageReferenceDestination
+    ): Promise<ReferenceWorkflowResult> {
         const current = getClickedReferenceText(context);
         if (current !== context.match.linkText) return incompleteClickedResult(context.file.path);
+        if (destination.kind === "local") await this.referenceReplacer.prepare();
 
         let replacement: string;
         try {
@@ -485,7 +751,7 @@ export class ImageReferenceWorkflowCoordinator {
                 current,
                 destination,
                 context.file,
-                inventory.source.kind === "url"
+                source.kind === "url"
             );
         } catch (error) {
             return incompleteClickedResult(getErrorMessage(error));
@@ -510,6 +776,12 @@ export class ImageReferenceWorkflowCoordinator {
     ): Promise<ReferenceWorkflowResult> {
         const context = inventory.clickedContext;
         if (!context) return incompleteClickedResult();
+        return this.removeClickedReferenceContext(context);
+    }
+
+    private async removeClickedReferenceContext(
+        context: ClickedImageReferenceContext
+    ): Promise<ReferenceWorkflowResult> {
         const current = getClickedReferenceText(context);
         if (current !== context.match.linkText) return incompleteClickedResult(context.file.path);
 
@@ -531,6 +803,7 @@ export class ImageReferenceWorkflowCoordinator {
         inventory: ReferenceInventory,
         destination: ImageReferenceDestination
     ): Promise<ReferenceWorkflowResult> {
+        if (destination.kind === "local") await this.referenceReplacer.prepare();
         const markdown = await this.plugin.vaultReferenceManager.updateReferenceLocationsDetailed(
             [...inventory.mutableMarkdown],
             location => this.serializeReplacement(
@@ -647,10 +920,16 @@ export class ImageReferenceWorkflowCoordinator {
         if (source.kind === "local") return true;
         const cloud = this.plugin.settings?.pasteHandling?.cloud;
         try {
+            const transportAvailable =
+                typeof this.cloudDeleter.isDesktopTransportAvailable === "function"
+                    ? this.cloudDeleter.isDesktopTransportAvailable()
+                    : true;
             return cloud?.uploader === "PicList"
                 && typeof cloud.deleteServer === "string"
                 && cloud.deleteServer.trim().length > 0
-                && this.plugin.historyManager?.isUrlUploaded?.(source.url) === true;
+                && canonicalizeHttpUrl(cloud.deleteServer) !== null
+                && this.plugin.historyManager?.isUrlUploaded?.(source.url) === true
+                && transportAvailable;
         } catch {
             return false;
         }
@@ -680,11 +959,7 @@ function getSourceTarget(source: ImageReferenceSource): string {
 
 function getSourceIdentity(source: ImageReferenceSource): string {
     if (source.kind === "local") return `local:${source.file.path}`;
-    try {
-        return `url:${new URL(source.url).toString()}`;
-    } catch {
-        return `url:${source.url}`;
-    }
+    return `url:${canonicalizeHttpUrl(source.url) ?? source.url}`;
 }
 
 function getClickedReferenceText(context: ClickedImageReferenceContext): string {
@@ -753,6 +1028,13 @@ function countReferenceDifference(
     );
 }
 
+function countMutableFiles(inventory: ReferenceInventory): number {
+    return new Set([
+        ...inventory.mutableMarkdown.map(reference => reference.file.path),
+        ...inventory.mutableCanvas.map(reference => reference.canvasFile.path)
+    ]).size;
+}
+
 function countMultisetDifference(all: string[], mutable: string[]): number {
     const counts = new Map<string, number>();
     for (const key of mutable) counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -784,6 +1066,14 @@ function combineMutationResults(
         ...markdown.uncertainFiles,
         ...canvas.uncertainFiles
     ]);
+    const changedFiles = uniqueSorted([
+        ...markdown.files
+            .filter(file => file.replaced > 0)
+            .map(file => file.filePath),
+        ...canvas.files
+            .filter(file => file.replaced > 0)
+            .map(file => file.filePath)
+    ]);
     return {
         found,
         changed,
@@ -794,7 +1084,33 @@ function combineMutationResults(
             && changed === found,
         failedFiles,
         uncertainFiles,
+        changedFiles,
         sourceDeleted: false
+    };
+}
+
+function mergeMutationAndDeletion(
+    mutation: ReferenceWorkflowResult,
+    deletion: ReferenceWorkflowResult
+): ReferenceWorkflowResult {
+    return {
+        found: mutation.found,
+        changed: mutation.changed,
+        complete: mutation.complete && deletion.complete,
+        failedFiles: uniqueSorted([
+            ...mutation.failedFiles,
+            ...deletion.failedFiles
+        ]),
+        uncertainFiles: uniqueSorted([
+            ...mutation.uncertainFiles,
+            ...deletion.uncertainFiles
+        ]),
+        changedFiles: uniqueSorted([
+            ...(mutation.changedFiles ?? []),
+            ...(deletion.changedFiles ?? [])
+        ]),
+        sourceDeleted: deletion.sourceDeleted,
+        sourceDeleteResult: deletion.sourceDeleteResult
     };
 }
 
@@ -834,6 +1150,7 @@ function clickedMutationResult(
         uncertainFiles: mutation.uncertain && mutation.error
             ? [mutation.error]
             : [],
+        changedFiles: complete ? [filePath] : [],
         sourceDeleted: false
     };
 }
@@ -845,6 +1162,7 @@ function emptyResult(sourceDeleted: boolean): ReferenceWorkflowResult {
         complete: true,
         failedFiles: [],
         uncertainFiles: [],
+        changedFiles: [],
         sourceDeleted
     };
 }
@@ -866,4 +1184,31 @@ function uniqueSorted(values: readonly string[]): string[] {
 
 function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+function toSafetyReport(
+    snapshot: {
+        readonly complete: boolean;
+        readonly markdown: readonly ReferenceLocation[];
+        readonly canvas: readonly CanvasFileReference[];
+        readonly uncertainFiles: readonly string[];
+        readonly referenceCount: number;
+        readonly safeToDelete: boolean;
+    }
+): ReferenceSafetyReport {
+    return {
+        complete: snapshot.complete,
+        markdown: [...snapshot.markdown],
+        canvas: [...snapshot.canvas],
+        uncertainFiles: [...snapshot.uncertainFiles],
+        referenceCount: snapshot.referenceCount,
+        safeToDelete: snapshot.safeToDelete
+    };
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+    if (!signal?.aborted) return;
+    throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("The operation was aborted.", "AbortError");
 }

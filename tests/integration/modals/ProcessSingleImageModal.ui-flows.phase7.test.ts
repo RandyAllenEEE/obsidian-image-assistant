@@ -556,7 +556,8 @@ const [crfSlider] = sliders;
 
     // FileManager rename
     (app as any).fileManager = {
-      renameFile: vi.fn(async (file: any, newPath: string) => { await (app as any).vault.rename(file, newPath); })
+      renameFile: vi.fn(async (file: any, newPath: string) => { await (app as any).vault.rename(file, newPath); }),
+      trashFile: vi.fn(async (file: any) => { await (app as any).vault.trash(file, false); })
     };
 
     const modal = new ProcessSingleImageModal(app, plugin as any, img);
@@ -630,7 +631,8 @@ const [crfSlider] = sliders;
 
     // FileManager rename
     (app as any).fileManager = {
-      renameFile: vi.fn(async (file: any, newPath: string) => { await (app as any).vault.rename(file, newPath); })
+      renameFile: vi.fn(async (file: any, newPath: string) => { await (app as any).vault.rename(file, newPath); }),
+      trashFile: vi.fn(async (file: any) => { await (app as any).vault.trash(file, false); })
     };
 
     const modal = new ProcessSingleImageModal(app, plugin as any, img);

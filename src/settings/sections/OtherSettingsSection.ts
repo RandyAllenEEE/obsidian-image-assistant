@@ -3,7 +3,12 @@ import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
 import { SettingsUIState } from "../types";
 
-export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: ImageConverterPlugin, settingsUIState: SettingsUIState): void {
+export function renderOtherSettingsSection(
+    containerEl: HTMLElement,
+    plugin: ImageConverterPlugin,
+    settingsUIState: SettingsUIState,
+    refreshDisplay: () => void
+): void {
     const otherSection = containerEl.createDiv("image-converter-settings-section");
     otherSection.addClass("other-settings-section");
 
@@ -56,6 +61,7 @@ export function renderOtherSettingsSection(containerEl: HTMLElement, plugin: Ima
             .onChange(async (value) => {
                 plugin.setContextMenuEnabled(value);
                 await plugin.saveSettings();
+                refreshDisplay();
             })
         );
 

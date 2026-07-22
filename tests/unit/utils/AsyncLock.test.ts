@@ -101,4 +101,31 @@ describe('AsyncLock', () => {
     expect(idxAStart).toBeGreaterThanOrEqual(0);
     expect(idxBStart).toBeGreaterThanOrEqual(0);
   });
+
+  it('cancels a queued waiter without breaking FIFO for later waiters', async () => {
+    const lock = new AsyncLock();
+    const order: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const first = lock.acquire('k', async () => {
+      order.push('first');
+      await gate;
+    });
+    const controller = new AbortController();
+    const cancelled = lock.acquire('k', async () => {
+      order.push('cancelled');
+    }, controller.signal);
+    const third = lock.acquire('k', async () => {
+      order.push('third');
+    });
+
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    release();
+    await Promise.all([first, third]);
+
+    expect(order).toEqual(['first', 'third']);
+  });
 });

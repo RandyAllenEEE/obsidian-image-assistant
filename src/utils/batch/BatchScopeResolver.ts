@@ -155,7 +155,7 @@ export class BatchScopeResolver {
             includeFencedCode: this.plugin.settings.global.codeBlockImageLinkIndexing
         })) {
             if (isHttpUrl(link.path)) continue;
-            const resolution = this.localTargetResolver.resolve(link.path, noteFile, {
+            const resolution = await this.localTargetResolver.resolveAsync(link.path, noteFile, {
                 syntax: link.syntax === "markdown" ? "markdown" : "wiki"
             });
             if (resolution.status === "resolved" && resolution.file) {

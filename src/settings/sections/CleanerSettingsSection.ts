@@ -54,6 +54,18 @@ export function renderCleanerSettingsSection(
         updateChevron();
     };
 
+    if (plugin.settings.global.enableContextMenu) {
+        new Setting(settingsContentWrapper)
+            .setName(t("SETTING_CLEANER_CONTEXT_DELETE"))
+            .setDesc(t("SETTING_CLEANER_CONTEXT_DELETE_DESC"))
+            .addToggle(toggle => toggle
+                .setValue(plugin.settings.cleanerSettings.enableDeleteContextMenu)
+                .onChange(async (value) => {
+                    plugin.settings.cleanerSettings.enableDeleteContextMenu = value;
+                    await plugin.saveSettings();
+                }));
+    }
+
     // Base Path
     new Setting(settingsContentWrapper)
         .setName(t("SETTING_CLEANER_BASE_PATH"))
@@ -82,11 +94,14 @@ export function renderCleanerSettingsSection(
         .setName(t("SETTING_CLEANER_TRASH_MODE"))
         .setDesc(t("SETTING_CLEANER_TRASH_MODE_DESC"))
         .addDropdown(dropdown => dropdown
+            .addOption("follow-obsidian", t("SETTING_CLEANER_TRASH_FOLLOW_OBSIDIAN"))
             .addOption("obsidian", t("SETTING_CLEANER_TRASH_OBSIDIAN"))
             .addOption("system", t("SETTING_CLEANER_TRASH_SYSTEM"))
             .addOption("custom", t("SETTING_CLEANER_TRASH_CUSTOM"))
             .setValue(plugin.settings.cleanerSettings.trashMode)
-            .onChange(async (value: 'system' | 'obsidian' | 'custom') => {
+            .onChange(async (
+                value: 'follow-obsidian' | 'system' | 'obsidian' | 'custom'
+            ) => {
                 plugin.settings.cleanerSettings.trashMode = value;
                 await plugin.saveSettings();
                 refreshDisplay();

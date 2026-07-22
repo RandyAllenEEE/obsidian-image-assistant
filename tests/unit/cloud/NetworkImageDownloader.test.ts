@@ -66,6 +66,9 @@ describe('NetworkImageDownloader', () => {
             },
             fileManager: {
                 getAvailablePathForAttachment: vi.fn().mockResolvedValue('wrong-file-api-path'),
+                trashFile: vi.fn(async (file: TFile) => {
+                    await (mockApp.vault.trash as any)(file, true);
+                }),
             },
         } as any;
 
@@ -568,6 +571,7 @@ describe('NetworkImageDownloader', () => {
             );
             await downloader.undoDownload(result);
 
+            expect(mockApp.fileManager.trashFile).toHaveBeenCalledWith(file);
             expect(mockApp.vault.trash).toHaveBeenCalledWith(file, true);
             expect(mockApp.vault.modifyBinary).not.toHaveBeenCalled();
         });

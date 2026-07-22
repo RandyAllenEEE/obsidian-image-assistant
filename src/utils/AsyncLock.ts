@@ -2,7 +2,11 @@
 export class AsyncLock {
     private locks: Map<string, Promise<void>> = new Map();
 
-    async acquire<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    async acquire<T>(
+        key: string,
+        fn: () => Promise<T>,
+        signal?: AbortSignal
+    ): Promise<T> {
         const previous = this.locks.get(key) ?? Promise.resolve();
         let release!: () => void;
         const current = new Promise<void>(resolve => {
@@ -10,17 +14,47 @@ export class AsyncLock {
         });
         const tail = previous.then(() => current);
         this.locks.set(key, tail);
+        void tail.then(() => {
+            if (this.locks.get(key) === tail) {
+                this.locks.delete(key);
+            }
+        });
 
-        await previous;
+        try {
+            await waitForLock(previous, signal);
+        } catch (error) {
+            void previous.then(release);
+            throw error;
+        }
         try {
             return await fn();
         } finally {
             release();
-            if (this.locks.get(key) === tail) {
-                this.locks.delete(key);
-            }
         }
     }
+}
+
+function waitForLock(
+    previous: Promise<void>,
+    signal?: AbortSignal
+): Promise<void> {
+    if (!signal) return previous;
+    if (signal.aborted) return Promise.reject(createAbortError(signal));
+
+    return new Promise<void>((resolve, reject) => {
+        const abort = (): void => reject(createAbortError(signal));
+        signal.addEventListener("abort", abort, { once: true });
+        previous.then(() => {
+            signal.removeEventListener("abort", abort);
+            resolve();
+        });
+    });
+}
+
+function createAbortError(signal: AbortSignal): Error {
+    return signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("The operation was aborted.", "AbortError");
 }
 
 // Concurrent queue for rate limiting

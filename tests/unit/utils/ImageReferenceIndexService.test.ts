@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MarkdownView } from "obsidian";
 import { ImageReferenceIndexService } from "../../../src/utils/ImageReferenceIndexService";
+import { ReferenceIndexWorkerUnavailableError } from "../../../src/utils/reference-index/ReferenceIndexWorkerClient";
 import { fakeApp, fakeTFile, fakeVault } from "../../factories/obsidian";
 
 function createFixture(contents: Map<string, string>) {
@@ -30,6 +31,93 @@ function createFixture(contents: Map<string, string>) {
 }
 
 describe("ImageReferenceIndexService", () => {
+    it("does not read vault documents before the browser grants an idle turn", async () => {
+        const contents = new Map([
+            ["notes/source.md", "![[assets/photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { app, service } = createFixture(contents);
+        const callbacks: IdleRequestCallback[] = [];
+        const original = window.requestIdleCallback;
+        Object.defineProperty(window, "requestIdleCallback", {
+            configurable: true,
+            value: vi.fn((callback: IdleRequestCallback) => {
+                callbacks.push(callback);
+                return callbacks.length;
+            })
+        });
+
+        try {
+            let completed = false;
+            const start = service.start().then(() => {
+                completed = true;
+            });
+            await Promise.resolve();
+            expect(app.vault.read).not.toHaveBeenCalled();
+
+            for (let index = 0; index < 50 && !completed; index++) {
+                const callback = callbacks.shift();
+                if (callback) {
+                    callback({
+                        didTimeout: false,
+                        timeRemaining: () => 16
+                    });
+                }
+                await new Promise(resolve => window.setTimeout(resolve, 0));
+            }
+            await start;
+            expect(app.vault.read).toHaveBeenCalledTimes(2);
+        } finally {
+            Object.defineProperty(window, "requestIdleCallback", {
+                configurable: true,
+                value: original
+            });
+        }
+    });
+
+    it("keeps startup document indexing at one active Vault read", async () => {
+        const contents = new Map([
+            ["notes/source.md", "![[assets/photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { app, image, service } = createFixture(contents);
+        let activeReads = 0;
+        let maxActiveReads = 0;
+        app.vault.read.mockImplementation(async (file: { path: string }) => {
+            activeReads++;
+            maxActiveReads = Math.max(maxActiveReads, activeReads);
+            await new Promise(resolve => window.setTimeout(resolve, 1));
+            activeReads--;
+            return contents.get(file.path) ?? "";
+        });
+
+        await service.inspectLocalFile(image, { includeFencedCode: true });
+
+        expect(maxActiveReads).toBe(1);
+    });
+
+    it("rejects a large legacy cache from its header without parsing the payload", async () => {
+        const contents = new Map([
+            ["notes/source.md", ""],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { app, service } = createFixture(contents);
+        const indexPath =
+            "/.obsidian/plugins/obsidian-image-assistant/image-reference-index.json";
+        await app.vault.adapter.write(
+            indexPath,
+            `{"version":2,"padding":"${"x".repeat(4 * 1024 * 1024)}"}`
+        );
+        const parse = vi.spyOn(JSON, "parse");
+
+        try {
+            await (service as any).loadPersisted();
+            expect(parse).not.toHaveBeenCalled();
+        } finally {
+            parse.mockRestore();
+        }
+    });
+
     it("indexes Markdown, Admonition, ordinary fences and Canvas once", async () => {
         const contents = new Map([
             ["notes/source.md", [
@@ -179,7 +267,7 @@ describe("ImageReferenceIndexService", () => {
         )).toHaveLength(2);
     });
 
-    it("refreshes a document whose stat changed even when a vault event was missed", async () => {
+    it("refreshes a missed vault event during explicit reconciliation", async () => {
         const contents = new Map([
             ["notes/source.md", "![[assets/photo.png]]"],
             ["boards/source.canvas", JSON.stringify({ nodes: [] })]
@@ -192,12 +280,48 @@ describe("ImageReferenceIndexService", () => {
         contents.set(note.path, "No image");
         note.stat.mtime += 1;
         note.stat.size += 1;
+        await service.reconcile();
         const second = await service.inspectLocalFile(image, {
             includeFencedCode: true
         });
 
         expect(first.referenceCount).toBe(1);
         expect(second.referenceCount).toBe(0);
+    });
+
+    it("reconciles a delayed local-file topology event before a safety query", async () => {
+        const contents = new Map([
+            ["notes/source.md", "![[photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { app, image, service } = createFixture(contents);
+        const first = await service.inspectLocalFile(image, {
+            includeFencedCode: true
+        });
+        expect(first).toMatchObject({ complete: true, referenceCount: 1 });
+
+        const duplicate = fakeTFile({
+            path: "archive/photo.png",
+            name: "photo.png",
+            extension: "png"
+        });
+        const currentFiles = app.vault.getFiles();
+        app.vault.getFiles.mockReturnValue([...currentFiles, duplicate]);
+        const originalLookup = app.vault.getAbstractFileByPath;
+        app.vault.getAbstractFileByPath = vi.fn((path: string) =>
+            path === duplicate.path
+                ? duplicate
+                : originalLookup.call(app.vault, path)
+        );
+
+        await service.reconcile();
+        const second = await service.inspectLocalFile(image, {
+            includeFencedCode: true
+        });
+
+        expect(second.complete).toBe(false);
+        expect(second.safeToDelete).toBe(false);
+        expect(second.uncertainFiles).toContain("notes/source.md");
     });
 
     it("reuses a valid persisted index without rereading unchanged documents", async () => {
@@ -241,6 +365,36 @@ describe("ImageReferenceIndexService", () => {
         expect(app.vault.read).not.toHaveBeenCalled();
     });
 
+    it("rejects an unsupported V2 cache and rebuilds only V3 records", async () => {
+        const contents = new Map([
+            ["notes/source.md", "![[assets/photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { app, image } = createFixture(contents);
+        const indexPath =
+            "/.obsidian/plugins/obsidian-image-assistant/image-reference-index.json";
+        await app.vault.adapter.write(indexPath, JSON.stringify({
+            version: 2,
+            documents: []
+        }));
+        app.vault.read.mockClear();
+
+        const service = new ImageReferenceIndexService(app, () => 2);
+        const snapshot = await service.inspectLocalFile(image, {
+            includeFencedCode: true
+        });
+        await (service as any).persist();
+        const persisted = JSON.parse(new TextDecoder().decode(
+            new Uint8Array(await app.vault.adapter.readBinary(indexPath))
+        ));
+
+        expect(snapshot.referenceCount).toBe(1);
+        expect(app.vault.read).toHaveBeenCalled();
+        expect(persisted.version).toBe(3);
+        expect(persisted.documents[0]).toHaveProperty("links");
+        expect(persisted.documents[0]).not.toHaveProperty("safetyLinks");
+    });
+
     it("uses open Markdown editor contents as the current query overlay", async () => {
         const contents = new Map([
             ["notes/source.md", "Disk content has no image"],
@@ -249,8 +403,11 @@ describe("ImageReferenceIndexService", () => {
         const { app, image, note, service } = createFixture(contents);
         const view = new MarkdownView({} as any);
         view.file = note;
+        const documentIdentity = {};
+        const getValue = vi.fn(() => "![[assets/photo.png|unsaved]]");
         view.editor = {
-            getValue: () => "![[assets/photo.png|unsaved]]"
+            getValue,
+            cm: { state: { doc: documentIdentity } }
         } as any;
         app.workspace.iterateAllLeaves = vi.fn(callback => {
             callback({ view });
@@ -262,6 +419,12 @@ describe("ImageReferenceIndexService", () => {
 
         expect(snapshot.referenceCount).toBe(1);
         expect(snapshot.markdown[0].original).toContain("unsaved");
+        await service.inspectLocalFile(image, { includeFencedCode: true });
+        expect(getValue).toHaveBeenCalledOnce();
+
+        (view.editor as any).cm.state.doc = {};
+        getValue.mockReturnValue("No image now");
+        await expect(service.isTokenCurrent(snapshot.token)).resolves.toBe(false);
     });
 
     it("fails closed when an indexed Canvas document cannot be parsed", async () => {
@@ -279,5 +442,176 @@ describe("ImageReferenceIndexService", () => {
         expect(snapshot.complete).toBe(false);
         expect(snapshot.safeToDelete).toBe(false);
         expect(snapshot.uncertainFiles).toContain(canvas.path);
+    });
+
+    it("queries only the requested reverse bucket", async () => {
+        const contents = new Map([
+            ["notes/source.md", "![[assets/photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { image, service } = createFixture(contents);
+        await service.inspectLocalFile(image, { includeFencedCode: true });
+
+        const query = vi.spyOn((service as any).worker, "queryLocal");
+
+        await expect(service.inspectLocalFile(image, {
+            includeFencedCode: true
+        })).resolves.toMatchObject({ referenceCount: 1 });
+        expect(query).toHaveBeenLastCalledWith(
+            ["photo.png"],
+            true,
+            [],
+            undefined
+        );
+    });
+
+    it("lets an explicit query wake a background queue waiting for inactivity", async () => {
+        vi.useFakeTimers();
+        const contents = new Map([
+            ["notes/source.md", "![[assets/photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { service } = createFixture(contents);
+        const activityGate = (service as any).activityGate;
+        activityGate.onload();
+        (service as any).lifecycleLoaded = true;
+        (service as any).foregroundRequested = false;
+
+        let resumed = false;
+        const waiting = (service as any).waitForBackgroundPermission().then(() => {
+            resumed = true;
+        });
+        await Promise.resolve();
+        expect(resumed).toBe(false);
+
+        (service as any).requestForeground();
+        await waiting;
+        expect(resumed).toBe(true);
+
+        service.onunload();
+    });
+
+    it("returns a degraded fail-closed snapshot when a Worker query fails", async () => {
+        const contents = new Map([
+            ["notes/source.md", "![[assets/photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { image, service } = createFixture(contents);
+        await service.inspectLocalFile(image, { includeFencedCode: true });
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        vi.spyOn((service as any).worker, "queryLocal")
+            .mockRejectedValueOnce(new Error("worker crashed"));
+
+        const snapshot = await service.inspectLocalFile(image, {
+            includeFencedCode: true
+        });
+
+        expect(snapshot).toMatchObject({
+            readiness: "degraded",
+            complete: false,
+            safeToDelete: false
+        });
+        expect(snapshot.uncertainFiles).toContain("image-reference-index.json");
+    });
+
+    it("rebuilds the index once after a Worker query failure", async () => {
+        const contents = new Map([
+            ["notes/source.md", "![[assets/photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { image, service } = createFixture(contents);
+        await service.inspectLocalFile(image, { includeFencedCode: true });
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const worker = (service as any).worker;
+        vi.spyOn(worker, "queryLocal")
+            .mockRejectedValueOnce(new Error("worker crashed"));
+        const restart = vi.spyOn(worker, "restart");
+
+        const failed = await service.inspectLocalFile(image, {
+            includeFencedCode: true
+        });
+        expect(failed.safeToDelete).toBe(false);
+
+        await vi.waitFor(() => expect(service.getReadiness()).toBe("ready"));
+        expect(restart).toHaveBeenCalledTimes(1);
+        await expect(service.inspectLocalFile(image, {
+            includeFencedCode: true
+        })).resolves.toMatchObject({ referenceCount: 1, complete: true });
+
+        service.onunload();
+    });
+
+    it("does not loop when the single Worker restart also fails", async () => {
+        const contents = new Map([
+            ["notes/source.md", "![[assets/photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { service } = createFixture(contents);
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const worker = (service as any).worker;
+        const restart = vi.spyOn(worker, "restart")
+            .mockRejectedValue(new Error("restart failed"));
+
+        (service as any).handleWorkerFailure(new Error("worker crashed"));
+        await vi.waitFor(() => expect(service.getReadiness()).toBe("degraded"));
+        await Promise.resolve();
+        expect(restart).toHaveBeenCalledTimes(1);
+
+        (service as any).handleWorkerFailure(new Error("worker crashed again"));
+        await Promise.resolve();
+        expect(restart).toHaveBeenCalledTimes(1);
+
+        service.onunload();
+    });
+
+    it("does not retry a permanently unsupported Worker runtime", async () => {
+        const contents = new Map([
+            ["notes/source.md", "![[assets/photo.png]]"],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { service } = createFixture(contents);
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const restart = vi.spyOn((service as any).worker, "restart");
+
+        (service as any).handleWorkerFailure(
+            new ReferenceIndexWorkerUnavailableError([
+                new Error("Node Workers unsupported")
+            ])
+        );
+        await Promise.resolve();
+
+        expect(service.getReadiness()).toBe("degraded");
+        expect(restart).not.toHaveBeenCalled();
+        service.onunload();
+    });
+
+    it("computes reference line numbers with linear character visits", async () => {
+        const references = Array.from(
+            { length: 2_000 },
+            (_, index) => `![[assets/photo.png|${index}]]`
+        ).join("\n");
+        const markdown = `${"x".repeat(4 * 1024 * 1024)}\n${references}`;
+        const contents = new Map([
+            ["notes/source.md", markdown],
+            ["boards/source.canvas", JSON.stringify({ nodes: [] })]
+        ]);
+        const { image, service } = createFixture(contents);
+        const original = String.prototype.charCodeAt;
+        let visits = 0;
+        const charCodeAt = vi.spyOn(String.prototype, "charCodeAt")
+            .mockImplementation(function (this: string, index: number) {
+                visits++;
+                return original.call(this, index);
+            });
+
+        try {
+            const snapshot = await service.inspectLocalFile(image, {
+                includeFencedCode: true
+            });
+            expect(snapshot.referenceCount).toBe(2_000);
+            expect(visits).toBeLessThan(markdown.length * 2);
+        } finally {
+            charCodeAt.mockRestore();
+        }
     });
 });

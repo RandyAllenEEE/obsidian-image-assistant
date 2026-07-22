@@ -15,6 +15,7 @@ import {
     type StreamingImageFetchResult
 } from "../utils/StreamingImageFetcher";
 import { sha256Hex } from "../utils/BinaryHash";
+import { LocalFileDeletionService } from "../utils/LocalFileDeletionService";
 
 export interface DownloadResult {
     success: boolean;
@@ -41,6 +42,7 @@ export class NetworkImageDownloader {
     private app: App;
     private plugin: ImageConverterPlugin;
     private folderManager: FolderAndFilenameManagement;
+    private readonly localFileDeletion: LocalFileDeletionService;
     private readonly undoJournal = new Map<string, DownloadUndoEntry>();
 
     constructor(
@@ -52,6 +54,10 @@ export class NetworkImageDownloader {
         this.app = app;
         this.plugin = plugin;
         this.folderManager = folderManager;
+        this.localFileDeletion = new LocalFileDeletionService(
+            app,
+            () => plugin.settings.cleanerSettings
+        );
     }
 
     /** Downloads a URL using the note's attachment rules without replacing references. */
@@ -195,10 +201,18 @@ export class NetworkImageDownloader {
             }
 
             if (entry.disposition === "created") {
-                const safety = await new ReferenceSafetyService(
+                const referenceIndex = this.plugin.referenceIndexService;
+                if (typeof referenceIndex?.reconcile === "function") {
+                    await referenceIndex.reconcile();
+                }
+                const indexedSafety = referenceIndex
+                    ? await referenceIndex.inspectLocalFile(file, {
+                        includeFencedCode: true
+                    })
+                    : null;
+                const safety = indexedSafety ?? await new ReferenceSafetyService(
                     this.app,
-                    this.plugin.vaultReferenceManager,
-                    this.plugin.referenceIndexService
+                    this.plugin.vaultReferenceManager
                 ).inspectLocalFile(file);
                 if (!safety.safeToDelete) {
                     const reason = safety.complete
@@ -207,7 +221,21 @@ export class NetworkImageDownloader {
                     new Notice(t("MSG_DOWNLOAD_UNDO_KEPT", [reason]));
                     return false;
                 }
-                await this.app.vault.trash(file, true);
+                if (indexedSafety
+                    && referenceIndex
+                    && typeof referenceIndex.isTokenCurrent === "function"
+                    && !await referenceIndex.isTokenCurrent(indexedSafety.token)) {
+                    new Notice(t("MSG_DOWNLOAD_UNDO_KEPT", [
+                        t("REFERENCE_WORKFLOW_CHANGED")
+                    ]));
+                    return false;
+                }
+                const finalData = await this.app.vault.readBinary(file);
+                if (await this.getContentDigest(finalData) !== entry.downloadedDigest) {
+                    new Notice(t("MSG_DOWNLOAD_UNDO_CHANGED"));
+                    return false;
+                }
+                await this.localFileDeletion.delete(file);
             } else if (entry.previousData) {
                 await this.app.vault.modifyBinary(file, entry.previousData);
             } else {

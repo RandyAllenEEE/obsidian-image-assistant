@@ -1,4 +1,3 @@
-import { Platform } from "obsidian";
 import { getCanvasExportMime } from "../../utils/CanvasImageOutput";
 import type { CanvasEditCapability } from "../../utils/CanvasEditCapability";
 import type {
@@ -20,10 +19,13 @@ export class ImageContextMenuPolicy {
                     .includes(extension.trim().toLowerCase())
                     ? "canvas"
                     : null
-            })
+            }),
+        private readonly isDeleteEnabled: () => boolean = () => true,
+        private readonly isReferenceInventoryReady: () => boolean = () => true
     ) { }
 
     getCapabilities(context: ImageContextMenuContext): ImageContextMenuCapabilities {
+        const inventoryReady = this.isReferenceInventoryReady();
         const exact = context.resolution === "resolved";
         const local = exact && context.sourceKind === "local" && !!context.localFile;
         const url = context.sourceKind === "url" && !!context.url;
@@ -39,19 +41,17 @@ export class ImageContextMenuPolicy {
             && !!editCapability.encodable;
 
         return Object.freeze({
-            properties: local || exactUrl,
-            open: !Platform.isMobile && (!!context.url || !!context.renderedSrc),
-            cut: !Platform.isMobile && (!!context.viewContext || exactData),
+            properties: inventoryReady && (local || exactUrl),
             copy: canReadPixels,
             copyBase64: canReadPixels,
-            process: local,
-            crop: editable,
-            annotate: editable,
-            upload: local,
-            download: url && !!context.owner,
-            delete: local || exactUrl || exactData,
-            showNavigation: !Platform.isMobile && local,
-            showExplorer: !Platform.isMobile && local
+            process: inventoryReady && local,
+            crop: inventoryReady && editable,
+            annotate: inventoryReady && editable,
+            upload: inventoryReady && local,
+            download: inventoryReady && url && !!context.owner,
+            delete: inventoryReady
+                && this.isDeleteEnabled()
+                && (local || exactUrl || exactData)
         });
     }
 
@@ -62,8 +62,6 @@ export class ImageContextMenuPolicy {
                 capabilities.properties ? "properties" : null
             ]),
             group("clipboard", [
-                capabilities.open ? "open" : null,
-                capabilities.cut ? "cut" : null,
                 capabilities.copy ? "copy" : null,
                 capabilities.copyBase64 ? "copy-base64" : null
             ]),
@@ -76,10 +74,6 @@ export class ImageContextMenuPolicy {
             ]),
             group("delete", [
                 capabilities.delete ? "delete" : null
-            ]),
-            group("navigation", [
-                capabilities.showNavigation ? "show-navigation" : null,
-                capabilities.showExplorer ? "show-explorer" : null
             ])
         ].filter(candidate => candidate.items.length > 0);
     }
@@ -106,15 +100,11 @@ export class ImageContextMenuPolicy {
     getMoreItems(context: ImageContextMenuContext): readonly ImageContextMenuItemId[] {
         const capabilities = this.getCapabilities(context);
         return [
-            capabilities.open ? "open" : null,
-            capabilities.cut ? "cut" : null,
             capabilities.copy ? "copy" : null,
             capabilities.copyBase64 ? "copy-base64" : null,
             capabilities.process ? "process" : null,
             capabilities.crop ? "crop" : null,
-            capabilities.annotate ? "annotate" : null,
-            capabilities.showNavigation ? "show-navigation" : null,
-            capabilities.showExplorer ? "show-explorer" : null
+            capabilities.annotate ? "annotate" : null
         ].filter((item): item is ImageContextMenuItemId => item !== null);
     }
 }

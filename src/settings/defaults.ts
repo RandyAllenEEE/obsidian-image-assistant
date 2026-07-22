@@ -82,8 +82,9 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
 
     ocrSettings: DEFAULT_OCR_SETTINGS,
     cleanerSettings: {
+        enableDeleteContextMenu: true,
         basePath: 'attachments',
-        trashMode: 'obsidian',
+        trashMode: 'follow-obsidian',
         customTrashPath: '.trash',
         fileTypes: 'jpg,jpeg,png,gif,webp,bmp,svg,pdf,mp4,mp3'
     },

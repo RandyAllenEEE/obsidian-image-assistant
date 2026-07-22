@@ -13,6 +13,7 @@ import { isHttpUrl } from "../../utils/NetworkPolicy";
 import { ImageReferenceDecisionModal } from "../../ui/modals/ImageReferenceDecisionModal";
 import { UploadErrorDialog } from "../../ui/modals/UploadModals";
 import { UploaderManager } from "../uploader/index";
+import { describeLocalFileDeletion } from "../../utils/LocalFileDeletionService";
 
 export interface SingleUploadResult {
     readonly success: boolean;
@@ -68,6 +69,9 @@ export class SingleUploadHandler {
                 ? inventory.source.file.path
                 : inventory.source.url,
             destinationLabel: cloudUrl,
+            sourceDeletionLabel: inventory.source.kind === "local"
+                ? describeLocalFileDeletion(this.plugin.settings.cleanerSettings)
+                : undefined,
             onDecision: decision => this.handleDecision(inventory, cloudUrl, decision)
         }).open();
     }

@@ -1,16 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const obsidianMocks = vi.hoisted(() => ({
-    requestUrl: vi.fn()
-}));
-
-vi.mock("obsidian", async importOriginal => ({
-    ...await importOriginal<typeof import("obsidian")>(),
-    requestUrl: obsidianMocks.requestUrl
-}));
-
 import { CloudImageDeleter } from "../../../src/cloud/CloudImageDeleter";
 import { DEFAULT_SETTINGS } from "../../../src/settings/defaults";
+import { AbortableDesktopHttpClient } from "../../../src/utils/AbortableDesktopHttpClient";
+
+const desktopRequest = vi.fn();
 
 function createPlugin(options: {
     uploader?: "PicGo" | "PicList";
@@ -36,6 +30,10 @@ function createPlugin(options: {
 describe("CloudImageDeleter", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.spyOn(AbortableDesktopHttpClient.prototype, "isAvailable")
+            .mockReturnValue(true);
+        vi.spyOn(AbortableDesktopHttpClient.prototype, "request")
+            .mockImplementation(desktopRequest);
     });
 
     it("reports remote deletion as successful when only history cleanup fails", async () => {
@@ -45,10 +43,7 @@ describe("CloudImageDeleter", () => {
                 throw historyError;
             }
         });
-        obsidianMocks.requestUrl.mockResolvedValue({
-            status: 200,
-            json: { success: true }
-        });
+        desktopRequest.mockResolvedValue(response(200, { success: true }));
         vi.spyOn(console, "error").mockImplementation(() => undefined);
 
         const result = await new CloudImageDeleter(plugin).deleteImageDetailed({
@@ -67,10 +62,7 @@ describe("CloudImageDeleter", () => {
 
     it("deletes owned PicList objects and then removes their history record", async () => {
         const plugin = createPlugin();
-        obsidianMocks.requestUrl.mockResolvedValue({
-            status: 200,
-            json: { success: true }
-        });
+        desktopRequest.mockResolvedValue(response(200, { success: true }));
 
         const result = await new CloudImageDeleter(plugin).deleteImageDetailed({
             url: "https://cdn.example/photo.png"
@@ -98,7 +90,7 @@ describe("CloudImageDeleter", () => {
             uploader: "PicGo"
         });
         expect(plugin.historyManager.getRecord).not.toHaveBeenCalled();
-        expect(obsidianMocks.requestUrl).not.toHaveBeenCalled();
+        expect(desktopRequest).not.toHaveBeenCalled();
     });
 
     it("rejects missing delete configuration and ownership history", async () => {
@@ -118,15 +110,15 @@ describe("CloudImageDeleter", () => {
             success: false,
             reason: "missing-history"
         });
-        expect(obsidianMocks.requestUrl).not.toHaveBeenCalled();
+        expect(desktopRequest).not.toHaveBeenCalled();
     });
 
     it("reports HTTP and malformed response failures without changing history", async () => {
         const plugin = createPlugin();
         vi.spyOn(console, "error").mockImplementation(() => undefined);
-        obsidianMocks.requestUrl
-            .mockResolvedValueOnce({ status: 503, json: {} })
-            .mockResolvedValueOnce({ status: 200, json: null });
+        desktopRequest
+            .mockResolvedValueOnce(response(503, {}))
+            .mockResolvedValueOnce(response(200, null));
 
         await expect(new CloudImageDeleter(plugin).deleteImageDetailed({
             url: "https://cdn.example/photo.png"
@@ -140,7 +132,7 @@ describe("CloudImageDeleter", () => {
         })).resolves.toMatchObject({
             success: false,
             reason: "api-failed",
-            message: "Invalid delete response"
+            message: expect.stringContaining("invalid response")
         });
         expect(plugin.historyManager.removeRecord).not.toHaveBeenCalled();
     });
@@ -148,11 +140,11 @@ describe("CloudImageDeleter", () => {
     it("preserves provider failure messages and request errors", async () => {
         const plugin = createPlugin();
         vi.spyOn(console, "error").mockImplementation(() => undefined);
-        obsidianMocks.requestUrl
-            .mockResolvedValueOnce({
-                status: 200,
-                json: { success: false, message: "provider refused deletion" }
-            })
+        desktopRequest
+            .mockResolvedValueOnce(response(200, {
+                success: false,
+                message: "provider refused deletion"
+            }))
             .mockRejectedValueOnce(new Error("connection reset"));
 
         await expect(new CloudImageDeleter(plugin).deleteImageDetailed({
@@ -171,4 +163,29 @@ describe("CloudImageDeleter", () => {
         });
         expect(plugin.historyManager.removeRecord).not.toHaveBeenCalled();
     });
+
+    it("disables remote deletion when Electron transport is unavailable", async () => {
+        const plugin = createPlugin();
+        vi.spyOn(AbortableDesktopHttpClient.prototype, "isAvailable")
+            .mockReturnValue(false);
+
+        await expect(new CloudImageDeleter(plugin).deleteImageDetailed({
+            url: "https://cdn.example/photo.png"
+        })).resolves.toMatchObject({
+            success: false,
+            reason: "transport-unavailable"
+        });
+        expect(desktopRequest).not.toHaveBeenCalled();
+        expect(plugin.historyManager.getRecord).not.toHaveBeenCalled();
+    });
 });
+
+function response(status: number, body: unknown) {
+    return {
+        status,
+        data: new TextEncoder().encode(JSON.stringify(body)).buffer,
+        headers: {},
+        finalUrl: "http://127.0.0.1:36677/delete",
+        redirects: []
+    };
+}

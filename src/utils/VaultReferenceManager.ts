@@ -144,7 +144,11 @@ export class VaultReferenceManager {
                         }
                     } else {
                         const syntax = toLocalReferenceSyntax(link.syntax);
-                        const resolution = this.localTargetResolver.resolve(linkPath, file, { syntax });
+                        const resolution = await this.localTargetResolver.resolveAsync(
+                            linkPath,
+                            file,
+                            { syntax }
+                        );
                         if (resolution.status === "resolved" && resolution.file) {
                             for (const target of localTargets.get(normalizePath(resolution.file.path)) ?? []) {
                                 matchedTargets.add(target);
@@ -321,9 +325,9 @@ export class VaultReferenceManager {
             const linkPath = link.path;
             const matches = isUrl
                 ? this.isUrlMatch(linkPath, targetImagePath)
-                : this.localTargetResolver.resolve(linkPath, file, {
+                : (await this.localTargetResolver.resolveAsync(linkPath, file, {
                     syntax: toLocalReferenceSyntax(link.syntax)
-                }).file?.path === targetNormal;
+                })).file?.path === targetNormal;
             if (!matches) continue;
 
             locations.push({

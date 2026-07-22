@@ -23,6 +23,62 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = (process.argv[2] === "production");
 
+const referenceIndexWorkerPlugin = {
+	name: "reference-index-worker-source",
+	setup(build) {
+		build.onResolve({ filter: /^virtual:reference-index-worker$/ }, () => ({
+			path: "reference-index-worker",
+			namespace: "reference-index-worker"
+		}));
+		build.onLoad({
+			filter: /.*/,
+			namespace: "reference-index-worker"
+		}, async () => {
+			const nodeResult = await esbuild.build({
+				entryPoints: ["./src/utils/reference-index/ReferenceIndexWorkerEntry.ts"],
+				bundle: true,
+				write: false,
+				platform: "node",
+				format: "cjs",
+				target: tsTarget,
+				tsconfig: "tsconfig.json",
+				external: ["worker_threads"],
+				minify: prod,
+				metafile: true,
+				logLevel: "silent"
+			});
+			const browserResult = await esbuild.build({
+				entryPoints: ["./src/utils/reference-index/ReferenceIndexWebWorkerEntry.ts"],
+				bundle: true,
+				write: false,
+				platform: "browser",
+				format: "iife",
+				target: tsTarget,
+				tsconfig: "tsconfig.json",
+				minify: prod,
+				metafile: true,
+				logLevel: "silent"
+			});
+			const nodeOutput = nodeResult.outputFiles?.[0]?.text;
+			const browserOutput = browserResult.outputFiles?.[0]?.text;
+			if (!nodeOutput || !browserOutput) {
+				throw new Error("Reference index Worker bundle was empty");
+			}
+			return {
+				contents: `export default ${JSON.stringify({
+					browser: browserOutput,
+					node: nodeOutput
+				})};`,
+				loader: "js",
+				watchFiles: [...new Set([
+					...Object.keys(nodeResult.metafile?.inputs ?? {}),
+					...Object.keys(browserResult.metafile?.inputs ?? {})
+				])]
+			};
+		});
+	}
+};
+
 if (prod) {
 	fs.rmSync("build", { recursive: true, force: true });
 	fs.mkdirSync("build", { recursive: true });
@@ -85,6 +141,7 @@ const buildConfig = {
 	},
 
 	metafile: false, // Disabled as per user request
+	plugins: [referenceIndexWorkerPlugin],
 };
 
 // Helper function to copy files to build

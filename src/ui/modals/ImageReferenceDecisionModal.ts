@@ -9,26 +9,61 @@ import type {
 
 export interface ImageReferenceDecisionModalOptions {
     readonly operation: ReferenceWorkflowOperation;
-    readonly inventory: ReferenceInventory;
+    readonly inventory?: ReferenceInventory;
     readonly allowedActions: ReadonlySet<ReferenceWorkflowDecisionAction>;
     readonly sourceLabel: string;
     readonly destinationLabel?: string;
-    readonly onDecision: (decision: ReferenceWorkflowDecision) => Promise<void> | void;
+    readonly sourceDeletionLabel?: string;
+    readonly onDecision: (
+        decision: ReferenceWorkflowDecision,
+        inventory?: ReferenceInventory
+    ) => Promise<void> | void;
+    readonly onCancelLoading?: () => void;
 }
 
 /** A presentation-only decision surface shared by delete, upload and download. */
 export class ImageReferenceDecisionModal extends Modal {
     private settled = false;
     private executing = false;
+    private inventory?: ReferenceInventory;
+    private allowedActions: ReadonlySet<ReferenceWorkflowDecisionAction>;
+    private readonly dynamicInventory: boolean;
+    private opened = false;
+    private inventoryUnavailable = false;
 
     constructor(
         app: App,
         private readonly options: ImageReferenceDecisionModalOptions
     ) {
         super(app);
+        this.inventory = options.inventory;
+        this.allowedActions = options.allowedActions;
+        this.dynamicInventory = options.inventory === undefined;
     }
 
     onOpen(): void {
+        this.opened = true;
+        this.render();
+    }
+
+    updateInventory(
+        inventory: ReferenceInventory,
+        allowedActions: ReadonlySet<ReferenceWorkflowDecisionAction>
+    ): void {
+        if (this.settled) return;
+        this.inventory = inventory;
+        this.allowedActions = allowedActions;
+        this.inventoryUnavailable = false;
+        if (this.opened) this.render();
+    }
+
+    markInventoryUnavailable(): void {
+        if (this.settled) return;
+        this.inventoryUnavailable = true;
+        if (this.opened) this.render();
+    }
+
+    private render(): void {
         this.contentEl.empty();
         this.contentEl.addClass("image-assistant-reference-decision");
         this.contentEl.createEl("h2", {
@@ -41,14 +76,18 @@ export class ImageReferenceDecisionModal extends Modal {
     onClose(): void {
         const shouldCancel = !this.settled;
         this.settled = true;
+        this.opened = false;
+        if (shouldCancel) this.options.onCancelLoading?.();
         this.contentEl.empty();
         if (shouldCancel) {
-            void this.options.onDecision(toDecision("cancel"));
+            void (this.dynamicInventory
+                ? this.options.onDecision(toDecision("cancel"), this.inventory)
+                : this.options.onDecision(toDecision("cancel")));
         }
     }
 
     private renderSummary(): void {
-        const { inventory } = this.options;
+        const inventory = this.inventory;
         const summary = this.contentEl.createDiv({
             cls: "image-assistant-reference-decision-summary"
         });
@@ -59,6 +98,23 @@ export class ImageReferenceDecisionModal extends Modal {
             summary.createEl("p", {
                 text: t("REFERENCE_WORKFLOW_DESTINATION", [this.options.destinationLabel])
             });
+        }
+        if (this.options.sourceDeletionLabel && this.hasSourceDeletionAction()) {
+            summary.createEl("p", {
+                text: t("REFERENCE_WORKFLOW_LOCAL_DELETE_DESTINATION", [
+                    this.options.sourceDeletionLabel
+                ]),
+                cls: "mod-warning"
+            });
+        }
+        if (!inventory) {
+            summary.createEl("p", {
+                text: t(this.inventoryUnavailable
+                    ? "REFERENCE_WORKFLOW_INDEX_DEGRADED"
+                    : "REFERENCE_WORKFLOW_INVENTORY_LOADING"),
+                cls: this.inventoryUnavailable ? "mod-warning" : undefined
+            });
+            return;
         }
         if (inventory.clickedContext) {
             summary.createEl("p", {
@@ -119,7 +175,7 @@ export class ImageReferenceDecisionModal extends Modal {
     }
 
     private renderActions(): void {
-        const actions = orderedActions(this.options.allowedActions);
+        const actions = orderedActions(this.allowedActions);
         const container = this.contentEl.createDiv({
             cls: "image-assistant-reference-decision-actions"
         });
@@ -140,14 +196,19 @@ export class ImageReferenceDecisionModal extends Modal {
     }
 
     private async choose(action: ReferenceWorkflowDecisionAction): Promise<void> {
-        if (this.settled || this.executing) return;
+        if (this.settled || this.executing || !this.allowedActions.has(action)) return;
         this.executing = true;
         this.contentEl.querySelectorAll<HTMLButtonElement>("button")
             .forEach(button => {
                 button.disabled = true;
             });
         try {
-            await this.options.onDecision(toDecision(action));
+            if (!this.inventory) this.options.onCancelLoading?.();
+            if (this.dynamicInventory) {
+                await this.options.onDecision(toDecision(action), this.inventory);
+            } else {
+                await this.options.onDecision(toDecision(action));
+            }
             this.settled = true;
             this.close();
         } catch (error) {
@@ -156,8 +217,13 @@ export class ImageReferenceDecisionModal extends Modal {
             this.contentEl.querySelectorAll<HTMLButtonElement>("button")
                 .forEach(button => {
                     button.disabled = false;
-                });
+            });
         }
+    }
+
+    private hasSourceDeletionAction(): boolean {
+        return this.allowedActions.has("all-delete-source")
+            || this.allowedActions.has("delete-source-only");
     }
 }
 

@@ -334,12 +334,18 @@ export class ImageStateManager {
         this.performRefreshAllImages();
     };
 
-    private performRefreshAllImages(): void {
+    public refreshFiles(paths: ReadonlySet<string>): void {
+        if (this.unloaded || paths.size === 0) return;
+        this.performRefreshAllImages(paths);
+    }
+
+    private performRefreshAllImages(paths?: ReadonlySet<string>): void {
         // Extra safety check for layout readiness
         const workspace = this.app.workspace as WorkspaceWithLayoutState;
         if (workspace.layoutReady === false) return;
 
-        const views = collectUsableMarkdownViews(this.app);
+        const views = collectUsableMarkdownViews(this.app)
+            .filter(view => !paths || (view.file && paths.has(view.file.path)));
 
         for (const markdownView of views) {
             const mode = getMarkdownViewMode(markdownView);

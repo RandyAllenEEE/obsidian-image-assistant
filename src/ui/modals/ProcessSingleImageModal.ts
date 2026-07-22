@@ -551,7 +551,8 @@ export class ProcessSingleImageModal extends Modal {
                         this.plugin.settings.global.codeBlockImageLinkIndexing
                     ),
                     () => this.plugin.settings.localProcessing.link,
-                    this.plugin.referenceIndexService
+                    this.plugin.referenceIndexService,
+                    () => this.plugin.settings.cleanerSettings
                 );
                 if (!this.commitGuard.beginCommitting(commitToken)) return;
                 this.imageFile = await committer.commit(

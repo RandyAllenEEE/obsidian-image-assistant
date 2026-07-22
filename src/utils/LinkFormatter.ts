@@ -47,6 +47,8 @@ export class LinkFormatter {
             throw new Error("Cannot format relative path without an active file.");
         }
 
+        await this.referenceSerializer.preparePathFormat(pathFormat);
+
         let resizeParams = "";
         if (embedResize) {
             resizeParams = await this.getResizeParams(

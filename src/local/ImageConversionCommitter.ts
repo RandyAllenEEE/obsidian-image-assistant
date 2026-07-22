@@ -31,6 +31,10 @@ import {
 } from "../utils/ImageFileRevision";
 import { ImageEditCommitService } from "../utils/ImageEditCommitService";
 import type { ImageReferenceIndexService } from "../utils/ImageReferenceIndexService";
+import {
+    LocalFileDeletionService,
+    type LocalFileDeletionSettings
+} from "../utils/LocalFileDeletionService";
 
 export type ImageConversionCommitStage =
     | "preflight"
@@ -60,6 +64,7 @@ export class ImageConversionCommitError extends Error {
 
 export class ImageConversionCommitter {
     private static readonly commitLock = new AsyncLock();
+    private readonly localFileDeletion: LocalFileDeletionService;
 
     constructor(
         private app: App,
@@ -68,8 +73,15 @@ export class ImageConversionCommitter {
         private readonly mutationScanPolicy: ReferenceMutationScanPolicy =
             createReferenceMutationScanPolicy(true),
         private readonly linkSettingsProvider: () => LocalLinkSettings = () => DEFAULT_SETTINGS.localProcessing.link,
-        private readonly referenceIndex?: ImageReferenceIndexService
-    ) { }
+        private readonly referenceIndex?: ImageReferenceIndexService,
+        deletionSettingsProvider: () => LocalFileDeletionSettings =
+            () => DEFAULT_SETTINGS.cleanerSettings
+    ) {
+        this.localFileDeletion = new LocalFileDeletionService(
+            app,
+            deletionSettingsProvider
+        );
+    }
 
     async commit(
         source: TFile,
@@ -113,6 +125,9 @@ export class ImageConversionCommitter {
             this.referenceManager,
             this.referenceIndex
         );
+        if (typeof this.referenceIndex?.reconcile === "function") {
+            await this.referenceIndex.reconcile();
+        }
         const safety = await safetyService.inspectLocalFile(source);
         const mutationScans = await this.scanMutationReferences(source, safety);
         const markdownScan = mutationScans.markdown;
@@ -188,6 +203,7 @@ export class ImageConversionCommitter {
             this.referenceManager,
             this.linkSettingsProvider
         );
+        await replacer.prepare();
         const replacementGenerator = (location: ReferenceLocation) =>
             replacer.serializeReference(location.original, target, location.file);
         const markdownResult = typeof this.referenceManager.updateReferenceLocationsDetailed === "function"
@@ -259,7 +275,7 @@ export class ImageConversionCommitter {
 
         await this.assertExpectedRevision(source, expectedRevision);
         try {
-            await this.app.vault.trash(source, true);
+            await this.localFileDeletion.delete(source);
         } catch (error) {
             throw new ImageConversionCommitError(
                 `Converted references were saved, but the source could not be deleted: ${error instanceof Error ? error.message : String(error)}`,

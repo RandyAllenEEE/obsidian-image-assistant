@@ -35,7 +35,7 @@ describe("LocalImageTargetResolver", () => {
         expect(resolver.resolve("../assets/parent.png", source).file).toBe(parent);
     });
 
-    it("uses a unique basename fallback but rejects a genuinely ambiguous shortest link", () => {
+    it("uses a unique basename fallback but rejects a genuinely ambiguous shortest link", async () => {
         const source = fakeTFile({ path: "notes/current.md" });
         const first = fakeTFile({ path: "assets/photo.png" });
         const app = fakeApp({
@@ -44,7 +44,7 @@ describe("LocalImageTargetResolver", () => {
         }) as any;
         const resolver = new LocalImageTargetResolver(app);
 
-        expect(resolver.resolve("photo.png", source).file).toBe(first);
+        expect((await resolver.resolveAsync("photo.png", source)).file).toBe(first);
 
         const duplicate = fakeTFile({ path: "archive/photo.png" });
         (app.vault.getFiles() as any[]).push?.(duplicate);
@@ -54,11 +54,14 @@ describe("LocalImageTargetResolver", () => {
             (path: string) => files.find(file => file.path === path) ?? null
         );
 
-        const ambiguous = resolver.resolve("photo.png", source);
+        const nextResolver = new LocalImageTargetResolver(fakeApp({
+            vault: fakeVault({ files })
+        }) as any);
+        const ambiguous = await nextResolver.resolveAsync("photo.png", source);
         expect(ambiguous.status).toBe("ambiguous");
         expect(ambiguous.candidates.map(file => file.path)).toEqual([
-            "assets/photo.png",
-            "archive/photo.png"
+            "archive/photo.png",
+            "assets/photo.png"
         ]);
     });
 

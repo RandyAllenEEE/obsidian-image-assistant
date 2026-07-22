@@ -21,7 +21,8 @@ describe('CleanerSettingsSection', () => {
     settings.cleanerSettings.trashMode = 'custom';
     const plugin = {
       settings,
-      saveSettings: vi.fn().mockResolvedValue(undefined)
+      saveSettings: vi.fn().mockResolvedValue(undefined),
+      setContextMenuEnabled: vi.fn()
     } as any;
     const refreshDisplay = vi.fn();
     const container = document.createElement('div');
@@ -46,7 +47,8 @@ describe('CleanerSettingsSection', () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     const plugin = {
       settings,
-      saveSettings: vi.fn().mockResolvedValue(undefined)
+      saveSettings: vi.fn().mockResolvedValue(undefined),
+      setContextMenuEnabled: vi.fn()
     } as any;
     const refreshDisplay = vi.fn();
     const container = document.createElement('div');
@@ -60,5 +62,43 @@ describe('CleanerSettingsSection', () => {
 
     expect(settings.cleanerSettings.trashMode).toBe('custom');
     expect(refreshDisplay).toHaveBeenCalledOnce();
+  });
+
+  it('shows the delete child toggle only while the context-menu master is enabled', () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const plugin = {
+      settings,
+      saveSettings: vi.fn().mockResolvedValue(undefined),
+      setContextMenuEnabled: vi.fn()
+    } as any;
+    const container = document.createElement('div');
+
+    renderCleanerSettingsSection(container, plugin, makeUIState(), vi.fn());
+    expect(container.textContent).toContain('Context-menu deletion');
+
+    settings.global.enableContextMenu = false;
+    container.empty();
+    renderCleanerSettingsSection(container, plugin, makeUIState(), vi.fn());
+    expect(container.textContent).not.toContain('Context-menu deletion');
+  });
+
+  it('saves the delete child toggle without changing the master switch', async () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const plugin = {
+      settings,
+      saveSettings: vi.fn().mockResolvedValue(undefined),
+      setContextMenuEnabled: vi.fn()
+    } as any;
+    const container = document.createElement('div');
+    renderCleanerSettingsSection(container, plugin, makeUIState(), vi.fn());
+    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    await Promise.resolve();
+
+    expect(settings.cleanerSettings.enableDeleteContextMenu).toBe(false);
+    expect(settings.global.enableContextMenu).toBe(true);
+    expect(plugin.saveSettings).toHaveBeenCalledOnce();
   });
 });

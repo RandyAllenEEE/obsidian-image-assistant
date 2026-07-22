@@ -472,6 +472,9 @@ export function fakeApp(options: {
         if (vaultRef?.adapter?.write) {
           // no-op: adapter-based stores updated by vault.rename in tests, but ensure presence
         }
+      }),
+      trashFile: vi.fn(async (file: TFile) => {
+        await (options.vault as any)?.trash?.(file, true);
       })
     },
     

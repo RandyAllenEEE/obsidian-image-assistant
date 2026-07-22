@@ -87,6 +87,10 @@ export default defineConfig({
       '@mocks': path.resolve(__dirname, './tests/__mocks__'),
       '@fixtures': path.resolve(__dirname, './tests/fixtures'),
       '@helpers': path.resolve(__dirname, './tests/helpers'),
+      'virtual:reference-index-worker': path.resolve(
+        __dirname,
+        './tests/__mocks__/reference-index-worker-source.ts'
+      ),
       'obsidian': path.resolve(__dirname, './tests/__mocks__/obsidian.ts')
     }
   },

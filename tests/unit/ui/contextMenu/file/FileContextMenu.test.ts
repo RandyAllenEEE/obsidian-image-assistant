@@ -19,7 +19,7 @@ function getMenuItems(menu: Menu): TestMenuItem[] {
     return (menu as unknown as { getItems(): TestMenuItem[] }).getItems();
 }
 
-function createFixture() {
+function createFixture(readiness: "loading" | "ready" | "degraded" = "ready") {
     const note = fakeTFile({ path: "notes/source.md", extension: "md" });
     const image = fakeTFile({ path: "assets/photo.png", extension: "png" });
     const app = fakeApp({
@@ -32,7 +32,8 @@ function createFixture() {
                 /\.(?:png|jpe?g|webp)$/i.test(name ?? "")
             )
         },
-        cloudImageHandler: { uploadSingleFile }
+        cloudImageHandler: { uploadSingleFile },
+        referenceIndexService: { getReadiness: vi.fn(() => readiness) }
     } as any;
     const launcher = { open: vi.fn() } as any;
     const ownership = new MenuSessionRegistry();
@@ -132,5 +133,31 @@ describe("FileContextMenu", () => {
         menu.hide();
         expect(fixture.ownership.has(menu)).toBe(false);
         expect(fixture.fileMenu.append(menu, fixture.note)).toBe(true);
+    });
+
+    it.each(["loading", "degraded"] as const)(
+        "does not append file or batch actions while the index is %s",
+        readiness => {
+            const fixture = createFixture(readiness);
+            const imageMenu = new Menu();
+            const noteMenu = new Menu();
+
+            expect(fixture.fileMenu.append(imageMenu, fixture.image)).toBe(false);
+            expect(fixture.fileMenu.append(noteMenu, fixture.note)).toBe(false);
+            expect(getMenuItems(imageMenu)).toHaveLength(0);
+            expect(getMenuItems(noteMenu)).toHaveLength(0);
+        }
+    );
+
+    it("fails closed when index readiness cannot be read", () => {
+        const fixture = createFixture();
+        (fixture.fileMenu as any).plugin.referenceIndexService.getReadiness
+            .mockImplementation(() => {
+                throw new Error("service unloaded");
+            });
+        const menu = new Menu();
+
+        expect(fixture.fileMenu.append(menu, fixture.image)).toBe(false);
+        expect(getMenuItems(menu)).toHaveLength(0);
     });
 });

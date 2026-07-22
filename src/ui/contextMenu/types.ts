@@ -55,8 +55,6 @@ export interface ImageContextMenuContext {
 
 export type ImageContextMenuItemId =
 	| "properties"
-	| "open"
-	| "cut"
 	| "copy"
 	| "copy-base64"
 	| "process"
@@ -64,16 +62,13 @@ export type ImageContextMenuItemId =
 	| "annotate"
 	| "upload"
 	| "download"
-	| "delete"
-	| "show-navigation"
-	| "show-explorer";
+	| "delete";
 
 export type ImageContextMenuGroupId =
 	| "properties"
 	| "clipboard"
 	| "processing"
-	| "delete"
-	| "navigation";
+	| "delete";
 
 export interface ImageContextMenuGroup {
 	readonly id: ImageContextMenuGroupId;
@@ -82,8 +77,6 @@ export interface ImageContextMenuGroup {
 
 export interface ImageContextMenuCapabilities {
 	readonly properties: boolean;
-	readonly open: boolean;
-	readonly cut: boolean;
 	readonly copy: boolean;
 	readonly copyBase64: boolean;
 	readonly process: boolean;
@@ -92,8 +85,6 @@ export interface ImageContextMenuCapabilities {
 	readonly upload: boolean;
 	readonly download: boolean;
 	readonly delete: boolean;
-	readonly showNavigation: boolean;
-	readonly showExplorer: boolean;
 }
 
 export interface ImagePropertiesFormModel {

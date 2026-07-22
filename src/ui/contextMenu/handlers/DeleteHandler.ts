@@ -4,6 +4,7 @@ import { t } from "../../../lang/helpers";
 import type ImageConverterPlugin from "../../../main";
 import {
     ImageReferenceWorkflowCoordinator,
+    type ClickedImageReferenceContext,
     type ImageReferenceSource,
     type ReferenceInventory,
     type ReferenceWorkflowDecision
@@ -12,6 +13,7 @@ import { ImageReferenceDecisionModal } from "../../modals/ImageReferenceDecision
 import type { ImageContextMenuContext } from "../types";
 import { EditorRangeMutationTransaction } from "../../../utils/EditorRangeMutationTransaction";
 import { ReferenceWorkflowProgressModal } from "../../modals/ReferenceWorkflowProgressModal";
+import { describeLocalFileDeletion } from "../../../utils/LocalFileDeletionService";
 
 /** Handles exact-occurrence deletion and coordinates optional vault-wide cleanup. */
 export class DeleteHandler {
@@ -31,7 +33,6 @@ export class DeleteHandler {
     }
 
     async deleteImageAndLink(context: ImageContextMenuContext): Promise<void> {
-        let progress: ReferenceWorkflowProgressModal | null = null;
         try {
             if (context.sourceKind === "data") {
                 await this.deleteDataReference(context);
@@ -43,33 +44,51 @@ export class DeleteHandler {
                 new Notice(t("MSG_IMAGE_CONTEXT_UNRESOLVED"));
                 return;
             }
-            progress = new ReferenceWorkflowProgressModal(this.app);
-            progress.open();
-
-            try {
-                progress.setStage("verify");
-                await clickedReference.view.save();
-            } catch (error) {
-                progress.finish();
-                console.error("[Image Assistant] Failed to save note before reference scan:", error);
-                new Notice(t("MSG_LINK_REMOVED_SAVE_FAILED_SOURCE_KEPT"));
-                return;
-            }
-            if (progress.isCancelled()) return;
-
-            progress.setStage("index");
-            const inventory = await this.coordinator.inspect(
-                source,
-                clickedReference
-            );
-            if (progress.isCancelled()) return;
-            progress.finish();
-            this.openDecisionModal(inventory);
+            this.openLoadingDecisionModal(source, clickedReference);
         } catch (error) {
-            progress?.finish();
             console.error("[Image Assistant] Failed to prepare image deletion:", error);
             new Notice(t("MSG_FAIL_DELETE"));
         }
+    }
+
+    private openLoadingDecisionModal(
+        source: ImageReferenceSource,
+        clickedReference: ClickedImageReferenceContext
+    ): void {
+        const abortController = new AbortController();
+        const modal = new ImageReferenceDecisionModal(this.app, {
+            operation: "delete",
+            allowedActions: new Set(["clicked-keep-source", "cancel"]),
+            sourceLabel: getSourceLabel(source),
+            sourceDeletionLabel: source.kind === "local"
+                ? describeLocalFileDeletion(this.plugin.settings.cleanerSettings)
+                : undefined,
+            onCancelLoading: () => abortController.abort(),
+            onDecision: (decision, inventory) => this.handleDecision(
+                source,
+                clickedReference,
+                inventory,
+                decision
+            )
+        });
+        modal.open();
+        void this.coordinator.beginSession(source, {
+            clickedContext: clickedReference,
+            signal: abortController.signal
+        }).then(session => {
+            modal.updateInventory(
+                session.inventory,
+                this.coordinator.getAllowedDecisionActions(
+                    session.inventory,
+                    "delete"
+                )
+            );
+        }).catch(error => {
+            if (isAbortError(error)) return;
+            modal.markInventoryUnavailable();
+            console.error("[Image Assistant] Failed to prepare reference inventory:", error);
+            new Notice(t("REFERENCE_WORKFLOW_INDEX_DEGRADED"));
+        });
     }
 
     private openDecisionModal(inventory: ReferenceInventory): void {
@@ -82,24 +101,58 @@ export class DeleteHandler {
             inventory,
             allowedActions,
             sourceLabel: getSourceLabel(inventory.source),
-            onDecision: decision => this.handleDecision(inventory, decision)
+            sourceDeletionLabel: inventory.source.kind === "local"
+                ? describeLocalFileDeletion(this.plugin.settings.cleanerSettings)
+                : undefined,
+            onDecision: decision => this.handleDecision(
+                inventory.source,
+                inventory.clickedContext,
+                inventory,
+                decision
+            )
         }).open();
     }
 
     private async handleDecision(
-        inventory: ReferenceInventory,
+        source: ImageReferenceSource,
+        clickedReference: ClickedImageReferenceContext | undefined,
+        inventory: ReferenceInventory | undefined,
         decision: ReferenceWorkflowDecision
     ): Promise<void> {
         if (decision.action === "cancel") return;
         if (decision.scope === "none") return;
+        if (!clickedReference && decision.scope === "clicked") return;
+        if (!inventory && decision.scope !== "clicked") return;
 
         const progress = new ReferenceWorkflowProgressModal(this.app);
         try {
             progress.open();
-            progress.setStage("verify");
-            progress.lock();
-            progress.setStage("mutate");
-            const result = await this.coordinator.remove(inventory, decision.scope);
+            const onProgress = (state: {
+                stage: "index" | "verify" | "mutate" | "delete";
+                processed: number;
+                total: number;
+            }): void => {
+                progress.setStage(state.stage);
+                progress.setProgress(state.processed, state.total);
+            };
+            const result = inventory
+                ? await this.coordinator.executeDecision(
+                    { inventory, createdAt: Date.now() },
+                    decision,
+                    {
+                        signal: progress.signal,
+                        onProgress,
+                        onCommitStart: () => progress.lock()
+                    }
+                )
+                : await this.coordinator.executeClickedOnly(
+                    source,
+                    clickedReference!,
+                    {
+                        signal: progress.signal,
+                        onCommitStart: () => progress.lock()
+                    }
+                );
             if (result.staleInventory) {
                 progress.finish();
                 new Notice(t("REFERENCE_WORKFLOW_CHANGED"));
@@ -108,34 +161,27 @@ export class DeleteHandler {
             }
             if (!result.complete || result.changed !== result.found) {
                 progress.finish();
-                new Notice(t("REFERENCE_WORKFLOW_PARTIAL", [
-                    result.changed.toString(),
-                    result.found.toString()
-                ]));
-                this.refreshImageViews();
+                new Notice(decision.deleteSource && result.sourceDeleteResult
+                    ? getSourceDeletionNotice(result)
+                    : t("REFERENCE_WORKFLOW_PARTIAL", [
+                        result.changed.toString(),
+                        result.found.toString()
+                    ]));
+                this.refreshImageViews(result.changedFiles);
                 return;
             }
 
-            if (!decision.deleteSource) {
-                progress.finish();
-                new Notice(t("REFERENCE_WORKFLOW_RESULT", [
-                    result.changed.toString(),
-                    result.found.toString()
-                ]));
-                this.refreshImageViews();
-                return;
-            }
-
-            progress.setStage("delete");
-            const deletion = await this.coordinator.deleteSource(
-                inventory.source,
-                inventory.sourceRevision
-            );
             progress.finish();
-            new Notice(getSourceDeletionNotice(deletion));
-            this.refreshImageViews();
+            new Notice(decision.deleteSource
+                ? getSourceDeletionNotice(result)
+                : t("REFERENCE_WORKFLOW_RESULT", [
+                    result.changed.toString(),
+                    result.found.toString()
+                ]));
+            this.refreshImageViews(result.changedFiles);
         } catch (error) {
             progress.finish();
+            if (isAbortError(error)) return;
             console.error("[Image Assistant] Failed to execute image deletion workflow:", error);
             new Notice(t("MSG_FAIL_DELETE"));
         }
@@ -187,13 +233,29 @@ export class DeleteHandler {
             );
             return;
         }
-        this.refreshImageViews();
+        this.refreshImageViews([reference.owner.file.path]);
     }
 
-    private refreshImageViews(): void {
-        this.plugin.imageStateManager?.refreshAllImages();
-        this.plugin.imageCaption?.refreshAllViews();
+    private refreshImageViews(paths: readonly string[] = []): void {
+        const changedPaths = new Set(paths);
+        if (changedPaths.size === 0) return;
+        const imageStateManager = this.plugin.imageStateManager;
+        if (typeof imageStateManager?.refreshFiles === "function") {
+            imageStateManager.refreshFiles(changedPaths);
+        } else {
+            imageStateManager?.refreshAllImages();
+        }
+        const imageCaption = this.plugin.imageCaption;
+        if (typeof imageCaption?.refreshFiles === "function") {
+            imageCaption.refreshFiles(changedPaths);
+        } else {
+            imageCaption?.refreshAllViews();
+        }
     }
+}
+
+function isAbortError(error: unknown): boolean {
+    return error instanceof DOMException && error.name === "AbortError";
 }
 
 function getSourceLabel(source: ImageReferenceSource): string {

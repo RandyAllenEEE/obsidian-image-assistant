@@ -8,6 +8,7 @@ import { ConfirmDialog } from "../../../../settings/SettingsModals";
 import { OperationResultModal } from "../../OperationResultModal";
 import { getErrorMessage } from "../../../../utils/ErrorUtils";
 import { ImageReferenceWorkflowCoordinator } from "../../../../utils/ImageReferenceWorkflowCoordinator";
+import { CloudImageDeleter } from "../../../../cloud/CloudImageDeleter";
 
 export class UploadMode implements IBatchMode {
     id = "upload" as const;
@@ -92,7 +93,8 @@ export class UploadMode implements IBatchMode {
             { id: "replace_delete", label: t("BATCH_REPLACE_DELETE_LOCAL"), style: 'danger' }
         ];
 
-        if (this.plugin.settings.pasteHandling.cloud.uploader === 'PicList') {
+        if (this.plugin.settings.pasteHandling.cloud.uploader === 'PicList'
+            && new CloudImageDeleter(this.plugin).isDesktopTransportAvailable()) {
             actions.push({ id: "undo", label: t("BATCH_UNDO_UPLOAD"), style: 'default' });
         }
 

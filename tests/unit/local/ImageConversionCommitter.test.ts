@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { TFile } from "obsidian";
 import {
     ImageConversionCommitError,
     ImageConversionCommitter,
@@ -101,7 +102,11 @@ function makeFixture(options: FixtureOptions = {}) {
             fileToLinktext: vi.fn(() => "../assets/photo.webp"),
             getFirstLinkpathDest: vi.fn(() => source),
         },
+        fileManager: {}
     } as any;
+    app.fileManager.trashFile = vi.fn(async (file: TFile) => {
+        await app.vault.trash(file, true);
+    });
     const createUniqueBinary = options.createResult === "throw"
         ? vi.fn(async () => { throw new Error("target disk full"); })
         : vi.fn(async () => options.createResult === "null" ? null : target);

@@ -21,17 +21,17 @@
 
 ---
 
-## What's New in v5.1.0
+## What's New in v5.1.1
 
-Version 5.1.0 focuses on source-aware interaction, fast reference safety, and consistent behavior across split panes, popouts, Reading Mode, and Live Preview.
+Version 5.1.1 focuses on keeping reference safety responsive and fail closed in large vaults without weakening the source-aware behavior introduced in 5.1.0.
 
-1. **Stable captions and layout**: Local and network images now share source-aware alignment, width, wrapping, and caption geometry. Callouts and `ad-*` Admonitions are supported without treating ordinary code blocks as rendered content.
-2. **Transactional editing**: Paste, drop, OCR, LaTeX, properties, and interactive resize use owner-view contexts and tracked ranges. Async work no longer targets the active pane by accident, and failed saves are conditionally rolled back.
-3. **Reference-safe workflows**: Upload, download, rename, conversion, cleanup, Undo, and deletion share full-vault Markdown/Canvas safety checks. A persistent incremental index keeps destructive confirmation responsive while remaining fail closed.
-4. **Compact source-first menus**: Rendered-image and file-manager actions are coordinated through one menu architecture. URL images retain their original source identity even when Obsidian renders proxy or Blob URLs.
-5. **Predictable naming and downloads**: Naming templates use one evaluation snapshot, validated hash sources, persistent counters, atomic conflict handling, and safe path normalization. Downloads verify actual image bytes and support dynamic or extensionless URLs.
-6. **Safer image editing**: Crop, annotation, conversion, and resize validate source revisions and output formats before committing. Single-sided dimensions preserve aspect ratio and PipeSyntax attributes.
-7. **Delivery quality**: The release includes 1,322 passing tests across 145 files, 80.22% global line coverage, production metadata validation, and a zero-vulnerability non-optional dependency audit.
+1. **Non-blocking V3 index**: Cache hydration, Markdown/Canvas parsing, reverse buckets, and serialization run in a Chromium Web Worker with a Node Worker fallback. Vault reads remain incremental and pause while the user is active.
+2. **Fast, safe deletion**: Right-click deletion reuses one indexed inventory, revalidates only changed state, and performs a final zero-reference and source-revision check before deleting an object.
+3. **Fail-closed menus**: Mutation, upload/download, batch, and deletion entries are absent while the index is loading or degraded. Readiness is checked again when an action executes.
+4. **Controlled recovery**: A failed index Worker is rebuilt once from the V3 cache. Repeated failure stays degraded without a restart loop or a blocking full-vault fallback.
+5. **Predictable trash behavior**: Local deletion can follow Obsidian's configured deletion preference or use vault trash, system trash, or a collision-safe custom folder.
+6. **Bounded remote deletion**: PicList deletion uses the abortable Electron transport with response limits, timeouts, redirect rejection, and ownership-history validation.
+7. **Compatibility**: Existing settings, links, PipeSyntax, Caption behavior, naming templates, and the V3 cache require no migration.
 
 Upgrade notes:
 
@@ -198,7 +198,12 @@ Resize images by **dragging corner handles** or **scrolling the mouse wheel**.
 
 Scans any attachment folder for files not referenced anywhere in your vault.
 
-- Configurable scan path, file types, and delete mode (system trash / Obsidian trash / custom folder)
+- Configurable scan path, file types, and local-file deletion destination
+  (follow Obsidian / system trash / Obsidian `.trash` / custom folder)
+- The deletion destination is shared by context-menu source deletion,
+  conversion cleanup, download undo, and unused-file cleanup
+- A dedicated child switch controls the destructive image-menu entry; it is
+  shown only while the master context-menu switch is enabled
 - Preview list before deleting
 - Always includes Obsidian callouts, legacy Admonition `ad-*` blocks, ordinary fenced code, and Canvas in deletion-safety scans. The fenced-code setting controls mutation eligibility only.
 
@@ -282,7 +287,7 @@ artifacts, removes the legacy `image-assistant` enablement entries, and enables
 Release candidates can be checked against a running desktop Obsidian instance started with a local DevTools port:
 
 ```bash
-npm run smoke:obsidian -- --port=9229 --version=5.1.0 --note=Acceptance.md
+npm run smoke:obsidian -- --port=9229 --version=5.1.1 --note=Acceptance.md
 ```
 
 Start Obsidian with an isolated Electron profile before running the command. On Windows, for example:

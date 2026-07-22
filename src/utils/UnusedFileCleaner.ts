@@ -6,6 +6,10 @@ import { ReferenceSafetyService } from './ReferenceSafetyService';
 import { REFERENCE_SAFETY_SCAN_POLICY } from './ReferenceScanPolicy';
 import { getErrorMessage } from './ErrorUtils';
 import { normalizeVaultFolderPath } from './VaultPathUtils';
+import {
+    LocalFileDeletionService,
+    type LocalFileDeletionMode
+} from "./LocalFileDeletionService";
 
 /**
  * 文件引用信息接口
@@ -262,22 +266,32 @@ export class UnusedFileCleaner {
     /**
      * 删除未引用的文件
      * @param files 要删除的文件列表
-     * @param trashMode 删除模式：'system' | 'obsidian' | 'custom'
+     * @param trashMode 删除模式
      * @param customTrashPath 自定义垃圾箱路径（当 trashMode 为 'custom' 时使用）
      * @returns 成功删除的文件数量
      */
     async deleteFiles(
         files: TFile[],
-        trashMode: 'system' | 'obsidian' | 'custom',
+        trashMode: LocalFileDeletionMode,
         customTrashPath?: string
     ): Promise<number> {
         let successCount = 0;
+        const deletionService = new LocalFileDeletionService(
+            this.app,
+            () => ({
+                trashMode,
+                customTrashPath: customTrashPath ?? ""
+            })
+        );
         const safetyService = new ReferenceSafetyService(
             this.app,
             this.plugin.vaultReferenceManager,
             this.plugin.referenceIndexService
         );
         const referenceIndex = this.plugin.referenceIndexService;
+        if (typeof referenceIndex?.reconcile === "function") {
+            await referenceIndex.reconcile();
+        }
         let indexedSnapshots = referenceIndex
             ? await referenceIndex.inspectLocalFiles(
                 files,
@@ -289,8 +303,12 @@ export class UnusedFileCleaner {
         for (let index = 0; index < files.length; index++) {
             const file = files[index];
             try {
+                const currentSnapshot = indexedSnapshots?.get(normalizePath(file.path));
                 if (referenceIndex
-                    && referenceIndex.getGeneration() !== indexedGeneration) {
+                    && (referenceIndex.getGeneration() !== indexedGeneration
+                        || (currentSnapshot
+                            && typeof referenceIndex.isTokenCurrent === "function"
+                            && !await referenceIndex.isTokenCurrent(currentSnapshot.token)))) {
                     indexedSnapshots = await referenceIndex.inspectLocalFiles(
                         files.slice(index),
                         REFERENCE_SAFETY_SCAN_POLICY
@@ -307,19 +325,8 @@ export class UnusedFileCleaner {
                     continue;
                 }
 
-                if (trashMode === 'system') {
-                    // 移动到系统回收站
-                    await this.app.vault.trash(file, true);
-                    successCount++;
-                } else if (trashMode === 'obsidian') {
-                    // 移动到 Obsidian 回收站 (.trash 文件夹)
-                    await this.app.vault.trash(file, false);
-                    successCount++;
-                } else if (trashMode === 'custom' && customTrashPath) {
-                    // 移动到自定义路径
-                    await this.moveToCustomTrash(file, customTrashPath);
-                    successCount++;
-                }
+                await deletionService.delete(file);
+                successCount++;
             } catch (error) {
                 console.error(`Error deleting file ${file.path}:`, error);
                 new Notice(`Failed to delete ${file.name}: ${getErrorMessage(error)}`);
@@ -327,61 +334,6 @@ export class UnusedFileCleaner {
         }
 
         return successCount;
-    }
-
-    /**
-     * 移动文件到自定义垃圾箱路径
-     */
-    private async moveToCustomTrash(file: TFile, customTrashPath: string): Promise<void> {
-        const normalizedTrashPath = normalizeVaultFolderPath(customTrashPath);
-        if (!normalizedTrashPath || normalizedTrashPath === "/") {
-            throw new Error("Custom trash path must be a non-root vault folder");
-        }
-        if (file.parent?.path === normalizedTrashPath) {
-            throw new Error("File is already in the custom trash folder");
-        }
-        if (file.path.startsWith(`${normalizedTrashPath}/`)) {
-            throw new Error("File is already inside the custom trash folder");
-        }
-
-        // 确保垃圾箱文件夹存在
-        await this.ensureFolderPathExists(normalizedTrashPath);
-
-        // 生成目标路径
-        const targetPath = normalizePath(`${normalizedTrashPath}/${file.name}`);
-
-        // 检查目标路径是否已存在文件
-        let finalPath = targetPath;
-        let counter = 1;
-        while (this.app.vault.getAbstractFileByPath(finalPath)) {
-            const baseName = file.basename;
-            const ext = file.extension;
-            finalPath = normalizePath(`${normalizedTrashPath}/${baseName}_${counter}.${ext}`);
-            counter++;
-        }
-
-        // 移动文件
-        await this.app.fileManager.renameFile(file, finalPath);
-    }
-
-    private async ensureFolderPathExists(folderPath: string): Promise<void> {
-        const normalizedPath = normalizeVaultFolderPath(folderPath);
-        if (!normalizedPath || normalizedPath === "/") return;
-
-        let currentPath = "";
-        for (const segment of normalizedPath.split('/').filter(Boolean)) {
-            currentPath = currentPath ? `${currentPath}/${segment}` : segment;
-            const existing = this.app.vault.getAbstractFileByPath(currentPath);
-
-            if (existing) {
-                if (!(existing instanceof TFolder)) {
-                    throw new Error(`Trash path segment is not a folder: ${currentPath}`);
-                }
-                continue;
-            }
-
-            await this.app.vault.createFolder(currentPath);
-        }
     }
 
     /**

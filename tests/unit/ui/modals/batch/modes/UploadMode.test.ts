@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UploadMode } from '../../../../../../src/ui/modals/batch/modes/UploadMode';
 import { CloudImageDeleter } from '../../../../../../src/cloud/CloudImageDeleter';
 import { Modal } from 'obsidian';
@@ -31,6 +31,12 @@ function makePlugin(overrides: Record<string, unknown> = {}) {
 }
 
 describe('UploadMode', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(CloudImageDeleter.prototype, 'isDesktopTransportAvailable')
+      .mockReturnValue(true);
+  });
+
   it('renders settings and opens the plugin settings command', () => {
     const plugin = makePlugin();
     const mode = new UploadMode(fakeApp() as any, plugin, null, 'vault');

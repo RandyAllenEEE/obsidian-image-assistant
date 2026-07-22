@@ -4,6 +4,10 @@ import {
     LocalImageTargetResolver,
     type LocalReferenceSyntax
 } from "./LocalImageTargetResolver";
+import {
+    getSharedVaultFileLookupService,
+    type VaultFileLookupService
+} from "./VaultFileLookupService";
 
 export interface ImageReferenceSyntaxModel {
     syntax: "markdown" | "wiki";
@@ -32,9 +36,15 @@ export class LocalImageReferenceSerializationError extends Error {
 /** Formats and validates plugin-generated local image references. */
 export class LocalImageReferenceSerializer {
     private readonly resolver: LocalImageTargetResolver;
+    private readonly fileLookup: VaultFileLookupService;
 
     constructor(private readonly app: App) {
-        this.resolver = new LocalImageTargetResolver(app);
+        this.fileLookup = getSharedVaultFileLookupService(app);
+        this.resolver = new LocalImageTargetResolver(app, this.fileLookup);
+    }
+
+    async preparePathFormat(pathFormat: LocalLinkSettings["pathFormat"]): Promise<void> {
+        if (pathFormat === "shortest") await this.fileLookup.ensureReady();
     }
 
     serialize(options: SerializeLocalImageReferenceOptions): string {
@@ -87,18 +97,21 @@ export class LocalImageReferenceSerializer {
             const linkText = this.app.metadataCache?.fileToLinktext?.(target, sourceFile.path, false);
             if (typeof linkText === "string" && linkText.trim()) return linkText;
         } catch {
-            // Fall through to a deterministic vault scan.
+            // Fall through to the shared basename index.
         }
 
-        const sameName = (this.app.vault.getFiles?.() ?? [])
-            .filter(file => file instanceof TFile && file.name === target.name);
-        return sameName.length === 1 ? target.name : normalizePath(target.path);
+        const sameName = this.fileLookup.getCandidates(target.name);
+        return sameName?.length === 1 ? target.name : normalizePath(target.path);
     }
 
     private assertResolvesTo(reference: string, target: TFile, sourceFile: TFile): void {
         const parsed = parseImageReferenceSyntax(reference);
         if (!parsed) throw new LocalImageReferenceSerializationError("Generated reference could not be parsed");
         const resolution = this.resolver.resolve(parsed.path, sourceFile, { syntax: parsed.syntax });
+        if (resolution.status === "pending"
+            && resolution.normalizedPath === normalizePath(target.path)) {
+            return;
+        }
         if (resolution.status !== "resolved" || resolution.file?.path !== target.path) {
             throw new LocalImageReferenceSerializationError(
                 `Generated reference does not resolve to ${target.path}`

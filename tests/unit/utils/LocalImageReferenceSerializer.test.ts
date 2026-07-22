@@ -87,7 +87,7 @@ describe("LocalImageReferenceSerializer", () => {
             target: fixture.target,
             settings: settings({}),
             originalLink: "![[https://cdn.example/image|]]"
-        })).toBe("![[photo.png|]]");
+        })).toBe("![[assets/photo.png|]]");
     });
 
     it("uses enough shortest-path context to resolve duplicate basenames", () => {

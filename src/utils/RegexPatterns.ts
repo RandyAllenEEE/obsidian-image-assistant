@@ -109,12 +109,18 @@ export function getAllReferenceLinks(text: string): ReferenceLink[] {
     const occupiedRanges = links.map(link => ({
         start: link.index,
         end: link.index + link.source.length
-    }));
+    })).sort((left, right) => left.start - right.start);
     const autolinkRegex = /<(https?:\/\/[^>\s]+)>/gi;
+    let occupiedIndex = 0;
     for (const match of text.matchAll(autolinkRegex)) {
         const index = match.index ?? -1;
         const end = index + match[0].length;
-        if (occupiedRanges.some(range => index < range.end && end > range.start)) continue;
+        while (occupiedIndex < occupiedRanges.length
+            && occupiedRanges[occupiedIndex].end <= index) {
+            occupiedIndex++;
+        }
+        const occupied = occupiedRanges[occupiedIndex];
+        if (occupied && index < occupied.end && end > occupied.start) continue;
 
         links.push({
             path: match[1],

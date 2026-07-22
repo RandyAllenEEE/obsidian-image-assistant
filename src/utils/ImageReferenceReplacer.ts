@@ -26,7 +26,11 @@ export class ImageReferenceReplacer {
     }
 
     toLinkTextForFile(target: string | TFile, noteFile: TFile): string {
-        return this.serializer.formatPath(this.requireTargetFile(target), noteFile, this.settingsProvider());
+        return this.serializer.formatPath(this.requireTargetFile(target), noteFile, this.getSettings());
+    }
+
+    async prepare(): Promise<void> {
+        await this.serializer.preparePathFormat(this.getSettings().pathFormat);
     }
 
     serializeReference(
@@ -41,12 +45,13 @@ export class ImageReferenceReplacer {
         return this.serializer.serialize({
             target: this.requireTargetFile(target),
             sourceFile: noteFile,
-            settings: this.settingsProvider(),
+            settings: this.getSettings(),
             originalLink: source
         });
     }
 
     async replaceUrlInFile(noteFile: TFile, oldUrl: string, newTarget: string | TFile): Promise<number> {
+        await this.prepare();
         return this.referenceManager.updateReferencesInFile(
             noteFile,
             oldUrl,
@@ -55,6 +60,7 @@ export class ImageReferenceReplacer {
     }
 
     async replacePathInFile(noteFile: TFile, oldPath: string, newTarget: string | TFile): Promise<number> {
+        await this.prepare();
         return this.referenceManager.updateReferencesInFile(
             noteFile,
             oldPath,
@@ -78,6 +84,10 @@ export class ImageReferenceReplacer {
             throw new Error(`Local image target not found: ${typeof target === "string" ? target : target.path}`);
         }
         return targetFile;
+    }
+
+    private getSettings(): LocalLinkSettings {
+        return this.settingsProvider?.() ?? DEFAULT_SETTINGS.localProcessing.link;
     }
 
     private applyInitialSize(originalLink: string): string {

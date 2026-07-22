@@ -28,11 +28,18 @@ export class ReferenceSafetyService {
         private readonly referenceIndex?: ImageReferenceIndexService
     ) { }
 
-    async inspectLocalFile(file: TFile): Promise<ReferenceSafetyReport> {
+    async inspectLocalFile(
+        file: TFile,
+        signal?: AbortSignal
+    ): Promise<ReferenceSafetyReport> {
         if (this.referenceIndex) {
-            const snapshot = await this.referenceIndex.inspectLocalFile(file, {
-                includeFencedCode: true
-            });
+            const snapshot = signal
+                ? await this.referenceIndex.inspectLocalFile(file, {
+                    includeFencedCode: true
+                }, signal)
+                : await this.referenceIndex.inspectLocalFile(file, {
+                    includeFencedCode: true
+                });
             return {
                 complete: snapshot.complete,
                 markdown: [...snapshot.markdown],
@@ -82,11 +89,18 @@ export class ReferenceSafetyService {
         );
     }
 
-    async inspectUrl(url: string): Promise<ReferenceSafetyReport> {
+    async inspectUrl(
+        url: string,
+        signal?: AbortSignal
+    ): Promise<ReferenceSafetyReport> {
         if (this.referenceIndex) {
-            const snapshot = await this.referenceIndex.inspectUrl(url, {
-                includeFencedCode: true
-            });
+            const snapshot = signal
+                ? await this.referenceIndex.inspectUrl(url, {
+                    includeFencedCode: true
+                }, signal)
+                : await this.referenceIndex.inspectUrl(url, {
+                    includeFencedCode: true
+                });
             return {
                 complete: snapshot.complete,
                 markdown: [...snapshot.markdown],

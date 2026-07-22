@@ -12,6 +12,7 @@ import {
     LocalImageTargetResolver,
     type LocalReferenceSyntax
 } from "./LocalImageTargetResolver";
+import { getSharedVaultFileLookupService } from "./VaultFileLookupService";
 
 export interface CanvasFileReference {
     canvasFile: TFile;
@@ -107,6 +108,7 @@ export async function getCanvasFileReferenceIndexDetailed(
     targetFiles.forEach(file => references.set(file.path, []));
     const canvasFiles = app.vault.getFiles().filter(candidate => candidate.extension === "canvas");
     const resolver = new LocalImageTargetResolver(app);
+    await getSharedVaultFileLookupService(app).ensureReady();
 
     for (const canvasFile of canvasFiles) {
         try {
@@ -312,6 +314,7 @@ async function replaceCanvasReferences(
         && (!options.allowedCanvasPaths || options.allowedCanvasPaths.has(candidate.path))
     );
     const resolver = new LocalImageTargetResolver(app);
+    await getSharedVaultFileLookupService(app).ensureReady();
 
     for (const canvasFile of canvasFiles) {
         let matchedCount = 0;

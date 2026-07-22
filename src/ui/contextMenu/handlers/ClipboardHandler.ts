@@ -1,69 +1,10 @@
 import { Notice } from "obsidian";
 import { t } from "../../../lang/helpers";
 import { loadImage } from "../../../utils/ImageLoadUtils";
-import { EditorRangeMutationTransaction } from "../../../utils/EditorRangeMutationTransaction";
 import type { ImageContextMenuContext } from "../types";
 
 /** Handles clipboard operations against an already resolved image context. */
 export class ClipboardHandler {
-    private readonly editorTransaction = new EditorRangeMutationTransaction();
-
-    async cutImageAndLink(context: ImageContextMenuContext): Promise<void> {
-        const reference = context.viewContext
-            ? {
-                owner: context.viewContext,
-                line: context.viewContext.match.line,
-                start: context.viewContext.match.start,
-                linkText: context.viewContext.match.linkText
-            }
-            : context.dataReference
-                ? {
-                    owner: context.dataReference.owner,
-                    line: context.dataReference.match.lineNumber,
-                    start: context.dataReference.match.index,
-                    linkText: context.dataReference.match.fullMatch
-                }
-                : null;
-        if (!reference) {
-            new Notice(t("MSG_IMAGE_CONTEXT_UNRESOLVED"));
-            return;
-        }
-
-        try {
-            const line = reference.owner.editor.getLine(reference.line);
-            if (line.slice(reference.start, reference.start + reference.linkText.length)
-                !== reference.linkText) {
-                new Notice(t("MSG_IMAGE_CONTEXT_UNRESOLVED"));
-                return;
-            }
-            const clipboard = context.ownerWindow?.navigator.clipboard
-                ?? navigator.clipboard;
-            await clipboard.writeText(reference.linkText);
-            const result = await this.editorTransaction.run(reference.owner, {
-                line: reference.line,
-                start: reference.start,
-                end: reference.start + reference.linkText.length,
-                expectedText: reference.linkText,
-                replacement: "",
-                removeStandaloneLine: true
-            });
-            if (!result.saved) {
-                new Notice(
-                    result.stale
-                        ? t("MSG_IMAGE_CONTEXT_UNRESOLVED")
-                        : result.uncertain
-                            ? t("MSG_EDITOR_SAVE_UNCERTAIN")
-                            : t("MSG_FAIL_CUT")
-                );
-                return;
-            }
-            new Notice(t("MSG_CUT_COPIED"));
-        } catch (error) {
-            console.error("Error cutting image:", error);
-            new Notice(t("MSG_FAIL_CUT"));
-        }
-    }
-
     async copyImage(context: ImageContextMenuContext): Promise<void> {
         const target = context.image;
         const ownerDocument = context.ownerDocument;

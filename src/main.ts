@@ -330,7 +330,6 @@ export default class ImageConverterPlugin extends Plugin {
             this.app,
             () => this.settings.global.batchConcurrency
         ));
-        void this.referenceIndexService.start();
         this.imageStateManager?.start();
 
         // Initialize History Manager. Ownership history is safety metadata for

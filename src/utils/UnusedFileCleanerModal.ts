@@ -403,7 +403,9 @@ export class UnusedFileCleanerModal extends Modal {
 
         const trashMode = this.plugin.settings.cleanerSettings.trashMode;
         let modeText = "";
-        if (trashMode === "system") {
+        if (trashMode === "follow-obsidian") {
+            modeText = t("CLEANER_DELETE_MODE_FOLLOW_OBSIDIAN");
+        } else if (trashMode === "system") {
             modeText = t("CLEANER_DELETE_MODE_SYSTEM");
         } else if (trashMode === "obsidian") {
             modeText = t("CLEANER_DELETE_MODE_OBSIDIAN");

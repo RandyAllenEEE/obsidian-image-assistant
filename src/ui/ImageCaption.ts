@@ -277,7 +277,17 @@ export class ImageCaption extends Component {
     }
 
     refreshAllViews(): void {
+        this.refreshViews();
+    }
+
+    refreshFiles(paths: ReadonlySet<string>): void {
+        if (paths.size === 0) return;
+        this.refreshViews(paths);
+    }
+
+    private refreshViews(paths?: ReadonlySet<string>): void {
         for (const view of collectUsableMarkdownViews(this.plugin.app)) {
+            if (paths && (!view.file || !paths.has(view.file.path))) continue;
             const contentEl = view.contentEl;
             this.ensureDocument(contentEl.ownerDocument);
 

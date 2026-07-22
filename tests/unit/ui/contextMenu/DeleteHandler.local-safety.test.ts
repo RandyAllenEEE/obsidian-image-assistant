@@ -84,8 +84,14 @@ function createFixture(options: {
             getRecord: vi.fn(),
             removeRecord: vi.fn()
         },
-        imageStateManager: { refreshAllImages: vi.fn() },
-        imageCaption: { refreshAllViews: vi.fn() }
+        imageStateManager: {
+            refreshAllImages: vi.fn(),
+            refreshFiles: vi.fn()
+        },
+        imageCaption: {
+            refreshAllViews: vi.fn(),
+            refreshFiles: vi.fn()
+        }
     } as any;
     plugin.vaultReferenceManager = new VaultReferenceManager(app, plugin);
     const line = options.noteContent.split("\n").findIndex(item => item.includes(sourceLink));
@@ -142,12 +148,17 @@ function captureModals() {
     });
 }
 
-function getDecisionModal(open: ReturnType<typeof captureModals>): Modal {
-    const modal = open.mock.instances.find(instance =>
-        (instance as unknown as Modal).contentEl.querySelectorAll("button").length > 1
-    ) as unknown as Modal | undefined;
-    if (!modal) throw new Error("Expected the reference decision modal to open");
-    return modal;
+async function getDecisionModal(open: ReturnType<typeof captureModals>): Promise<Modal> {
+    let modal: Modal | undefined;
+    await vi.waitFor(() => {
+        modal = open.mock.instances.find(instance => {
+            const candidate = instance as unknown as Modal;
+            return candidate.contentEl.querySelectorAll("button").length > 1
+                && !candidate.contentEl.textContent.includes("Preparing the vault");
+        }) as unknown as Modal | undefined;
+        expect(modal).toBeDefined();
+    });
+    return modal!;
 }
 
 describe("DeleteHandler vault-wide workflow", () => {
@@ -163,13 +174,13 @@ describe("DeleteHandler vault-wide workflow", () => {
 
         expect(fixture.editor.getValue()).toBe(`${first}\n${second}`);
         expect(fixture.app.vault.trash).not.toHaveBeenCalled();
-        const modal = getDecisionModal(open);
+        const modal = await getDecisionModal(open);
         modal.contentEl.querySelectorAll<HTMLButtonElement>("button")[0].click();
 
         await vi.waitFor(() => expect(fixture.editor.getValue()).toBe(second));
         expect(fixture.contents.get("notes/current.md")).toBe(second);
         expect(fixture.app.vault.trash).not.toHaveBeenCalled();
-        expect(fixture.save).toHaveBeenCalledTimes(2);
+        expect(fixture.save).toHaveBeenCalledOnce();
     });
 
     it("removes every vault reference and trashes the source only after explicit confirmation", async () => {
@@ -179,7 +190,7 @@ describe("DeleteHandler vault-wide workflow", () => {
         const open = captureModals();
 
         await fixture.handler.deleteImageAndLink(fixture.context);
-        const modal = getDecisionModal(open);
+        const modal = await getDecisionModal(open);
         const deleteSource = [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
             .find(button => button.textContent?.includes("delete source"));
         deleteSource?.click();
@@ -188,7 +199,10 @@ describe("DeleteHandler vault-wide workflow", () => {
             expect(fixture.app.vault.trash).toHaveBeenCalledWith(fixture.image, true);
         });
         expect(fixture.contents.get("notes/current.md")).toBe("\n");
-        expect(fixture.plugin.imageStateManager.refreshAllImages).toHaveBeenCalled();
+        expect(fixture.plugin.imageStateManager.refreshFiles).toHaveBeenCalledWith(
+            new Set(["notes/current.md"])
+        );
+        expect(fixture.plugin.imageStateManager.refreshAllImages).not.toHaveBeenCalled();
     });
 
     it("limits an incomplete scan to clicked-only removal and always keeps the source", async () => {
@@ -202,7 +216,7 @@ describe("DeleteHandler vault-wide workflow", () => {
         const open = captureModals();
 
         await fixture.handler.deleteImageAndLink(fixture.context);
-        const modal = getDecisionModal(open);
+        const modal = await getDecisionModal(open);
         const labels = [...modal.contentEl.querySelectorAll("button")]
             .map(button => button.textContent);
 
@@ -222,14 +236,17 @@ describe("DeleteHandler vault-wide workflow", () => {
         await fixture.handler.deleteImageAndLink(fixture.context);
         fixture.editor.setValue(`${source}\n${source}`);
         await fixture.save();
-        const modal = getDecisionModal(open);
-        modal.contentEl.querySelectorAll<HTMLButtonElement>("button")[0].click();
+        const modal = await getDecisionModal(open);
+        [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
+            .find(button => button.textContent?.includes("delete source"))
+            ?.click();
 
         await vi.waitFor(() => {
-            const decisionModals = open.mock.instances.filter(instance =>
-                (instance as unknown as Modal).contentEl.querySelectorAll("button").length > 1
-            );
-            expect(decisionModals).toHaveLength(2);
+            expect(open.mock.instances.filter(instance =>
+                (instance as unknown as Modal).contentEl.textContent.includes(
+                    "Vault references: 2 total"
+                )
+            )).toHaveLength(1);
         });
         expect(fixture.editor.getValue()).toBe(`${source}\n${source}`);
         expect(fixture.app.vault.trash).not.toHaveBeenCalled();
@@ -241,17 +258,21 @@ describe("DeleteHandler vault-wide workflow", () => {
         const open = captureModals();
 
         await fixture.handler.deleteImageAndLink(fixture.context);
-        vi.spyOn((fixture.handler as any).coordinator, "remove").mockResolvedValue({
+        const execute = vi.spyOn(
+            (fixture.handler as any).coordinator,
+            "executeDecision"
+        ).mockResolvedValue({
             complete: false,
             changed: 0,
             found: 1,
-            staleInventory: null
+            changedFiles: [],
+            sourceDeleted: false
         });
-        const modal = getDecisionModal(open);
+        const modal = await getDecisionModal(open);
         modal.contentEl.querySelectorAll<HTMLButtonElement>("button")[0].click();
 
         await vi.waitFor(() => {
-            expect(fixture.plugin.imageStateManager.refreshAllImages).toHaveBeenCalled();
+            expect(execute).toHaveBeenCalled();
         });
         expect(fixture.app.vault.trash).not.toHaveBeenCalled();
         expect(fixture.editor.getValue()).toBe(source);
@@ -267,7 +288,7 @@ describe("DeleteHandler vault-wide workflow", () => {
         const open = captureModals();
 
         await fixture.handler.deleteImageAndLink(fixture.context);
-        const modal = getDecisionModal(open);
+        const modal = await getDecisionModal(open);
         const deleteSource = [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
             .find(button => button.textContent?.includes("delete source"));
         deleteSource?.click();
@@ -334,7 +355,7 @@ describe("DeleteHandler vault-wide workflow", () => {
         expect(fixture.app.vault.trash).not.toHaveBeenCalled();
     });
 
-    it("stops before scanning when the clicked note cannot be saved", async () => {
+    it("rolls back clicked removal when the clicked note cannot be saved", async () => {
         const fixture = createFixture({
             noteContent: "![[attachments/photo.png]]"
         });
@@ -345,9 +366,10 @@ describe("DeleteHandler vault-wide workflow", () => {
         await fixture.handler.deleteImageAndLink(fixture.context);
 
         expect(open).toHaveBeenCalledOnce();
-        expect(open.mock.instances.some(instance =>
-            (instance as unknown as Modal).contentEl.querySelectorAll("button").length > 1
-        )).toBe(false);
+        const modal = await getDecisionModal(open);
+        modal.contentEl.querySelectorAll<HTMLButtonElement>("button")[0].click();
+        await vi.waitFor(() => expect(fixture.save).toHaveBeenCalled());
+        expect(fixture.editor.getValue()).toBe("![[attachments/photo.png]]");
         expect(fixture.app.vault.trash).not.toHaveBeenCalled();
     });
 
@@ -387,5 +409,170 @@ describe("DeleteHandler vault-wide workflow", () => {
 
         expect(fixture.editor.getValue()).toBe(source);
         expect(fixture.save).not.toHaveBeenCalled();
+    });
+
+    it("uses the clicked-only fast path while the vault inventory is unavailable", async () => {
+        const fixture = createFixture({
+            noteContent: "![[attachments/photo.png]]"
+        });
+        const coordinator = (fixture.handler as any).coordinator;
+        const executeClickedOnly = vi.spyOn(
+            coordinator,
+            "executeClickedOnly"
+        ).mockResolvedValue({
+            complete: true,
+            changed: 1,
+            found: 1,
+            changedFiles: ["notes/current.md"],
+            failedFiles: [],
+            uncertainFiles: [],
+            sourceDeleted: false
+        });
+
+        await (fixture.handler as any).handleDecision(
+            { kind: "local", file: fixture.image },
+            fixture.context.viewContext,
+            undefined,
+            {
+                action: "clicked-keep-source",
+                scope: "clicked",
+                deleteSource: false
+            }
+        );
+
+        expect(executeClickedOnly).toHaveBeenCalledOnce();
+        expect(fixture.plugin.imageStateManager.refreshFiles)
+            .toHaveBeenCalledWith(new Set(["notes/current.md"]));
+    });
+
+    it("reopens review instead of mutating when an execution inventory is stale", async () => {
+        const fixture = createFixture({
+            noteContent: "![[attachments/photo.png]]"
+        });
+        const coordinator = (fixture.handler as any).coordinator;
+        const inventory = await coordinator.inspect(
+            { kind: "local", file: fixture.image },
+            fixture.context.viewContext
+        );
+        vi.spyOn(coordinator, "executeDecision").mockResolvedValue({
+            complete: false,
+            changed: 0,
+            found: 0,
+            failedFiles: [],
+            uncertainFiles: [],
+            sourceDeleted: false,
+            staleInventory: inventory
+        });
+        const reopen = vi.spyOn(fixture.handler as any, "openDecisionModal")
+            .mockImplementation(() => undefined);
+
+        await (fixture.handler as any).handleDecision(
+            inventory.source,
+            inventory.clickedContext,
+            inventory,
+            {
+                action: "all-keep-source",
+                scope: "all",
+                deleteSource: false
+            }
+        );
+
+        expect(reopen).toHaveBeenCalledWith(inventory);
+        expect(fixture.editor.getValue()).toBe("![[attachments/photo.png]]");
+    });
+
+    it("reports an execution failure without refreshing unrelated views", async () => {
+        const fixture = createFixture({
+            noteContent: "![[attachments/photo.png]]"
+        });
+        const coordinator = (fixture.handler as any).coordinator;
+        const inventory = await coordinator.inspect(
+            { kind: "local", file: fixture.image },
+            fixture.context.viewContext
+        );
+        vi.spyOn(coordinator, "executeDecision")
+            .mockRejectedValue(new Error("write failed"));
+        vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        await (fixture.handler as any).handleDecision(
+            inventory.source,
+            inventory.clickedContext,
+            inventory,
+            {
+                action: "all-keep-source",
+                scope: "all",
+                deleteSource: false
+            }
+        );
+
+        expect(fixture.plugin.imageStateManager.refreshFiles)
+            .not.toHaveBeenCalled();
+    });
+
+    it.each([
+        [{ saved: false, stale: true, uncertain: false }, "stale"],
+        [{ saved: false, stale: false, uncertain: true }, "uncertain"],
+        [{ saved: false, stale: false, uncertain: false }, "failed"]
+    ])("keeps Base64 source text when the editor transaction is %s", async (
+        mutation,
+        _label
+    ) => {
+        const source = "![inline](data:image/png;base64,AAAA)";
+        const fixture = createFixture({ noteContent: source, sourceLink: source });
+        fixture.context.sourceKind = "data";
+        fixture.context.localFile = null;
+        fixture.context.viewContext = null;
+        fixture.context.dataReference = {
+            owner: fixture.context.owner,
+            match: {
+                lineNumber: 0,
+                line: source,
+                fullMatch: source,
+                index: 0
+            }
+        };
+        vi.spyOn((fixture.handler as any).editorTransaction, "run")
+            .mockResolvedValue(mutation);
+
+        await fixture.handler.deleteImageAndLink(fixture.context);
+
+        expect(fixture.editor.getValue()).toBe(source);
+        expect(fixture.plugin.imageStateManager.refreshFiles)
+            .not.toHaveBeenCalled();
+    });
+
+    it("handles a completed keep-source result for a requested source deletion", async () => {
+        const fixture = createFixture({
+            noteContent: "![[attachments/photo.png]]"
+        });
+        const coordinator = (fixture.handler as any).coordinator;
+        const inventory = await coordinator.inspect(
+            { kind: "local", file: fixture.image },
+            fixture.context.viewContext
+        );
+        vi.spyOn(coordinator, "executeDecision").mockResolvedValue({
+            complete: true,
+            changed: 1,
+            found: 1,
+            changedFiles: ["notes/current.md"],
+            failedFiles: [],
+            uncertainFiles: [],
+            sourceDeleted: false
+        });
+
+        await (fixture.handler as any).handleDecision(
+            inventory.source,
+            inventory.clickedContext,
+            inventory,
+            {
+                action: "all-delete-source",
+                scope: "all",
+                deleteSource: true
+            }
+        );
+
+        expect(fixture.plugin.imageStateManager.refreshFiles)
+            .toHaveBeenCalledWith(new Set(["notes/current.md"]));
+        expect(fixture.app.fileManager.trashFile).not.toHaveBeenCalled();
     });
 });

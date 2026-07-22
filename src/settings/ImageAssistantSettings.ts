@@ -61,7 +61,12 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         renderOCRSettingsSection(containerEl, this.plugin, this.settingsUIState, () => this.display());
 
         // --- Interaction / Other ---
-        renderOtherSettingsSection(containerEl, this.plugin, this.settingsUIState);
+        renderOtherSettingsSection(
+            containerEl,
+            this.plugin,
+            this.settingsUIState,
+            () => this.display()
+        );
     }
 
 

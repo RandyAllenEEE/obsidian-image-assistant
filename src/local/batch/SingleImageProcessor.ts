@@ -92,7 +92,8 @@ export class SingleImageProcessor {
                     this.plugin.settings.global.codeBlockImageLinkIndexing
                 ),
                 () => this.plugin.settings.localProcessing.link,
-                this.plugin.referenceIndexService
+                this.plugin.referenceIndexService,
+                () => this.plugin.settings.cleanerSettings
             );
             await committer.commit(file, newFileName, processedImage.data, sourceRevision);
             return { success: true };

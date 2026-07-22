@@ -191,8 +191,9 @@ export interface ImageAssistantSettings {
 
     ocrSettings: OCRSettings;
     cleanerSettings: {
+        enableDeleteContextMenu: boolean;
         basePath: string;
-        trashMode: 'system' | 'obsidian' | 'custom';
+        trashMode: 'follow-obsidian' | 'system' | 'obsidian' | 'custom';
         customTrashPath: string;
         fileTypes: string;
     };

@@ -1,43 +1,13 @@
 import { promises as dns } from "dns";
 import { isIP } from "net";
 import { withTimeout } from "./NetworkRequestUtils";
+export {
+    canonicalizeHttpUrl,
+    isHttpUrl,
+    isSameHttpUrl
+} from "./HttpUrlIdentity";
 
 const DNS_LOOKUP_TIMEOUT_MS = 10_000;
-
-export function isHttpUrl(value: string): boolean {
-    try {
-        const protocol = new URL(value.trim()).protocol.toLowerCase();
-        return protocol === "http:" || protocol === "https:";
-    } catch {
-        return false;
-    }
-}
-
-/**
- * Compare HTTP(S) references without changing case-sensitive resource parts.
- * URL parsing normalizes protocol/host casing and default ports; path, query,
- * fragment, and credentials remain exact. A trailing path slash is the only
- * resource normalization applied.
- */
-export function isSameHttpUrl(candidate: string, targetUrl: string): boolean {
-    if (candidate === targetUrl) return true;
-
-    const stripTrailingSlash = (value: string) => value.replace(/\/+$/, "");
-    try {
-        const actual = new URL(candidate);
-        const target = new URL(targetUrl);
-        return actual.protocol.toLowerCase() === target.protocol.toLowerCase()
-            && actual.hostname.toLowerCase() === target.hostname.toLowerCase()
-            && actual.port === target.port
-            && actual.username === target.username
-            && actual.password === target.password
-            && stripTrailingSlash(actual.pathname) === stripTrailingSlash(target.pathname)
-            && actual.search === target.search
-            && actual.hash === target.hash;
-    } catch {
-        return stripTrailingSlash(candidate) === stripTrailingSlash(targetUrl);
-    }
-}
 
 export function parseDomainList(value: string): string[] {
     return Array.from(new Set(

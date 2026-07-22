@@ -18,7 +18,7 @@ function createFixture(options: {
     const output = fakeTFile({ path: "assets/photo.webp", name: "photo.webp", extension: "webp" });
     const note = fakeTFile({ path: "note.md", name: "note.md" });
     const canvas = fakeTFile({ path: "board.canvas", name: "board.canvas", extension: "canvas" });
-    const trash = vi.fn(async () => undefined);
+    const trash = vi.fn(async (_file?: unknown, _system?: boolean) => undefined);
     let canvasContent = JSON.stringify({ nodes: [{ type: "file", file: source.path }] });
     const process = options.canvasWriteFails
         ? vi.fn(async (_file: any, updater: (content: string) => string) => {
@@ -100,9 +100,19 @@ function createFixture(options: {
             },
             pasteHandling: { cloud: { uploadConcurrency: 1 } },
             global: { batchConcurrency: 1 },
+            cleanerSettings: {
+                enableDeleteContextMenu: true,
+                trashMode: "follow-obsidian",
+                customTrashPath: ".trash"
+            }
         },
         vaultReferenceManager,
     } as any;
+    app.fileManager = {
+        trashFile: vi.fn(async (file: typeof source) => {
+            await trash(file, true);
+        })
+    };
     const imageProcessor = {
         processImageDetailed: vi.fn(async () => ({
             data: new Uint8Array(500).buffer,

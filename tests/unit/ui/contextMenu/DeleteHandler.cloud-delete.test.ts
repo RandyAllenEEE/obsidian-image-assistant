@@ -2,20 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Modal } from "obsidian";
 
 const obsidianMocks = vi.hoisted(() => ({
-    Notice: vi.fn(),
-    requestUrl: vi.fn()
+    Notice: vi.fn()
 }));
 
 vi.mock("obsidian", async importOriginal => ({
     ...await importOriginal<typeof import("obsidian")>(),
-    Notice: obsidianMocks.Notice,
-    requestUrl: obsidianMocks.requestUrl
+    Notice: obsidianMocks.Notice
 }));
 
 import { CloudImageDeleter } from "../../../../src/cloud/CloudImageDeleter";
 import { DEFAULT_SETTINGS } from "../../../../src/settings/defaults";
 import { DeleteHandler } from "../../../../src/ui/contextMenu/handlers/DeleteHandler";
 import { VaultReferenceManager } from "../../../../src/utils/VaultReferenceManager";
+import { AbortableDesktopHttpClient } from "../../../../src/utils/AbortableDesktopHttpClient";
 import {
     fakeApp,
     fakeMetadataCache,
@@ -131,23 +130,36 @@ function captureModals() {
     });
 }
 
-function getDecisionModal(open: ReturnType<typeof captureModals>): Modal {
-    const modal = open.mock.instances.find(instance =>
-        (instance as unknown as Modal).contentEl.querySelectorAll("button").length > 1
-    ) as unknown as Modal | undefined;
-    if (!modal) throw new Error("Expected the reference decision modal to open");
-    return modal;
+const desktopRequest = vi.fn();
+
+async function getDecisionModal(open: ReturnType<typeof captureModals>): Promise<Modal> {
+    let modal: Modal | undefined;
+    await vi.waitFor(() => {
+        modal = open.mock.instances.find(instance => {
+            const candidate = instance as unknown as Modal;
+            return candidate.contentEl.querySelectorAll("button").length > 1
+                && !candidate.contentEl.textContent.includes("Preparing the vault");
+        }) as unknown as Modal | undefined;
+        expect(modal).toBeDefined();
+    });
+    return modal!;
 }
 
 describe("DeleteHandler remote-source safety", () => {
-    beforeEach(() => vi.clearAllMocks());
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.spyOn(AbortableDesktopHttpClient.prototype, "isAvailable")
+            .mockReturnValue(true);
+        vi.spyOn(AbortableDesktopHttpClient.prototype, "request")
+            .mockImplementation(desktopRequest);
+    });
 
     it("only offers clicked removal when the remote object is not owned", async () => {
         const fixture = createFixture({ owned: false });
         const open = captureModals();
 
         await fixture.handler.deleteImageAndLink(fixture.context);
-        const modal = getDecisionModal(open);
+        const modal = await getDecisionModal(open);
         const labels = [...modal.contentEl.querySelectorAll("button")]
             .map(button => button.textContent);
 
@@ -156,20 +168,17 @@ describe("DeleteHandler remote-source safety", () => {
         modal.contentEl.querySelectorAll<HTMLButtonElement>("button")[0].click();
 
         await vi.waitFor(() => expect(fixture.editor.getValue()).toBe(""));
-        expect(obsidianMocks.requestUrl).not.toHaveBeenCalled();
+        expect(desktopRequest).not.toHaveBeenCalled();
         expect(fixture.plugin.historyManager.removeRecord).not.toHaveBeenCalled();
     });
 
     it("deletes an owned PicList object only after all references are removed and rescanned", async () => {
         const fixture = createFixture({ owned: true });
-        obsidianMocks.requestUrl.mockResolvedValue({
-            status: 200,
-            json: { success: true }
-        });
+        desktopRequest.mockResolvedValue(response(200, { success: true }));
         const open = captureModals();
 
         await fixture.handler.deleteImageAndLink(fixture.context);
-        const modal = getDecisionModal(open);
+        const modal = await getDecisionModal(open);
         const deleteSource = [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
             .find(button => button.textContent?.includes("delete source"));
         deleteSource?.click();
@@ -177,7 +186,7 @@ describe("DeleteHandler remote-source safety", () => {
         await vi.waitFor(() => {
             expect(fixture.plugin.historyManager.removeRecord).toHaveBeenCalledWith(fixture.url);
         });
-        expect(obsidianMocks.requestUrl).toHaveBeenCalledWith(expect.objectContaining({
+        expect(desktopRequest).toHaveBeenCalledWith(expect.objectContaining({
             url: "http://127.0.0.1:36677/delete",
             method: "POST"
         }));
@@ -192,7 +201,7 @@ describe("DeleteHandler remote-source safety", () => {
             const fixture = createFixture(options);
             const open = captureModals();
             await fixture.handler.deleteImageAndLink(fixture.context);
-            const modal = getDecisionModal(open);
+            const modal = await getDecisionModal(open);
             expect([...modal.contentEl.querySelectorAll("button")]
                 .some(button => button.textContent?.includes("delete source"))).toBe(false);
         }
@@ -200,14 +209,11 @@ describe("DeleteHandler remote-source safety", () => {
 
     it("keeps history and reports a readable API failure after references were removed", async () => {
         const fixture = createFixture({ owned: true });
-        obsidianMocks.requestUrl.mockResolvedValue({
-            status: 503,
-            json: { success: false }
-        });
+        desktopRequest.mockResolvedValue(response(503, { success: false }));
         const open = captureModals();
 
         await fixture.handler.deleteImageAndLink(fixture.context);
-        const modal = getDecisionModal(open);
+        const modal = await getDecisionModal(open);
         [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
             .find(button => button.textContent?.includes("delete source"))
             ?.click();
@@ -226,9 +232,19 @@ describe("DeleteHandler remote-source safety", () => {
         const open = captureModals();
 
         await fixture.handler.deleteImageAndLink(fixture.context);
-        const modal = getDecisionModal(open);
+        const modal = await getDecisionModal(open);
 
         expect(modal.contentEl.textContent).toContain("notes/locked.md");
         expect(modal.contentEl.querySelectorAll("button")).toHaveLength(2);
     });
 });
+
+function response(status: number, body: unknown) {
+    return {
+        status,
+        data: new TextEncoder().encode(JSON.stringify(body)).buffer,
+        headers: {},
+        finalUrl: "http://127.0.0.1:36677/delete",
+        redirects: []
+    };
+}

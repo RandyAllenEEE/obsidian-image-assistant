@@ -10,10 +10,12 @@ export type ReferenceWorkflowProgressStage =
 /** Small lifecycle surface shown while a reference workflow awaits I/O. */
 export class ReferenceWorkflowProgressModal extends Modal {
     private stageEl: HTMLElement | null = null;
+    private countEl: HTMLElement | null = null;
     private cancelButton: HTMLButtonElement | null = null;
     private cancelled = false;
     private locked = false;
     private completed = false;
+    private readonly abortController = new AbortController();
 
     onOpen(): void {
         this.contentEl.empty();
@@ -21,6 +23,7 @@ export class ReferenceWorkflowProgressModal extends Modal {
             text: t("REFERENCE_WORKFLOW_PROGRESS_TITLE")
         });
         this.stageEl = this.contentEl.createEl("p");
+        this.countEl = this.contentEl.createEl("p");
         this.setStage("index");
         new Setting(this.contentEl).addButton(button => {
             button
@@ -31,10 +34,19 @@ export class ReferenceWorkflowProgressModal extends Modal {
     }
 
     onClose(): void {
-        if (!this.completed && !this.locked) this.cancelled = true;
+        if (!this.completed && !this.locked) {
+            this.cancelled = true;
+            this.abortController.abort();
+        }
         this.stageEl = null;
+        this.countEl = null;
         this.cancelButton = null;
         this.contentEl.empty();
+    }
+
+    close(): void {
+        if (this.locked && !this.completed) return;
+        super.close();
     }
 
     setStage(stage: ReferenceWorkflowProgressStage): void {
@@ -44,6 +56,20 @@ export class ReferenceWorkflowProgressModal extends Modal {
     lock(): void {
         this.locked = true;
         if (this.cancelButton) this.cancelButton.disabled = true;
+    }
+
+    setProgress(processed: number, total: number): void {
+        if (!this.countEl) return;
+        this.countEl.setText(total > 0
+            ? t("REFERENCE_WORKFLOW_PROGRESS_COUNT", [
+                processed.toString(),
+                total.toString()
+            ])
+            : "");
+    }
+
+    get signal(): AbortSignal {
+        return this.abortController.signal;
     }
 
     isCancelled(): boolean {
