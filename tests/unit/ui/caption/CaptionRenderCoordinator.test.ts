@@ -174,6 +174,10 @@ describe('CaptionRenderCoordinator', () => {
   });
 
   it('does not run a queued section scan after the render child unloads', async () => {
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame')
+      .mockImplementation(() => 1);
+    const cancelFrame = vi.spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation(() => undefined);
     const container = document.createElement('div');
     const onImage = vi.fn();
     const child = new CaptionSectionRenderChild(container, null, onImage);
@@ -185,5 +189,9 @@ describe('CaptionRenderCoordinator', () => {
     await Promise.resolve();
 
     expect(onImage).not.toHaveBeenCalled();
+    expect(requestFrame).toHaveBeenCalledOnce();
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    requestFrame.mockRestore();
+    cancelFrame.mockRestore();
   });
 });

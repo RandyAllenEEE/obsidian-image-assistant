@@ -18,6 +18,14 @@
 - Made readiness lookup failures non-fatal to Obsidian's official menus and kept safe read-only image actions available where their source context is reliable.
 - Removed duplicate reveal, system-explorer, cut, and new-window actions from rendered-image menus, relying on Obsidian's native navigation and editor interactions while keeping URL menus free of empty overflow groups.
 
+### Caption and Layout Responsiveness
+
+- Replaced per-image Reading Mode resize observers with one document-scoped, animation-frame-batched tracker, preventing synchronous measure/write feedback on image-heavy notes.
+- Deferred asynchronous section rescans to the next frame, avoided unchanged Reading Mode ownership writes, and made Live Preview settle cycles immune to repeated geometry-signal resets.
+- Explicitly remove Live Preview Caption widgets from CodeMirror while a leaf is in Reading Mode, then restore automatic Live Preview ownership when the leaf returns to source rendering.
+- Moved Live Preview DOM-to-source resolution into CodeMirror's measured read phase and delayed all plugin DOM mutations until its write phase; reduced geometry observers and quantized visual offsets to avoid editor measure-loop feedback.
+- Added deterministic block-widget height estimates and deferred image reconciliation beyond the mode-change measure cycle, preventing viewport restabilization loops when returning from Reading Mode to Live Preview.
+
 ### Networking and Delivery
 
 - Unified remote deletion with the abortable Electron HTTP transport, bounded response handling, redirect rejection, timeout cancellation, and ownership-history validation.

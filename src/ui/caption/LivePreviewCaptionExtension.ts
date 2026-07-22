@@ -27,20 +27,29 @@ import {
 } from './CaptionSourceScanner';
 import { CaptionResolver } from './CaptionResolver';
 import type { CaptionWidthMode } from './types';
+import type { CaptionSettings } from '../../settings/types';
 import {
     resolveCaptionLayout,
     type HorizontalImageAlignment
 } from '../ImageLayoutResolver';
 
 export const refreshLivePreviewCaptionsEffect = StateEffect.define<void>();
+export const setLivePreviewCaptionModeEffect = StateEffect.define<boolean | null>();
 
 export interface CaptionDecorationState {
     decorations: DecorationSet;
     scan: CaptionSourceScan;
     livePreview: boolean;
+    modeEnabled: boolean | null;
     settingsSignature: string;
     incremental: boolean;
 }
+
+const DEFAULT_CAPTION_FONT_SIZE = 12;
+const DEFAULT_CAPTION_WIDTH = 640;
+const CAPTION_LINE_HEIGHT = 1.4;
+const CAPTION_CHARACTER_WIDTH_FACTOR = 0.56;
+const MAX_ESTIMATED_CAPTION_LINES = 100;
 
 function isLivePreview(state: EditorState): boolean {
     try {
@@ -60,7 +69,8 @@ class CaptionWidget extends WidgetType {
         private readonly wrap: boolean,
         private readonly standalone: boolean,
         private readonly sourceKey: string,
-        private readonly layoutKey: string
+        private readonly layoutKey: string,
+        private readonly heightEstimate: number
     ) {
         super();
     }
@@ -74,7 +84,12 @@ class CaptionWidget extends WidgetType {
             && this.wrap === other.wrap
             && this.standalone === other.standalone
             && this.sourceKey === other.sourceKey
-            && this.layoutKey === other.layoutKey;
+            && this.layoutKey === other.layoutKey
+            && this.heightEstimate === other.heightEstimate;
+    }
+
+    get estimatedHeight(): number {
+        return this.heightEstimate;
     }
 
     toDOM(view: EditorView): HTMLElement {
@@ -171,7 +186,14 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
                     safeWrap,
                     link.standalone,
                     getImageSourceKey(link),
-                    getImageLayoutKey(link)
+                    getImageLayoutKey(link),
+                    estimateCaptionWidgetHeight(
+                        resolved.caption,
+                        resolved.size?.width,
+                        settings.widthMode ?? 'auto',
+                        settings.maxLines ?? 0,
+                        settings
+                    )
                 ),
                 side: 10_000,
                 block: true
@@ -180,15 +202,19 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
         return ranges;
     };
 
-    const buildState = (state: EditorState): CaptionDecorationState => {
+    const buildState = (
+        state: EditorState,
+        modeEnabled: boolean | null = null
+    ): CaptionDecorationState => {
         const scan = scanner.scan(state.doc.toString());
-        const livePreview = isLivePreview(state);
+        const livePreview = modeEnabled ?? isLivePreview(state);
         return {
             decorations: livePreview
                 ? Decoration.set(buildRanges(scan.descriptors), true)
                 : Decoration.none,
             scan,
             livePreview,
+            modeEnabled,
             settingsSignature: getSettingsSignature(),
             incremental: false
         };
@@ -200,12 +226,19 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
             const refreshRequested = transaction.effects.some(effect =>
                 effect.is(refreshLivePreviewCaptionsEffect)
             );
-            const livePreview = isLivePreview(transaction.state);
+            const modeEffect = transaction.effects.find(effect =>
+                effect.is(setLivePreviewCaptionModeEffect)
+            );
+            const modeEnabled = modeEffect
+                ? modeEffect.value
+                : value.modeEnabled;
+            const livePreview = modeEnabled ?? isLivePreview(transaction.state);
             const settingsSignature = getSettingsSignature();
             if (refreshRequested
                 || livePreview !== value.livePreview
+                || modeEnabled !== value.modeEnabled
                 || settingsSignature !== value.settingsSignature) {
-                return buildState(transaction.state);
+                return buildState(transaction.state, modeEnabled);
             }
 
             if (!transaction.docChanged) return value;
@@ -235,6 +268,7 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
                     decorations: Decoration.none,
                     scan: update.scan,
                     livePreview,
+                    modeEnabled,
                     settingsSignature,
                     incremental: update.incremental
                 };
@@ -245,6 +279,7 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
                     decorations: Decoration.set(buildRanges(update.scan.descriptors), true),
                     scan: update.scan,
                     livePreview,
+                    modeEnabled,
                     settingsSignature,
                     incremental: false
                 };
@@ -267,6 +302,7 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
                 decorations,
                 scan: update.scan,
                 livePreview,
+                modeEnabled,
                 settingsSignature,
                 incremental: true
             };
@@ -275,13 +311,98 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
             EditorView.decorations.from(field, value => value.decorations),
             EditorView.updateListener.of(update => {
                 if (!update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
-                plugin.imageStateManager?.handleLivePreviewEditorUpdate(update.view.dom, {
+                const imageUpdate = {
                     reconcileSource: update.docChanged || update.viewportChanged,
                     geometryChanged: update.geometryChanged
-                });
+                };
+                if (update.transactions.some(transaction =>
+                    transaction.effects.some(effect =>
+                        effect.is(setLivePreviewCaptionModeEffect)
+                    ))) {
+                    scheduleAfterEditorMeasure(update.view, () => {
+                        plugin.imageStateManager?.handleLivePreviewEditorUpdate(
+                            update.view.dom,
+                            imageUpdate
+                        );
+                    });
+                    return;
+                }
+                plugin.imageStateManager?.handleLivePreviewEditorUpdate(
+                    update.view.dom,
+                    imageUpdate
+                );
             })
         ]
     });
+}
+
+function estimateCaptionWidgetHeight(
+    caption: string,
+    explicitWidth: number | undefined,
+    widthMode: CaptionWidthMode,
+    maxLines: number,
+    settings: CaptionSettings
+): number {
+    const fontSize = parsePixelValue(settings.fontSize) ?? DEFAULT_CAPTION_FONT_SIZE;
+    const width = widthMode === 'auto' && explicitWidth && explicitWidth > 0
+        ? explicitWidth
+        : DEFAULT_CAPTION_WIDTH;
+    const horizontalPadding = parseBoxVerticalOrHorizontal(settings.padding, 'horizontal');
+    const contentWidth = Math.max(fontSize * 4, width - horizontalPadding);
+    const charactersPerLine = Math.max(
+        1,
+        Math.floor(contentWidth / (fontSize * CAPTION_CHARACTER_WIDTH_FACTOR))
+    );
+    const estimatedLines = caption.split(/\r?\n/u).reduce((total, line) =>
+        total + Math.max(1, Math.ceil(Array.from(line).length / charactersPerLine)), 0);
+    const visibleLines = Math.min(
+        maxLines > 0 ? maxLines : MAX_ESTIMATED_CAPTION_LINES,
+        estimatedLines
+    );
+    const verticalPadding = parseBoxVerticalOrHorizontal(settings.padding, 'vertical');
+    const marginTop = parsePixelValue(settings.marginTop) ?? 0;
+    const border = (parsePixelValue(settings.border) ?? 0) * 2;
+    return Math.max(
+        1,
+        Math.ceil(visibleLines * fontSize * CAPTION_LINE_HEIGHT
+            + verticalPadding
+            + marginTop
+            + border)
+    );
+}
+
+function parseBoxVerticalOrHorizontal(
+    value: string,
+    axis: 'vertical' | 'horizontal'
+): number {
+    const parts = value.trim().split(/\s+/u).filter(Boolean);
+    if (parts.length === 0 || parts.length > 4) return 0;
+    const pixels = parts.map(parsePixelValue);
+    if (pixels.some(part => part === undefined)) return 0;
+    const [first = 0, second = first, third = first, fourth = second] = pixels as number[];
+    return axis === 'vertical'
+        ? first + third
+        : second + fourth;
+}
+
+function parsePixelValue(value: string): number | undefined {
+    const match = /^\s*(-?(?:\d+\.?\d*|\.\d+))px(?:\s|$)/u.exec(value);
+    if (!match) return undefined;
+    const parsed = Number(match[1]);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function scheduleAfterEditorMeasure(view: EditorView, callback: () => void): void {
+    const ownerWindow = view.dom.ownerDocument.defaultView;
+    const run = () => {
+        if (!view.dom.isConnected) return;
+        callback();
+    };
+    if (ownerWindow?.requestAnimationFrame) {
+        ownerWindow.requestAnimationFrame(run);
+        return;
+    }
+    setTimeout(run, 0);
 }
 
 function touchesStructuralSyntax(

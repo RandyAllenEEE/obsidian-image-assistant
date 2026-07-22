@@ -174,6 +174,8 @@ describe('RefinedImageUtils', () => {
 
         const firstMatch = utils.getImageLinkMatchFromEditor(img, mockEditor);
         expect(firstMatch?.linkText).toBe('![[assets/pic.png|Second]]');
+        expect(img.hasAttribute('data-image-assistant-source-key')).toBe(false);
+        img.setAttribute('data-image-assistant-source-key', firstMatch!.sourceKey);
 
         delete (mockEditor as any).cm;
         expect(utils.getImageLinkMatchFromEditor(img, mockEditor)?.sourceKey)

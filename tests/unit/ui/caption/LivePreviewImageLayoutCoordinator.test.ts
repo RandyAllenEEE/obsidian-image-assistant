@@ -251,4 +251,45 @@ describe("LivePreviewImageLayoutCoordinator", () => {
         coordinator.destroy();
         root.remove();
     });
+
+    it("does not let repeated geometry signals restart an active settle cycle", () => {
+        const frameCallbacks = new Map<number, FrameRequestCallback>();
+        let frameId = 0;
+        vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+            frameCallbacks.set(++frameId, callback);
+            return frameId;
+        });
+        vi.spyOn(window, "cancelAnimationFrame").mockImplementation(id => {
+            frameCallbacks.delete(id);
+        });
+
+        const root = document.createElement("div");
+        document.body.appendChild(root);
+        const image = root.createEl("img");
+        image.setAttribute("data-image-assistant-layout-owner", "true");
+        vi.spyOn(image, "getBoundingClientRect").mockReturnValue(rect(0, 100));
+        vi.spyOn(root, "getBoundingClientRect").mockReturnValue(rect(0, 800));
+
+        const coordinator = new LivePreviewImageLayoutCoordinator(root);
+        coordinator.registerImage(image, "stable-key", {
+            standalone: true,
+            scope: "root"
+        });
+
+        let frames = 0;
+        while (frameCallbacks.size > 0 && frames < 20) {
+            coordinator.schedule(3);
+            const [id, callback] = frameCallbacks.entries().next().value!;
+            frameCallbacks.delete(id);
+            callback(id);
+            frames++;
+        }
+
+        expect(frames).toBeLessThan(MAX_EXPECTED_SETTLE_FRAMES);
+        expect(frameCallbacks.size).toBe(0);
+        coordinator.destroy();
+        root.remove();
+    });
 });
+
+const MAX_EXPECTED_SETTLE_FRAMES = 12;

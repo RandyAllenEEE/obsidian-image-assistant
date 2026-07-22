@@ -35,6 +35,7 @@ import {
     type EditorRangeMutationResult
 } from '../utils/EditorRangeMutationTransaction';
 import { t } from '../lang/helpers';
+import { resolveEditorView } from '../utils/EditorViewResolver';
 
 export interface ImageState {
     align: 'left' | 'center' | 'right' | 'left-wrap' | 'right-wrap' | 'none';
@@ -64,6 +65,16 @@ export interface ImageStateMutationResult {
     readonly error?: string;
 }
 
+type ImageStateResolution =
+    | { status: 'resolved'; state: ImageState }
+    | { status: 'pending' }
+    | { status: 'absent' };
+
+interface MeasuredImageState {
+    readonly image: HTMLImageElement;
+    readonly resolution: ImageStateResolution;
+}
+
 type WorkspaceWithLayoutState = App['workspace'] & {
     layoutReady?: boolean;
 };
@@ -73,6 +84,7 @@ export class ImageStateManager {
     private readonly layoutCoordinators = new Map<MarkdownView, LivePreviewImageLayoutCoordinator>();
     private readonly pendingImages = new Map<MarkdownView, Set<HTMLImageElement>>();
     private readonly scheduledViews = new Set<MarkdownView>();
+    private readonly measureKeys = new WeakMap<MarkdownView, object>();
     private viewContextResolver: ImageViewContextResolver;
     private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>();
     private unloaded = false;
@@ -209,6 +221,12 @@ export class ImageStateManager {
                 }
                 continue;
             }
+            if (!this.layoutCoordinators.has(view)) {
+                this.layoutCoordinators.set(
+                    view,
+                    new LivePreviewImageLayoutCoordinator(view.contentEl)
+                );
+            }
             if (!this.observers.has(view)) {
                 const Observer = view.contentEl.ownerDocument.defaultView?.MutationObserver
                     ?? MutationObserver;
@@ -227,12 +245,6 @@ export class ImageStateManager {
                 this.queueImages(
                     view,
                     Array.from(view.contentEl.querySelectorAll('img')).filter(isHtmlImageElement)
-                );
-            }
-            if (!this.layoutCoordinators.has(view)) {
-                this.layoutCoordinators.set(
-                    view,
-                    new LivePreviewImageLayoutCoordinator(view.contentEl)
                 );
             }
         }
@@ -305,16 +317,23 @@ export class ImageStateManager {
         }
         if (this.scheduledViews.has(view)) return;
         this.scheduledViews.add(view);
-        queueMicrotask(() => {
-            this.scheduledViews.delete(view);
-            const queued = this.pendingImages.get(view);
-            this.pendingImages.delete(view);
-            if (!queued || !this.isLivePreview(view) || this.unloaded) return;
-            const sourceIndex = this.viewContextResolver.prepareEditor(view.editor);
-            queued.forEach(img => {
-                if (view.contentEl.contains(img)) this.processImage(img, sourceIndex);
+        const editorView = resolveEditorView(view.editor, view);
+        if (editorView?.requestMeasure) {
+            editorView.requestMeasure<MeasuredImageState[] | null>({
+                key: this.getMeasureKey(view),
+                read: () => this.measureQueuedImages(view),
+                write: measurements => this.applyMeasuredImages(view, measurements)
             });
-        });
+            return;
+        }
+
+        const ownerWindow = view.contentEl.ownerDocument.defaultView;
+        const run = () => this.applyMeasuredImages(view, this.measureQueuedImages(view));
+        if (ownerWindow?.requestAnimationFrame) {
+            ownerWindow.requestAnimationFrame(run);
+        } else {
+            this.schedule(run, 16);
+        }
     }
 
     private isLivePreview(view: MarkdownView): boolean {
@@ -343,6 +362,7 @@ export class ImageStateManager {
         // Extra safety check for layout readiness
         const workspace = this.app.workspace as WorkspaceWithLayoutState;
         if (workspace.layoutReady === false) return;
+        this.syncObservers();
 
         const views = collectUsableMarkdownViews(this.app)
             .filter(view => !paths || (view.file && paths.has(view.file.path)));
@@ -350,9 +370,6 @@ export class ImageStateManager {
         for (const markdownView of views) {
             const mode = getMarkdownViewMode(markdownView);
             if (!mode) continue;
-            const sourceIndex = mode !== 'preview' && this.isLivePreview(markdownView)
-                ? this.viewContextResolver.prepareEditor(markdownView.editor)
-                : undefined;
             const images = markdownView.contentEl?.findAll?.('img')
                 ?? Array.from(markdownView.contentEl?.querySelectorAll?.('img') ?? []);
             images.forEach((img) => {
@@ -360,7 +377,7 @@ export class ImageStateManager {
                     if (mode === 'preview') {
                         this.processReadingModeImage(img);
                     } else if (this.isLivePreview(markdownView)) {
-                        this.processImage(img, sourceIndex);
+                        this.queueImages(markdownView, [img]);
                     } else {
                         this.alignment.clearImage(img);
                         this.dimensions.clearImage(img);
@@ -371,7 +388,6 @@ export class ImageStateManager {
                 }
             });
         }
-        this.syncObservers();
     }
 
     /**
@@ -386,54 +402,8 @@ export class ImageStateManager {
 
         try {
             this.processingImages.add(img);
-
-            // 2. Get State
             const resolution = this.resolveImageState(img, sourceIndex);
-            if (resolution.status === 'pending') {
-                const owner = this.viewContextResolver.resolveOwner(img);
-                if (owner) {
-                    this.layoutCoordinators.get(owner.view)?.schedule(3);
-                    const attempts = this.pendingResolutionAttempts.get(img) ?? 0;
-                    if (attempts < 3) {
-                        this.pendingResolutionAttempts.set(img, attempts + 1);
-                        this.schedule(() => this.queueImages(owner.view, [img]), 16);
-                    }
-                }
-                return;
-            }
-            this.pendingResolutionAttempts.delete(img);
-            if (resolution.status === 'absent') {
-                this.unregisterLivePreviewLayout(img);
-                this.alignment.clearImage(img);
-                this.dimensions.clearImage(img);
-                img.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
-                img.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE);
-                this.caption.removeImage?.(img);
-                return;
-            }
-            const state = resolution.state;
-
-            const layout = resolveImageLayout(
-                state.pipeAlignment ?? this.toPipeAlignment(state.align),
-                this.plugin.settings.alignment,
-                state.standalone ?? true
-            );
-            this.alignment.applyLayout(img, layout);
-            this.dimensions.apply(img, resolveImageDimensions(state.size));
-
-            if (state.layoutKey) {
-                const owner = this.viewContextResolver.resolveOwner(img);
-                if (owner) {
-                    this.layoutCoordinators.get(owner.view)?.registerImage(img, state.layoutKey, {
-                        standalone: state.standalone ?? true,
-                        scope: state.layoutScope ?? 'root'
-                    });
-                }
-            }
-
-            // Live Preview captions are owned by the CodeMirror StateField.
-            // Never write caption DOM into an editor managed by CodeMirror.
-            this.caption.removeImage?.(img);
+            this.applyImageResolution(img, resolution);
         } finally {
             // Short timeout to allow DOM updates to settle before re-enabling observer
             // This prevents immediate re-trigger by the very changes we just made
@@ -472,8 +442,14 @@ export class ImageStateManager {
             ? context.descriptor ?? null
             : retainedContext.descriptor ?? null;
         if (descriptor) {
-            img.setAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE, getImageSourceKey(descriptor));
-            img.setAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE, getImageLayoutKey(descriptor));
+            const sourceKey = getImageSourceKey(descriptor);
+            const layoutKey = getImageLayoutKey(descriptor);
+            if (img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE) !== sourceKey) {
+                img.setAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE, sourceKey);
+            }
+            if (img.getAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE) !== layoutKey) {
+                img.setAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE, layoutKey);
+            }
         }
 
         // Reading Mode DOM attributes can lose Wiki pipe fields. Prefer the
@@ -554,7 +530,7 @@ export class ImageStateManager {
     private resolveImageState(
         img: HTMLImageElement,
         sourceIndex?: ImageSourceIndex
-    ): { status: 'resolved'; state: ImageState } | { status: 'pending' } | { status: 'absent' } {
+    ): ImageStateResolution {
         const resolution = this.viewContextResolver.resolveDetailed(img, sourceIndex);
         if (resolution.status !== 'resolved') return resolution;
         const context = resolution.context;
@@ -564,12 +540,6 @@ export class ImageStateManager {
             ?? pipeSyntaxParser.parsePipeSyntax(linkText, { attributeMode: 'display' });
         if (!parsed) return { status: 'absent' };
 
-        if (img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE) !== context.match.sourceKey) {
-            img.setAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE, context.match.sourceKey);
-        }
-        if (img.getAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE) !== context.match.layoutKey) {
-            img.setAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE, context.match.layoutKey);
-        }
         return { status: 'resolved', state: {
             ...this.mapPipeDataToState(parsed, context.match.descriptor.standalone),
             sourceKey: context.match.sourceKey,
@@ -783,6 +753,106 @@ export class ImageStateManager {
 
     private scheduleAllLayouts(settleFrames: number): void {
         this.layoutCoordinators.forEach(coordinator => coordinator.schedule(settleFrames));
+    }
+
+    private getMeasureKey(view: MarkdownView): object {
+        let key = this.measureKeys.get(view);
+        if (!key) {
+            key = {};
+            this.measureKeys.set(view, key);
+        }
+        return key;
+    }
+
+    private measureQueuedImages(view: MarkdownView): MeasuredImageState[] | null {
+        this.scheduledViews.delete(view);
+        const queued = this.pendingImages.get(view);
+        this.pendingImages.delete(view);
+        if (!queued || !this.isLivePreview(view) || this.unloaded) return null;
+        const sourceIndex = this.viewContextResolver.prepareEditor(view.editor);
+        return [...queued]
+            .filter(image => view.contentEl.contains(image))
+            .map(image => ({
+                image,
+                resolution: this.resolveImageState(image, sourceIndex)
+            }));
+    }
+
+    private applyMeasuredImages(
+        view: MarkdownView,
+        measurements: readonly MeasuredImageState[] | null
+    ): void {
+        if (!measurements || !this.isLivePreview(view) || this.unloaded) return;
+        for (const { image, resolution } of measurements) {
+            if (!view.contentEl.contains(image)
+                || this.processingImages.has(image)
+                || image.hasClass('is-resizing')) continue;
+            try {
+                this.processingImages.add(image);
+                this.applyImageResolution(image, resolution);
+            } finally {
+                this.schedule(() => this.processingImages.delete(image), 0);
+            }
+        }
+    }
+
+    private applyImageResolution(
+        img: HTMLImageElement,
+        resolution: ImageStateResolution
+    ): void {
+        if (resolution.status === 'pending') {
+            const owner = this.viewContextResolver.resolveOwner(img);
+            if (owner) {
+                this.layoutCoordinators.get(owner.view)?.schedule(3);
+                const attempts = this.pendingResolutionAttempts.get(img) ?? 0;
+                if (attempts < 3) {
+                    this.pendingResolutionAttempts.set(img, attempts + 1);
+                    this.schedule(() => this.queueImages(owner.view, [img]), 16);
+                }
+            }
+            return;
+        }
+        this.pendingResolutionAttempts.delete(img);
+        if (resolution.status === 'absent') {
+            this.unregisterLivePreviewLayout(img);
+            this.alignment.clearImage(img);
+            this.dimensions.clearImage(img);
+            img.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
+            img.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE);
+            this.caption.removeImage?.(img);
+            return;
+        }
+
+        const state = resolution.state;
+        if (state.sourceKey
+            && img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE) !== state.sourceKey) {
+            img.setAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE, state.sourceKey);
+        }
+        if (state.layoutKey
+            && img.getAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE) !== state.layoutKey) {
+            img.setAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE, state.layoutKey);
+        }
+        const layout = resolveImageLayout(
+            state.pipeAlignment ?? this.toPipeAlignment(state.align),
+            this.plugin.settings.alignment,
+            state.standalone ?? true
+        );
+        this.alignment.applyLayout(img, layout);
+        this.dimensions.apply(img, resolveImageDimensions(state.size));
+
+        if (state.layoutKey) {
+            const owner = this.viewContextResolver.resolveOwner(img);
+            if (owner) {
+                this.layoutCoordinators.get(owner.view)?.registerImage(img, state.layoutKey, {
+                    standalone: state.standalone ?? true,
+                    scope: state.layoutScope ?? 'root'
+                });
+            }
+        }
+
+        // Live Preview captions are owned by the CodeMirror StateField.
+        // Never write caption DOM into an editor managed by CodeMirror.
+        this.caption.removeImage?.(img);
     }
 
     private schedule(callback: () => void, delay: number): void {

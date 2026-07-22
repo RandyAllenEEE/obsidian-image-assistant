@@ -82,10 +82,6 @@ export class RefinedImageUtils {
                     sourceIndex
                 );
                 if (positioned) {
-                    img.setAttribute(
-                        IMAGE_SOURCE_KEY_ATTRIBUTE,
-                        getImageSourceKey(positioned.descriptor)
-                    );
                     return { status: 'resolved', match: this.toImageLinkMatch(positioned, sourceIndex) };
                 }
                 return { status: 'pending' };

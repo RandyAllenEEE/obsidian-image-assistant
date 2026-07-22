@@ -1,9 +1,13 @@
 import { Component } from 'obsidian';
+import type { EditorView } from '@codemirror/view';
 import type ImageConverterPlugin from '../main';
 import { CaptionDomRenderer, type CaptionRenderContext } from './caption/CaptionDomRenderer';
 import { CaptionRenderPolicy } from './caption/CaptionRenderPolicy';
 import { CaptionResolver, type CaptionResolverOptions } from './caption/CaptionResolver';
-import { refreshLivePreviewCaptionsEffect } from './caption/LivePreviewCaptionExtension';
+import {
+    refreshLivePreviewCaptionsEffect,
+    setLivePreviewCaptionModeEffect
+} from './caption/LivePreviewCaptionExtension';
 import type { ReadingImageContext } from './caption/types';
 import { resolveCaptionLayout } from './ImageLayoutResolver';
 import { getImageSourceKey } from '../utils/MarkdownSourceContext';
@@ -24,6 +28,8 @@ export class ImageCaption extends Component {
     private readonly renderer = new CaptionDomRenderer();
     private readonly renderPolicy = new CaptionRenderPolicy();
     private readonly documents = new Set<Document>();
+    private readonly editorModeStates = new WeakMap<EditorView, boolean | null>();
+    private modeSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(private readonly plugin: ImageConverterPlugin) {
         super();
@@ -40,6 +46,15 @@ export class ImageCaption extends Component {
             this.plugin.app.workspace.on('window-close' as never, (_workspaceWindow: unknown, win: Window) => {
                 if (win?.document) this.cleanupDocument(win.document);
             })
+        );
+        this.registerEvent(
+            this.plugin.app.workspace.on('layout-change', () => this.scheduleViewModeSync())
+        );
+        this.registerEvent(
+            this.plugin.app.workspace.on('active-leaf-change', () => this.scheduleViewModeSync())
+        );
+        this.registerEvent(
+            this.plugin.app.workspace.on('file-open', () => this.scheduleViewModeSync())
         );
         this.plugin.app.workspace.iterateAllLeaves?.(leaf => {
             const ownerDocument = leaf.view?.containerEl?.ownerDocument;
@@ -293,7 +308,14 @@ export class ImageCaption extends Component {
 
             const mode = getMarkdownViewMode(view);
             if (!mode) continue;
+            const editorView = resolveEditorView(view.editor, view);
+            const modeChange = this.getEditorModeChange(editorView, mode === 'source');
             if (mode === 'preview') {
+                if (editorView && modeChange !== undefined) {
+                    editorView.dispatch({
+                        effects: setLivePreviewCaptionModeEffect.of(modeChange)
+                    });
+                }
                 if (!this.plugin.settings.captions.enabled
                     || !this.plugin.settings.captions.showInReadingMode) {
                     this.renderer.cleanup(contentEl);
@@ -311,8 +333,14 @@ export class ImageCaption extends Component {
             }
 
             this.renderer.cleanup(contentEl);
-            const editorView = resolveEditorView(view.editor, view);
-            editorView?.dispatch({ effects: refreshLivePreviewCaptionsEffect.of(undefined) });
+            if (editorView) {
+                editorView.dispatch({ effects: [
+                    ...(modeChange === undefined
+                        ? []
+                        : [setLivePreviewCaptionModeEffect.of(modeChange)]),
+                    refreshLivePreviewCaptionsEffect.of(undefined)
+                ] });
+            }
         }
     }
 
@@ -333,6 +361,10 @@ export class ImageCaption extends Component {
     }
 
     destroy(): void {
+        if (this.modeSyncTimer !== null) {
+            clearTimeout(this.modeSyncTimer);
+            this.modeSyncTimer = null;
+        }
         for (const targetDocument of this.getOpenDocuments()) {
             this.cleanupDocument(targetDocument);
         }
@@ -372,5 +404,39 @@ export class ImageCaption extends Component {
             || isHtmlElementNode(node)
                 && node.getAttribute('data-image-assistant-caption-renderer') === 'dom'
         );
+    }
+
+    private scheduleViewModeSync(): void {
+        if (this.modeSyncTimer !== null) return;
+        this.modeSyncTimer = setTimeout(() => {
+            this.modeSyncTimer = null;
+            this.syncViewModes();
+        }, 0);
+    }
+
+    private syncViewModes(): void {
+        for (const view of collectUsableMarkdownViews(this.plugin.app)) {
+            const mode = getMarkdownViewMode(view);
+            if (!mode) continue;
+            this.syncEditorMode(resolveEditorView(view.editor, view), mode === 'source');
+        }
+    }
+
+    private syncEditorMode(editorView: EditorView | null, sourceMode: boolean): void {
+        const modeChange = this.getEditorModeChange(editorView, sourceMode);
+        if (!editorView || modeChange === undefined) return;
+        editorView.dispatch({ effects: setLivePreviewCaptionModeEffect.of(modeChange) });
+    }
+
+    private getEditorModeChange(
+        editorView: EditorView | null,
+        sourceMode: boolean
+    ): boolean | null | undefined {
+        if (!editorView) return undefined;
+        const enabled = sourceMode ? null : false;
+        if (this.editorModeStates.has(editorView)
+            && this.editorModeStates.get(editorView) === enabled) return undefined;
+        this.editorModeStates.set(editorView, enabled);
+        return enabled;
     }
 }

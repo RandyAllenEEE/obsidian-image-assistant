@@ -34,6 +34,7 @@ function isCompatibleView(
     if (!view || typeof view.dispatch !== "function") return false;
     if (requiredField && !view.state.field(requiredField, false)) return false;
     const editorValue = editor.getValue?.();
-    return typeof editorValue !== "string"
-        || view.state.doc.toString() === editorValue;
+    if (typeof editorValue !== "string") return true;
+    const stateValue = view.state?.doc?.toString?.();
+    return typeof stateValue === "string" && stateValue === editorValue;
 }

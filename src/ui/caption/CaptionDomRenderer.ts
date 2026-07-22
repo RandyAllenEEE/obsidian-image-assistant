@@ -20,13 +20,22 @@ interface CaptionTarget {
     placement: CaptionPlacement;
 }
 
+interface CaptionWidthTracker {
+    readonly document: Document;
+    readonly observer: ResizeObserver;
+    readonly images: Set<HTMLImageElement>;
+    readonly pendingWidths: Map<HTMLImageElement, number>;
+    cancelScheduledFlush: (() => void) | null;
+}
+
 const DOM_CAPTION_SELECTOR = '.image-assistant-caption[data-image-assistant-caption-renderer="dom"]';
 
 export class CaptionDomRenderer {
     private readonly captionKeys = new WeakMap<HTMLImageElement, string>();
     private readonly explicitWidths = new WeakMap<HTMLImageElement, number | undefined>();
     private readonly widthModes = new WeakMap<HTMLImageElement, CaptionWidthMode>();
-    private readonly resizeObservers = new Map<HTMLImageElement, ResizeObserver>();
+    private readonly widthTrackers = new Map<Document, CaptionWidthTracker>();
+    private readonly trackedDocuments = new WeakMap<HTMLImageElement, Document>();
     private readonly loadHandlers = new Map<HTMLImageElement, () => void>();
 
     render(
@@ -84,7 +93,9 @@ export class CaptionDomRenderer {
     }
 
     cleanup(root: ParentNode = this.getDefaultDocument()): void {
-        for (const image of new Set([...this.resizeObservers.keys(), ...this.loadHandlers.keys()])) {
+        const trackedImages = [...this.widthTrackers.values()]
+            .flatMap(tracker => [...tracker.images]);
+        for (const image of new Set([...trackedImages, ...this.loadHandlers.keys()])) {
             if (root === image || root.contains?.(image)) this.releaseWidthTracking(image);
         }
         root.querySelectorAll?.(DOM_CAPTION_SELECTOR).forEach(caption => caption.remove());
@@ -195,6 +206,14 @@ export class CaptionDomRenderer {
         const width = widthMode === 'container'
             ? '100%'
             : this.resolveAutoWidth(img, explicitWidth);
+        this.applyWidthVariable(target, caption, width);
+    }
+
+    private applyWidthVariable(
+        target: CaptionTarget,
+        caption: HTMLElement,
+        width: string
+    ): void {
         if (target.host.style.getPropertyValue('--img-width') !== width) {
             target.host.style.setProperty('--img-width', width);
         }
@@ -268,13 +287,30 @@ export class CaptionDomRenderer {
     }
 
     private ensureWidthTracking(img: HTMLImageElement): void {
+        const explicitWidth = this.explicitWidths.get(img);
+        const widthMode = this.widthModes.get(img) ?? 'auto';
+        if (widthMode === 'container' || explicitWidth !== undefined) {
+            this.releaseWidthTracking(img);
+            return;
+        }
+
+        const ownerDocument = img.ownerDocument;
+        if (this.trackedDocuments.get(img) === ownerDocument) return;
+        this.releaseWidthTracking(img);
+
         const OwnerResizeObserver = img.ownerDocument.defaultView?.ResizeObserver
             ?? (typeof ResizeObserver === 'undefined' ? undefined : ResizeObserver);
-        if (OwnerResizeObserver && !this.resizeObservers.has(img)) {
-            const observer = new OwnerResizeObserver(() => this.refreshTrackedWidth(img));
-            observer.observe(img);
-            this.resizeObservers.set(img, observer);
+        if (OwnerResizeObserver) {
+            const tracker = this.getOrCreateWidthTracker(
+                ownerDocument,
+                OwnerResizeObserver
+            );
+            tracker.images.add(img);
+            tracker.observer.observe(img);
+            this.trackedDocuments.set(img, ownerDocument);
+            return;
         }
+
         if (!this.loadHandlers.has(img)) {
             const handler = () => this.refreshTrackedWidth(img);
             img.addEventListener('load', handler);
@@ -297,11 +333,100 @@ export class CaptionDomRenderer {
     }
 
     private releaseWidthTracking(img: HTMLImageElement): void {
-        this.resizeObservers.get(img)?.disconnect();
-        this.resizeObservers.delete(img);
+        const ownerDocument = this.trackedDocuments.get(img);
+        const tracker = ownerDocument
+            ? this.widthTrackers.get(ownerDocument)
+            : undefined;
+        if (tracker) {
+            tracker.images.delete(img);
+            tracker.pendingWidths.delete(img);
+            tracker.observer.unobserve?.(img);
+            if (tracker.images.size === 0) {
+                tracker.cancelScheduledFlush?.();
+                tracker.cancelScheduledFlush = null;
+                tracker.observer.disconnect();
+                this.widthTrackers.delete(ownerDocument!);
+            }
+        }
+        this.trackedDocuments.delete(img);
         const handler = this.loadHandlers.get(img);
         if (handler) img.removeEventListener('load', handler);
         this.loadHandlers.delete(img);
+    }
+
+    private getOrCreateWidthTracker(
+        ownerDocument: Document,
+        Observer: typeof ResizeObserver
+    ): CaptionWidthTracker {
+        const existing = this.widthTrackers.get(ownerDocument);
+        if (existing) return existing;
+
+        const images = new Set<HTMLImageElement>();
+        const pendingWidths = new Map<HTMLImageElement, number>();
+        const observer = new Observer(entries => {
+            for (const entry of entries) {
+                if (!isHtmlImageElement(entry.target)
+                    || !images.has(entry.target)) continue;
+                pendingWidths.set(entry.target, entry.contentRect.width);
+            }
+            const current = this.widthTrackers.get(ownerDocument);
+            if (current) this.scheduleWidthFlush(current);
+        });
+        const tracker: CaptionWidthTracker = {
+            document: ownerDocument,
+            observer,
+            images,
+            pendingWidths,
+            cancelScheduledFlush: null
+        };
+        this.widthTrackers.set(ownerDocument, tracker);
+        return tracker;
+    }
+
+    private scheduleWidthFlush(tracker: CaptionWidthTracker): void {
+        if (tracker.cancelScheduledFlush || tracker.pendingWidths.size === 0) return;
+        const ownerWindow = tracker.document.defaultView;
+        const flush = () => {
+            tracker.cancelScheduledFlush = null;
+            this.flushTrackedWidths(tracker);
+        };
+        if (ownerWindow?.requestAnimationFrame) {
+            const frame = ownerWindow.requestAnimationFrame(flush);
+            tracker.cancelScheduledFlush = () => ownerWindow.cancelAnimationFrame(frame);
+            return;
+        }
+
+        const timer = setTimeout(flush, 16);
+        tracker.cancelScheduledFlush = () => clearTimeout(timer);
+    }
+
+    private flushTrackedWidths(tracker: CaptionWidthTracker): void {
+        const measurements = [...tracker.pendingWidths];
+        tracker.pendingWidths.clear();
+        const updates: Array<{
+            target: CaptionTarget;
+            caption: HTMLElement;
+            width: string;
+        }> = [];
+
+        for (const [img, observedWidth] of measurements) {
+            if (!img.isConnected || !tracker.images.has(img)) {
+                this.releaseWidthTracking(img);
+                continue;
+            }
+            const target = this.findTarget(img);
+            if (!target) continue;
+            const caption = this.findExistingCaption(target, this.getCaptionKey(img));
+            if (!caption) continue;
+            const width = positiveNumber(observedWidth)
+                ? `${roundLayoutWidth(observedWidth)}px`
+                : this.resolveAutoWidth(img, undefined);
+            updates.push({ target, caption, width });
+        }
+
+        for (const update of updates) {
+            this.applyWidthVariable(update.target, update.caption, update.width);
+        }
     }
 
     private applyLineClamp(caption: HTMLElement, text: string, maxLines: number): void {
@@ -331,4 +456,12 @@ function setAttributeIfChanged(element: Element, name: string, value: string): v
 
 function positiveNumber(value: number | undefined): number | undefined {
     return value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function roundLayoutWidth(value: number): number {
+    return Math.round(value * 2) / 2;
+}
+
+function isHtmlImageElement(value: unknown): value is HTMLImageElement {
+    return isHtmlElementNode(value) && value.tagName === 'IMG';
 }

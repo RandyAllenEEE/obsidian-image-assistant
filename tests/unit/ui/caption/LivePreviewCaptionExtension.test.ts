@@ -1,10 +1,11 @@
 import { EditorView } from '@codemirror/view';
 import * as obsidian from 'obsidian';
 import { editorLivePreviewField } from 'obsidian';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createLivePreviewCaptionExtension,
-  refreshLivePreviewCaptionsEffect
+  refreshLivePreviewCaptionsEffect,
+  setLivePreviewCaptionModeEffect
 } from '../../../../src/ui/caption/LivePreviewCaptionExtension';
 import { DEFAULT_SETTINGS } from '../../../../src/settings/defaults';
 
@@ -41,6 +42,7 @@ describe('LivePreviewCaptionExtension', () => {
 
   afterEach(() => {
     views.splice(0).forEach(view => view.destroy());
+    vi.restoreAllMocks();
     document.body.empty();
   });
 
@@ -129,6 +131,75 @@ describe('LivePreviewCaptionExtension', () => {
     view.dispatch({ effects: setEditorLivePreviewEffect.of(false) });
 
     expect(parent.querySelector('.image-assistant-live-preview-caption')).toBeNull();
+  });
+
+  it('removes hidden editor widgets while Reading Mode owns the leaf', () => {
+    const { extension, parent, view } = createFixture('![[photo.png|Caption]]');
+    views.push(view);
+
+    expect(parent.querySelector('.image-assistant-live-preview-caption')).not.toBeNull();
+    view.dispatch({ effects: setLivePreviewCaptionModeEffect.of(false) });
+
+    const readingState = view.state.field(extension);
+    expect(readingState.modeEnabled).toBe(false);
+    expect(readingState.decorations.size).toBe(0);
+    expect(parent.querySelector('.image-assistant-live-preview-caption')).toBeNull();
+
+    view.dispatch({ effects: setLivePreviewCaptionModeEffect.of(null) });
+    expect(view.state.field(extension).modeEnabled).toBeNull();
+    expect(parent.querySelector('.image-assistant-live-preview-caption')?.textContent)
+      .toBe('Caption');
+
+    view.dispatch({ effects: setEditorLivePreviewEffect.of(false) });
+    expect(parent.querySelector('.image-assistant-live-preview-caption')).toBeNull();
+  });
+
+  it('restores block captions with stable height estimates after Reading Mode', () => {
+    const source = [
+      '![[short.png|120|Short caption]]',
+      ...Array.from({ length: 200 }, (_, index) =>
+        `![[image-${index}.png|120|${'Long caption text '.repeat(12)}${index}]]`)
+    ].join('\n');
+    const { extension, view } = createFixture(source);
+    views.push(view);
+
+    view.dispatch({ effects: setLivePreviewCaptionModeEffect.of(false) });
+    view.dispatch({ effects: setLivePreviewCaptionModeEffect.of(null) });
+
+    const widgets: Array<{ estimatedHeight: number }> = [];
+    view.state.field(extension).decorations.between(
+      0,
+      view.state.doc.length,
+      (_from, _to, decoration) => {
+        widgets.push(decoration.spec.widget);
+      }
+    );
+    expect(widgets).toHaveLength(201);
+    expect(widgets.every(widget => Number.isFinite(widget.estimatedHeight)
+      && widget.estimatedHeight > 0)).toBe(true);
+    expect(widgets[1].estimatedHeight).toBeGreaterThan(widgets[0].estimatedHeight);
+  });
+
+  it('defers image reconciliation until after the mode-change measure cycle', () => {
+    const { plugin, view } = createFixture('![[photo.png|Caption]]');
+    views.push(view);
+    const handleLivePreviewEditorUpdate = vi.fn();
+    plugin.imageStateManager = { handleLivePreviewEditorUpdate };
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+      frames.push(callback);
+      return frames.length;
+    });
+
+    view.dispatch({
+      changes: { from: 0, insert: 'Text\n' },
+      effects: setLivePreviewCaptionModeEffect.of(false)
+    });
+
+    expect(handleLivePreviewEditorUpdate).not.toHaveBeenCalled();
+    expect(frames.length).toBeGreaterThan(0);
+    [...frames].forEach(callback => callback(0));
+    expect(handleLivePreviewEditorUpdate).toHaveBeenCalledOnce();
   });
 
   it('stays empty when the Obsidian Live Preview field is absent', () => {

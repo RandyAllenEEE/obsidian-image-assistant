@@ -200,4 +200,54 @@ describe('CaptionDomRenderer', () => {
     renderer.cleanup(popoutDocument);
     expect(disconnect).toHaveBeenCalledOnce();
   });
+
+  it('shares one observer per document and defers resize writes to animation frame', () => {
+    const popoutDocument = document.implementation.createHTMLDocument('popout');
+    let resizeCallback!: ResizeObserverCallback;
+    let frameCallback: FrameRequestCallback | null = null;
+    const observe = vi.fn();
+    const unobserve = vi.fn();
+    const disconnect = vi.fn();
+    const OwnerResizeObserver = vi.fn(function (callback: ResizeObserverCallback) {
+      resizeCallback = callback;
+      return { observe, unobserve, disconnect };
+    });
+    Object.defineProperty(popoutDocument, 'defaultView', {
+      configurable: true,
+      value: {
+        ResizeObserver: OwnerResizeObserver,
+        requestAnimationFrame: vi.fn((callback: FrameRequestCallback) => {
+          frameCallback = callback;
+          return 1;
+        }),
+        cancelAnimationFrame: vi.fn()
+      }
+    });
+    const first = popoutDocument.body.appendChild(popoutDocument.createElement('img'));
+    const second = popoutDocument.body.appendChild(popoutDocument.createElement('img'));
+    vi.spyOn(first, 'getBoundingClientRect').mockReturnValue({ width: 100 } as DOMRect);
+    vi.spyOn(second, 'getBoundingClientRect').mockReturnValue({ width: 120 } as DOMRect);
+
+    const firstCaption = renderer.render(first, state('First'), {
+      document: popoutDocument
+    });
+    renderer.render(second, state('Second'), { document: popoutDocument });
+
+    expect(OwnerResizeObserver).toHaveBeenCalledOnce();
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(firstCaption?.style.getPropertyValue('--img-width')).toBe('100px');
+
+    resizeCallback([
+      { target: first, contentRect: { width: 240 } as DOMRectReadOnly }
+    ] as unknown as ResizeObserverEntry[], {} as ResizeObserver);
+    expect(firstCaption?.style.getPropertyValue('--img-width')).toBe('100px');
+
+    expect(frameCallback).not.toBeNull();
+    (frameCallback as unknown as FrameRequestCallback)(0);
+    expect(firstCaption?.style.getPropertyValue('--img-width')).toBe('240px');
+
+    renderer.cleanup(popoutDocument);
+    expect(unobserve).toHaveBeenCalledTimes(2);
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
 });

@@ -63,6 +63,7 @@ export class LivePreviewImageLayoutCoordinator {
     private stableFrames = 0;
     private requiredStableFrames = REQUIRED_STABLE_FRAMES;
     private previousSignature = '';
+    private settling = false;
     private destroyed = false;
 
     private readonly onWindowResize = (): void => this.schedule();
@@ -123,8 +124,6 @@ export class LivePreviewImageLayoutCoordinator {
         this.tracked.set(layoutKey, { image, layoutKey, ...options });
         setAttributeIfChanged(image, IMAGE_LAYOUT_KEY_ATTRIBUTE, layoutKey);
         this.observe(image);
-        const owner = findLayoutOwner(image);
-        if (owner) this.observe(owner);
         this.observeGeometryRoots();
         this.schedule();
     }
@@ -167,12 +166,24 @@ export class LivePreviewImageLayoutCoordinator {
 
     schedule(settleFrames = REQUIRED_STABLE_FRAMES): void {
         if (this.destroyed || this.tracked.size === 0) return;
-        this.requiredStableFrames = Math.max(
+        const requestedFrames = Math.max(
             1,
             Math.min(MAX_SETTLE_FRAMES, Math.round(settleFrames))
         );
+        if (this.settling) {
+            this.requiredStableFrames = Math.max(
+                this.requiredStableFrames,
+                requestedFrames
+            );
+            this.requestNextFrame();
+            return;
+        }
+
+        this.settling = true;
+        this.requiredStableFrames = requestedFrames;
         this.frameCount = 0;
         this.stableFrames = 0;
+        this.previousSignature = '';
         this.requestNextFrame();
     }
 
@@ -244,7 +255,9 @@ export class LivePreviewImageLayoutCoordinator {
             && this.stableFrames < this.requiredStableFrames
             && this.frameCount < MAX_SETTLE_FRAMES) {
             this.requestNextFrame();
+            return;
         }
+        this.settling = false;
     }
 
     private measure(
@@ -264,7 +277,6 @@ export class LivePreviewImageLayoutCoordinator {
             : this.lastValidGeometry.get(tracked.layoutKey);
 
         const owner = findLayoutOwner(tracked.image);
-        if (owner) this.observe(owner);
         const alignment = owner?.getAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE) ?? null;
         const wraps = owner?.getAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE) === 'true';
         const ownerEligible = !!owner && tracked.standalone && !wraps && isAlignment(alignment);
@@ -289,7 +301,7 @@ export class LivePreviewImageLayoutCoordinator {
             caption,
             captionEligible,
             captionOffset,
-            imageWidth: geometry?.imageWidth ?? null,
+            imageWidth: geometry ? roundGeometry(geometry.imageWidth) : null,
             signature: [
                 tracked.layoutKey,
                 imageValid ? imageRect.left : 'pending',
@@ -361,7 +373,6 @@ export class LivePreviewImageLayoutCoordinator {
             ?? editor?.querySelector('.cm-contentContainer')
             ?? this.root;
         if (!isElement(scope)) return null;
-        this.observe(scope);
         const rect = scope.getBoundingClientRect();
         const style = this.ownerWindow.getComputedStyle(scope);
         const paddingLeft = parsePixels(style.paddingLeft);
@@ -376,9 +387,6 @@ export class LivePreviewImageLayoutCoordinator {
         this.observe(this.root);
         const leaf = this.root.closest('.workspace-leaf-content, .view-content, .markdown-source-view');
         if (leaf) this.observe(leaf);
-        this.root.querySelectorAll(
-            '.cm-editor, .cm-scroller, .cm-sizer, .cm-contentContainer, .cm-content'
-        ).forEach(element => this.observe(element));
     }
 
     private observe(element: Element): void {
@@ -397,7 +405,6 @@ export class LivePreviewImageLayoutCoordinator {
         }
         if (!caption) return;
         this.captionElements.set(layoutKey, caption);
-        this.observe(caption);
     }
 
     private clearCaptionForKey(layoutKey: string): void {
@@ -405,8 +412,6 @@ export class LivePreviewImageLayoutCoordinator {
             ?? findCaption(this.root, layoutKey);
         if (caption) {
             clearCaptionPosition(caption);
-            this.resizeObserver?.unobserve(caption);
-            this.observedElements.delete(caption);
         }
         this.captionElements.delete(layoutKey);
     }
@@ -520,8 +525,12 @@ function parsePixels(value: string): number {
 }
 
 function toPixels(value: number): string {
-    const rounded = Math.round(value * 1000) / 1000;
+    const rounded = roundGeometry(value);
     return `${Object.is(rounded, -0) ? 0 : rounded}px`;
+}
+
+function roundGeometry(value: number): number {
+    return Math.round(value * 2) / 2;
 }
 
 function setAttributeIfChanged(element: Element, name: string, value: string): boolean {

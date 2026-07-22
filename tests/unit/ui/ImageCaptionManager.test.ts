@@ -238,12 +238,19 @@ describe('ImageCaption', () => {
     const readingImage = document.createElement('img');
     readingImage.alt = 'Reading caption';
     readingContent.appendChild(readingImage);
+    const readingDispatch = vi.fn();
     const firstDispatch = vi.fn();
     const secondDispatch = vi.fn();
+    const makeEditor = (dispatch: ReturnType<typeof vi.fn>) => ({
+      cm: {
+        dispatch,
+        state: { field: () => true }
+      }
+    });
     plugin.app.workspace.getLeavesOfType = vi.fn(() => [
-      { view: { contentEl: readingContent, getMode: () => 'preview', editor: {} } },
-      { view: { contentEl: document.createElement('div'), getMode: () => 'source', editor: { cm: { dispatch: firstDispatch } } } },
-      { view: { contentEl: document.createElement('div'), getMode: () => 'source', editor: { cm: { dispatch: secondDispatch } } } }
+      { view: { contentEl: readingContent, getMode: () => 'preview', editor: makeEditor(readingDispatch) } },
+      { view: { contentEl: document.createElement('div'), getMode: () => 'source', editor: makeEditor(firstDispatch) } },
+      { view: { contentEl: document.createElement('div'), getMode: () => 'source', editor: makeEditor(secondDispatch) } }
     ]);
     plugin.imageStateManager = { processReadingModeImage: vi.fn() };
     const manager = new ImageCaption(plugin);
@@ -251,6 +258,9 @@ describe('ImageCaption', () => {
     manager.refreshAllViews();
 
     expect(plugin.imageStateManager.processReadingModeImage).toHaveBeenCalledWith(readingImage);
+    expect(readingDispatch).toHaveBeenCalledOnce();
+    const readingEffects = readingDispatch.mock.calls[0][0].effects;
+    expect(readingEffects.value).toBe(false);
     expect(firstDispatch).toHaveBeenCalledOnce();
     expect(secondDispatch).toHaveBeenCalledOnce();
   });
@@ -272,6 +282,33 @@ describe('ImageCaption', () => {
     close?.({}, win);
     expect(popoutDocument.body.classList.contains('image-captions-enabled')).toBe(false);
     expect(popoutDocument.getElementById('image-caption-styles')).toBeNull();
+    manager.onunload();
+  });
+
+  it('clears hidden CodeMirror captions after a leaf enters Reading Mode', async () => {
+    const plugin = makePlugin();
+    const dispatch = vi.fn();
+    const view = {
+      contentEl: document.createElement('div'),
+      getMode: () => 'preview',
+      editor: {
+        cm: {
+          dispatch,
+          state: { field: () => true }
+        }
+      }
+    };
+    plugin.app.workspace.getLeavesOfType = vi.fn(() => [{ view }]);
+    const manager = new ImageCaption(plugin);
+    manager.onload();
+    const layoutChange = (plugin.app.workspace.on as ReturnType<typeof vi.fn>).mock.calls
+      .find(([event]) => event === 'layout-change')?.[1];
+
+    layoutChange?.();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls[0][0].effects.value).toBe(false);
     manager.onunload();
   });
 });

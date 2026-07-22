@@ -139,7 +139,11 @@ describe('ImageStateManager pipe syntax integration', () => {
       getMode: () => 'source',
       editor: {
         getValue: vi.fn(() => ''),
-        cm: { state: { field: vi.fn(() => true) } }
+        cm: {
+          state: { field: vi.fn(() => true), doc: { toString: () => '' } },
+          dispatch: vi.fn(),
+          requestMeasure: vi.fn((request: any) => request.write(request.read()))
+        }
       }
     };
     const app = {
@@ -151,12 +155,12 @@ describe('ImageStateManager pipe syntax integration', () => {
     };
     const manager = makeManager(app);
     const reading = vi.spyOn(manager, 'processReadingModeImage').mockImplementation(() => undefined);
-    const editing = vi.spyOn(manager, 'processImage').mockImplementation(() => undefined);
+    const editing = vi.spyOn(manager as any, 'applyImageResolution');
 
     manager.refreshAllImages();
 
     expect(reading).toHaveBeenCalledWith(firstImage);
-    expect(editing).toHaveBeenCalledWith(secondImage, expect.any(Object));
+    expect(editing).toHaveBeenCalledWith(secondImage, { status: 'absent' });
   });
 
   it('clears stale layout in Source Mode when Live Preview is not explicitly enabled', () => {
@@ -283,6 +287,31 @@ describe('ImageStateManager pipe syntax integration', () => {
     });
   });
 
+  it('does not rewrite Reading Mode source ownership attributes when unchanged', async () => {
+    const manager = makeManager();
+    const img = document.createElement('img') as HTMLImageElement;
+    img.setAttribute('alt', 'Caption|center|300');
+    const [descriptor] = getImageSourceDescriptors(
+      '![[https://cdn.example.com/photo.webp|Caption|center|300]]'
+    );
+    const context = { linkText: descriptor.source, descriptor };
+
+    manager.processReadingModeImage(img, context);
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver(records => mutations.push(...records));
+    observer.observe(img, { attributes: true });
+
+    manager.processReadingModeImage(img, context);
+    await Promise.resolve();
+    observer.disconnect();
+
+    expect(img.getAttribute('data-image-assistant-source-key'))
+      .toBe(getImageSourceKey(descriptor));
+    expect(img.getAttribute('data-image-assistant-layout-key'))
+      .toBe(getImageLayoutKey(descriptor));
+    expect(mutations).toHaveLength(0);
+  });
+
   it('releases a stale source binding and falls back to the current DOM alt', () => {
     const manager = makeManager();
     const img = document.createElement('img') as HTMLImageElement;
@@ -392,13 +421,20 @@ describe('ImageStateManager pipe syntax integration', () => {
         height: 30, x: 100 + offset, y: 100, toJSON: () => ({})
       } as DOMRect;
     });
+    let sourceKeyDuringMeasureRead: string | null | undefined;
     const editor = {
       getValue: vi.fn(() => source),
       getLine: vi.fn(() => source),
       lineCount: vi.fn(() => 1),
       cm: {
-        state: { field: vi.fn(() => true) },
-        posAtDOM: vi.fn(() => source.length)
+        state: { field: vi.fn(() => true), doc: { toString: () => source } },
+        posAtDOM: vi.fn(() => source.length),
+        dispatch: vi.fn(),
+        requestMeasure: vi.fn((request: any) => {
+          const measurement = request.read();
+          sourceKeyDuringMeasureRead = img.getAttribute('data-image-assistant-source-key');
+          request.write(measurement);
+        })
       }
     };
     const file = { path: 'notes/gfl.md' };
@@ -424,6 +460,8 @@ describe('ImageStateManager pipe syntax integration', () => {
     (coordinator as any).flush();
 
     expect(img.style.width).toBe('800px');
+    expect(sourceKeyDuringMeasureRead).toBeNull();
+    expect(editor.cm.requestMeasure).toHaveBeenCalledOnce();
     expect(img.getAttribute('data-image-assistant-align')).toBe('center');
     expect(img.getAttribute('data-image-assistant-source-key')).toContain('https://example.com/gfl?id=1');
     expect(caption.getAttribute('data-image-assistant-caption-positioned')).toBe('true');
@@ -444,7 +482,11 @@ describe('ImageStateManager pipe syntax integration', () => {
       getMode: () => 'source',
       editor: {
         getValue: vi.fn(() => ''),
-        cm: { state: { field: vi.fn(() => true) } }
+        cm: {
+          state: { field: vi.fn(() => true), doc: { toString: () => '' } },
+          dispatch: vi.fn(),
+          requestMeasure: vi.fn((request: any) => request.write(request.read()))
+        }
       }
     });
     const firstView = makeView(firstContent);
@@ -466,15 +508,14 @@ describe('ImageStateManager pipe syntax integration', () => {
     } as any;
     const manager = new ImageStateManager({ workspace } as any, plugin);
     manager.initialize({ cleanup: vi.fn() } as any, null, { removeImage: vi.fn() } as any);
-    const processImage = vi.spyOn(manager, 'processImage').mockImplementation(() => undefined);
+    const applyImageResolution = vi.spyOn(manager as any, 'applyImageResolution')
+      .mockImplementation(() => undefined);
 
     manager.start();
     leaves = [{ view: firstView }, { view: secondView }];
     events.get('layout-change')?.();
-    await Promise.resolve();
-
-    expect(processImage).toHaveBeenCalledOnce();
-    expect(processImage).toHaveBeenCalledWith(secondImage, expect.any(Object));
+    expect(applyImageResolution).toHaveBeenCalledOnce();
+    expect(applyImageResolution).toHaveBeenCalledWith(secondImage, { status: 'absent' });
     expect((manager as any).observers.size).toBe(2);
 
     manager.onunload();
@@ -554,7 +595,11 @@ describe('ImageStateManager pipe syntax integration', () => {
       getMode: () => 'source',
       editor: {
         getValue: vi.fn(() => ''),
-        cm: { state: { field: vi.fn(() => true) } }
+        cm: {
+          state: { field: vi.fn(() => true), doc: { toString: () => '' } },
+          dispatch: vi.fn(),
+          requestMeasure: vi.fn((request: any) => request.write(request.read()))
+        }
       }
     });
     const firstView = makeView(firstContent);
@@ -572,14 +617,15 @@ describe('ImageStateManager pipe syntax integration', () => {
     const manager = new ImageStateManager({ workspace } as any, plugin);
     const alignment = { cleanup: vi.fn() } as any;
     manager.initialize(alignment, null, { removeImage: vi.fn() } as any);
-    const processImage = vi.spyOn(manager, 'processImage').mockImplementation(() => undefined);
+    const applyImageResolution = vi.spyOn(manager as any, 'applyImageResolution')
+      .mockImplementation(() => undefined);
 
     manager.start();
     expect((manager as any).observers.size).toBe(2);
     firstContent.appendChild(document.createElement('img'));
     secondContent.appendChild(document.createElement('img'));
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(processImage).toHaveBeenCalledTimes(2);
+    expect(applyImageResolution).toHaveBeenCalledTimes(2);
 
     manager.onunload();
     expect((manager as any).observers.size).toBe(0);

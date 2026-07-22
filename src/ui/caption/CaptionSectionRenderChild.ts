@@ -7,6 +7,7 @@ import { isElementNode, isHtmlImageElement } from './CaptionDomUtils';
 export class CaptionSectionRenderChild extends MarkdownRenderChild {
     private observer: MutationObserver | null = null;
     private scheduled = false;
+    private cancelScheduledProcess: (() => void) | null = null;
     private unloaded = false;
     private readonly processedSignatures = new WeakMap<HTMLImageElement, string>();
     private readonly knownImages = new Set<HTMLImageElement>();
@@ -23,7 +24,9 @@ export class CaptionSectionRenderChild extends MarkdownRenderChild {
     onload(): void {
         this.unloaded = false;
         this.processImages();
-        this.observer = new MutationObserver(records => {
+        const Observer = this.containerEl.ownerDocument.defaultView?.MutationObserver
+            ?? MutationObserver;
+        this.observer = new Observer(records => {
             if (!records.some(record => this.hasRelevantChange(record))) return;
             this.scheduleProcess();
         });
@@ -37,6 +40,9 @@ export class CaptionSectionRenderChild extends MarkdownRenderChild {
 
     onunload(): void {
         this.unloaded = true;
+        this.cancelScheduledProcess?.();
+        this.cancelScheduledProcess = null;
+        this.scheduled = false;
         this.observer?.disconnect();
         this.observer = null;
         for (const image of this.knownImages) this.releaseImage(image);
@@ -61,11 +67,20 @@ export class CaptionSectionRenderChild extends MarkdownRenderChild {
     private scheduleProcess(): void {
         if (this.scheduled) return;
         this.scheduled = true;
-        queueMicrotask(() => {
+        const run = () => {
+            this.cancelScheduledProcess = null;
             this.scheduled = false;
             if (this.unloaded) return;
             this.processImages();
-        });
+        };
+        const ownerWindow = this.containerEl.ownerDocument.defaultView;
+        if (ownerWindow?.requestAnimationFrame) {
+            const frame = ownerWindow.requestAnimationFrame(run);
+            this.cancelScheduledProcess = () => ownerWindow.cancelAnimationFrame(frame);
+            return;
+        }
+        const timer = setTimeout(run, 16);
+        this.cancelScheduledProcess = () => clearTimeout(timer);
     }
 
     private processImages(): void {
