@@ -265,6 +265,7 @@ export default {
     "LABEL_PREPEND_CURRENT_DIR": "Prepend current directory",
     "LABEL_PREPEND_CURRENT_DIR_DESC": "Use ./ for files in the current directory or its subfolders. Parent paths keep their ../ prefix.",
     "LABEL_RESIZE_UNITS": "Units",
+    "LABEL_RESIZE_UNITS_DESC": "Pixels are written directly to the link (500 → |500); percentages are calculated from the original image size (50 → 50% of the original).",
     "OPTION_PIXELS": "Pixels",
     "OPTION_PERCENTAGE": "Percentage",
     "LABEL_EXAMPLES": "Examples",

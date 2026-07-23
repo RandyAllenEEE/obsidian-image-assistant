@@ -130,6 +130,44 @@ describe("LocalProcessingSection", () => {
         expect(plugin.saveSettings).toHaveBeenCalled();
     });
 
+    it("makes insertion-size units explicit and refreshes labels when they change", async () => {
+        const plugin = makePlugin();
+        const resize = plugin.settings.localProcessing.embedResize;
+        resize.resizeDimension = "width";
+        resize.width = 500;
+        resize.resizeUnits = "percentage";
+        const refreshDisplay = vi.fn();
+        const renderResize = () => {
+            const container = document.createElement("div");
+            renderLocalProcessingSection({
+                plugin,
+                containerEl: container,
+                refreshDisplay,
+                activeTab: "resize",
+                setActiveTab: vi.fn()
+            });
+            return container;
+        };
+
+        let container = renderResize();
+        expect(container.textContent).toContain("Width (%)");
+        expect(container.textContent).toContain("500 → |500");
+        const unitSelect = Array.from(container.querySelectorAll<HTMLSelectElement>("select"))
+            .find(select => Array.from(select.options).some(option => option.value === "percentage"))!;
+        unitSelect.value = "pixels";
+        unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
+
+        await vi.waitFor(() => expect(refreshDisplay).toHaveBeenCalledOnce());
+        expect(resize.resizeUnits).toBe("pixels");
+        container = renderResize();
+        expect(container.textContent).toContain("Width (px)");
+
+        resize.resizeDimension = "original-width";
+        container = renderResize();
+        expect(container.textContent).not.toContain("Units");
+        expect(container.textContent).not.toContain("Scale mode");
+    });
+
     it("shows the current-directory prefix only for relative paths and preserves its value", async () => {
         const plugin = makePlugin();
         plugin.settings.localProcessing.link.pathFormat = "shortest";

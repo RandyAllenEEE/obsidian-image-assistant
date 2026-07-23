@@ -40,6 +40,7 @@
 - Added CodeMirror-mapped async ranges so edits before a loading placeholder or uploaded URL no longer detach the eventual replacement; user edits inside a managed range are preserved.
 - Made editor mutations transactional with stale-range validation, owner-view saves, conditional rollback, rollback persistence, and explicit uncertain outcomes.
 - Unified single-sided dimensions as `|W` and `|xH`, clearing stale opposite dimensions and preserving the image's intrinsic aspect ratio.
+- Made insertion-size units explicit and conditional in settings, with `px/%` field labels and immediate unit refresh so a fixed width such as 500 cannot be mistaken for 500%.
 - Made interactive resize commit once at drag or wheel completion while preserving captions, titles, alignment, wrapping, empty pipes, and existing PipeSyntax ordering.
 - Stabilized Live Preview image and Caption binding across side-panel movement, view changes, duplicate URLs, tabs, lists, callouts, `ad-*` Admonitions, Minimal theme logical margins, and popouts.
 

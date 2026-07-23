@@ -478,6 +478,11 @@ function renderLink(container: HTMLElement, context: RenderContext): void {
 
 function renderEmbedResize(container: HTMLElement, context: RenderContext): void {
     const resize = context.plugin.settings.localProcessing.embedResize;
+    const hasConfigurableSize = ![
+        "none",
+        "original-width",
+        "original-height"
+    ].includes(resize.resizeDimension);
 
     new Setting(container)
         .setName(t("SETTING_EMBED_SIZE"))
@@ -501,63 +506,70 @@ function renderEmbedResize(container: HTMLElement, context: RenderContext): void
                 });
         });
 
+    if (hasConfigurableSize) {
+        new Setting(container)
+            .setName(t("LABEL_RESIZE_UNITS"))
+            .setDesc(t("LABEL_RESIZE_UNITS_DESC"))
+            .addDropdown(dropdown => {
+                dropdown
+                    .addOption("pixels", t("OPTION_PIXELS"))
+                    .addOption("percentage", t("OPTION_PERCENTAGE"))
+                    .setValue(resize.resizeUnits)
+                    .onChange(async value => {
+                        resize.resizeUnits = value as ResizeUnits;
+                        await context.plugin.saveSettings();
+                        context.refreshDisplay();
+                    });
+            });
+    }
+
+    const unitSuffix = resize.resizeUnits === "percentage" ? "%" : "px";
     if (["width", "both"].includes(resize.resizeDimension)) {
-        addNumberSetting(container, t("LABEL_WIDTH"), resize.width, async value => {
+        addNumberSetting(container, `${t("LABEL_WIDTH")} (${unitSuffix})`, resize.width, async value => {
             resize.width = value;
             await context.plugin.saveSettings();
         });
     }
     if (["height", "both"].includes(resize.resizeDimension)) {
-        addNumberSetting(container, t("LABEL_HEIGHT"), resize.height, async value => {
+        addNumberSetting(container, `${t("LABEL_HEIGHT")} (${unitSuffix})`, resize.height, async value => {
             resize.height = value;
             await context.plugin.saveSettings();
         });
     }
     if (resize.resizeDimension === "longest-edge") {
-        addNumberSetting(container, t("MODAL_DESIRED_LONG"), resize.longestEdge, async value => {
+        addNumberSetting(container, `${t("MODAL_DESIRED_LONG")} (${unitSuffix})`, resize.longestEdge, async value => {
             resize.longestEdge = value;
             await context.plugin.saveSettings();
         });
     }
     if (resize.resizeDimension === "shortest-edge") {
-        addNumberSetting(container, t("MODAL_DESIRED_SHORT"), resize.shortestEdge, async value => {
+        addNumberSetting(container, `${t("MODAL_DESIRED_SHORT")} (${unitSuffix})`, resize.shortestEdge, async value => {
             resize.shortestEdge = value;
             await context.plugin.saveSettings();
         });
     }
     if (resize.resizeDimension === "editor-max-width") {
-        addNumberSetting(container, t("SETTING_EDITOR_MAX_WIDTH_VALUE"), resize.editorMaxWidthValue, async value => {
+        addNumberSetting(container, `${t("SETTING_EDITOR_MAX_WIDTH_VALUE")} (${unitSuffix})`, resize.editorMaxWidthValue, async value => {
             resize.editorMaxWidthValue = value;
             await context.plugin.saveSettings();
         });
     }
 
-    new Setting(container)
-        .setName(t("MODAL_LABEL_SCALE_MODE"))
-        .addDropdown(dropdown => {
-            dropdown
-                .addOption("auto", t("OPTION_AUTO"))
-                .addOption("reduce", t("OPTION_REDUCE"))
-                .addOption("enlarge", t("OPTION_ENLARGE"))
-                .setValue(resize.resizeScaleMode)
-                .onChange(async value => {
-                    resize.resizeScaleMode = value as ResizeScaleMode;
-                    await context.plugin.saveSettings();
-                });
-        });
-
-    new Setting(container)
-        .setName(t("LABEL_RESIZE_UNITS"))
-        .addDropdown(dropdown => {
-            dropdown
-                .addOption("pixels", t("OPTION_PIXELS"))
-                .addOption("percentage", t("OPTION_PERCENTAGE"))
-                .setValue(resize.resizeUnits)
-                .onChange(async value => {
-                    resize.resizeUnits = value as ResizeUnits;
-                    await context.plugin.saveSettings();
-                });
-        });
+    if (hasConfigurableSize) {
+        new Setting(container)
+            .setName(t("MODAL_LABEL_SCALE_MODE"))
+            .addDropdown(dropdown => {
+                dropdown
+                    .addOption("auto", t("OPTION_AUTO"))
+                    .addOption("reduce", t("OPTION_REDUCE"))
+                    .addOption("enlarge", t("OPTION_ENLARGE"))
+                    .setValue(resize.resizeScaleMode)
+                    .onChange(async value => {
+                        resize.resizeScaleMode = value as ResizeScaleMode;
+                        await context.plugin.saveSettings();
+                    });
+            });
+    }
 
 }
 

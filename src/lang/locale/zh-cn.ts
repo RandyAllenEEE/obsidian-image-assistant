@@ -265,6 +265,7 @@ export default {
     "LABEL_PREPEND_CURRENT_DIR": "添加当前目录前缀",
     "LABEL_PREPEND_CURRENT_DIR_DESC": "当前目录及其子目录使用 ./ 前缀；指向上级目录的 ../ 路径保持不变。",
     "LABEL_RESIZE_UNITS": "单位",
+    "LABEL_RESIZE_UNITS_DESC": "像素值会直接写入链接（500 → |500）；百分比会按原图尺寸换算（50 → 原尺寸的 50%）。",
     "OPTION_PIXELS": "像素",
     "OPTION_PERCENTAGE": "百分比",
     "LABEL_EXAMPLES": "示例",
