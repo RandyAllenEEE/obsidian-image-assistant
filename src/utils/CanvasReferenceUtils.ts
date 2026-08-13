@@ -80,22 +80,6 @@ type CanvasReferenceMutation =
     | { source: "file"; oldFile: TFile; target: "remove" }
     | { source: "url"; oldUrl: string; target: "remove" };
 
-export async function getCanvasFileReferences(
-    app: App,
-    targetFile: TFile,
-    options: CanvasReferenceScanOptions = {}
-): Promise<CanvasFileReference[]> {
-    return (await getCanvasFileReferenceIndex(app, [targetFile], options)).get(targetFile.path) ?? [];
-}
-
-export async function getCanvasFileReferenceIndex(
-    app: App,
-    targetFiles: TFile[],
-    options: CanvasReferenceScanOptions = {}
-): Promise<Map<string, CanvasFileReference[]>> {
-    return (await getCanvasFileReferenceIndexDetailed(app, targetFiles, options)).references;
-}
-
 export async function getCanvasFileReferenceIndexDetailed(
     app: App,
     targetFiles: TFile[],
@@ -488,18 +472,6 @@ function replaceNativeCanvasNode(
     return node.type !== previousType
         || node.file !== previousFile
         || node.url !== previousUrl;
-}
-
-export function isCanvasFileReference(app: App, canvasPath: string, targetPath: string, canvasFile: TFile): boolean {
-    const normalizedTargetPath = normalizePath(targetPath);
-    return resolveLocalReference(
-        new LocalImageTargetResolver(app),
-        canvasPath,
-        canvasFile,
-        new Map([[normalizedTargetPath, normalizedTargetPath]]),
-        new Set([getLocalReferenceBasename(normalizedTargetPath)]),
-        "native"
-    ).targetPath !== undefined;
 }
 
 export function findLineNumber(content: string, searchText: string): number {

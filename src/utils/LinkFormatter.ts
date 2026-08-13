@@ -9,6 +9,7 @@ import {
 import { loadImage } from "./ImageLoadUtils";
 import { LocalImageReferenceSerializer } from "./LocalImageReferenceSerializer";
 import { resolveEditorView } from "./EditorViewResolver";
+import { resolveCanonicalImageSize } from "./CanonicalImageSize";
 
 export interface EditorLayoutContext {
     readonly view?: MarkdownView | null;
@@ -62,7 +63,7 @@ export class LinkFormatter {
             target: file,
             sourceFile: activeFile ?? file,
             settings: { linkFormat, pathFormat, prependCurrentDir },
-            attributes: linkFormat === "wikilink" ? resizeParams.replace(/^\|/, "") : resizeParams
+            attributes: resizeParams.replace(/^\|/, "")
         });
     }
 
@@ -76,7 +77,6 @@ export class LinkFormatter {
         const fixedPixels = getFixedPixelResizePipe(embedResize);
         if (fixedPixels !== null) return fixedPixels;
 
-        let resizeParams = "";
         const originalDimensions = await this.getImageDimensions(file);
 
         if (!originalDimensions) {
@@ -91,7 +91,9 @@ export class LinkFormatter {
         let longestEdge: number | undefined;
         let shortestEdge: number | undefined;
 
-        // 1. Calculate dimensions based on the configured embed resize mode.
+        // 1. Calculate the user's requested dimensions. Single-axis intents
+        // are serialized as an Obsidian-native width after intrinsic-ratio
+        // conversion; only an explicit width+height request emits WxH.
         switch (embedResize.resizeDimension) {
             case "width":
                 width = this.getDimensionValue(
@@ -119,13 +121,6 @@ export class LinkFormatter {
                         originalDimensions.height,
                         embedResize.resizeUnits
                     );
-                } else if (embedResize.customValue) {
-                    const dimensions = this.parseCustomDimensions(
-                        embedResize.customValue,
-                        originalDimensions,
-                        embedResize.resizeUnits
-                    );
-                    ({ width, height } = dimensions);
                 }
                 break;
             case "longest-edge":
@@ -208,24 +203,17 @@ export class LinkFormatter {
             );
         }
 
-        // 3. Build the canonical single- or double-axis PipeSyntax.
-        if (width !== undefined || height !== undefined) {
-            const roundedWidth = width !== undefined ? Math.round(width) : undefined;
-            const roundedHeight = height !== undefined ? Math.round(height) : undefined;
-            if (roundedWidth !== undefined && roundedHeight !== undefined) {
-                resizeParams = `|${roundedWidth}x${roundedHeight}`;
-            } else if (roundedWidth !== undefined) {
-                const preservesTrailingAxis = embedResize.resizeDimension === 'both'
-                    && /^\s*\d+(?:\.\d+)?%?x\s*$/.test(embedResize.customValue ?? '');
-                resizeParams = `|${roundedWidth}${preservesTrailingAxis ? 'x' : ''}`;
-            } else {
-                resizeParams = `|x${roundedHeight}`;
-            }
-        } else {
-            resizeParams = "";
-        }
-
-        return resizeParams;
+        // 3. Build canonical Obsidian PipeSyntax: W or WxH. A height-only
+        // target is represented by the proportional width, never by xH.
+        const size = resolveCanonicalImageSize({
+            width,
+            height,
+            intrinsic: originalDimensions
+        });
+        if (!size) return "";
+        return size.format === "WxH"
+            ? `|${size.width}x${size.height}`
+            : `|${size.width}`;
     }
 
     private getDimensionValue(configuredValue: number | undefined, originalDimension: number, resizeUnits: ResizeUnits): number | undefined {
@@ -234,25 +222,6 @@ export class LinkFormatter {
             return Math.round(originalDimension * configuredValue / 100);
         }
         return configuredValue;
-    }
-
-    private parseCustomDimensions(customValue: string, originalDimensions: { width: number, height: number }, resizeUnits: ResizeUnits): { width: number | undefined, height: number | undefined } {
-        const match = customValue.match(/(\d*(?:\.\d+)?)(%)?x(\d*(?:\.\d+)?)(%)?/); // Allow decimal percentages
-        if (!match) return { width: undefined, height: undefined };
-
-        let width = match[1] ? parseFloat(match[1]) : undefined;
-        let height = match[3] ? parseFloat(match[3]) : undefined;
-
-        if (resizeUnits === "percentage") {
-            if (width !== undefined) {
-                width = Math.round(originalDimensions.width * width / 100);
-            }
-            if (height !== undefined) {
-                height = Math.round(originalDimensions.height * height / 100);
-            }
-        }
-
-        return { width, height };
     }
 
     private applyScaleModeToDimension(currentDimension: number, originalDimension: number, scaleMode: ResizeScaleMode): number {

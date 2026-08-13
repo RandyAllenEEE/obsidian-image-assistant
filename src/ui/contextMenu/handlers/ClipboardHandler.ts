@@ -7,6 +7,10 @@ import type { ImageContextMenuContext } from "../types";
 export class ClipboardHandler {
     async copyImage(context: ImageContextMenuContext): Promise<void> {
         const target = context.image;
+        if (!target) {
+            new Notice(t("MSG_COPY_FAIL"));
+            return;
+        }
         const ownerDocument = context.ownerDocument;
         const image = ownerDocument.createElement("img");
         image.crossOrigin = "anonymous";
@@ -28,6 +32,10 @@ export class ClipboardHandler {
 
     async copyImageAsBase64(context: ImageContextMenuContext): Promise<void> {
         const target = context.image;
+        if (!target) {
+            new Notice(t("MSG_COPY_BASE64_FAIL"));
+            return;
+        }
         const ownerDocument = context.ownerDocument;
         const image = ownerDocument.createElement("img");
         image.crossOrigin = "anonymous";

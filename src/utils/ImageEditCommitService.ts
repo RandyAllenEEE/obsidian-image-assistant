@@ -25,7 +25,10 @@ export interface ImageEditCommitResult {
 export class ImageEditCommitService {
     private static readonly writeLock = new AsyncLock();
 
-    constructor(private readonly app: App) { }
+    constructor(
+        private readonly app: App,
+        private readonly isProtectedDrawing: (file: TFile) => boolean = () => false
+    ) { }
 
     async commit(request: ImageEditCommitRequest): Promise<ImageEditCommitResult> {
         return ImageEditCommitService.writeLock.acquire(
@@ -37,6 +40,9 @@ export class ImageEditCommitService {
     private async commitUnlocked(
         request: ImageEditCommitRequest
     ): Promise<ImageEditCommitResult> {
+        if (this.isProtectedDrawing(request.file)) {
+            return failure("Managed drawing files must be edited through their drawing editor");
+        }
         if (request.data.byteLength === 0) {
             return failure("Image output was empty");
         }

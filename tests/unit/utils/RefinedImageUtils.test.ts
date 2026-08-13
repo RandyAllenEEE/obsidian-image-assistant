@@ -142,6 +142,51 @@ describe('RefinedImageUtils', () => {
             .toBe('![Second](https://example.com/image?id=1)');
     });
 
+    it('uses the safe unique URL fallback when a direct CodeMirror block maps to an unrelated line', () => {
+        const content = [
+            'unrelated text',
+            '![Right](https://example.com/diagram.png)'
+        ];
+        (mockEditor.getLine as any).mockImplementation((n: number) => content[n]);
+        (mockEditor.lineCount as any).mockReturnValue(content.length);
+        const view = document.createElement('div');
+        view.className = 'markdown-source-view';
+        const cmContent = view.appendChild(document.createElement('div'));
+        cmContent.className = 'cm-content';
+        const image = cmContent.appendChild(document.createElement('img'));
+        image.src = 'https://example.com/diagram.png';
+        (mockEditor as any).cm = { posAtDOM: vi.fn(() => 0) };
+
+        expect(utils.getImageLinkMatchFromEditor(image, mockEditor, view)?.linkText)
+            .toBe('![Right](https://example.com/diagram.png)');
+        expect((mockEditor as any).cm.posAtDOM).toHaveBeenCalledWith(image, 0);
+    });
+
+    it('uses the direct CodeMirror block position to distinguish repeated remote widgets', () => {
+        const content = [
+            '![First|left](https://example.com/diagram.png)',
+            '![Second|right](https://example.com/diagram.png)'
+        ];
+        (mockEditor.getLine as any).mockImplementation((n: number) => content[n]);
+        (mockEditor.lineCount as any).mockReturnValue(content.length);
+
+        const view = document.createElement('div');
+        view.className = 'markdown-source-view';
+        const cmContent = view.appendChild(document.createElement('div'));
+        cmContent.className = 'cm-content';
+        const image = cmContent.appendChild(document.createElement('img'));
+        image.src = 'https://example.com/diagram.png';
+        (mockEditor as any).cm = {
+            posAtDOM: vi.fn((node: Node) => {
+                expect(node).toBe(image);
+                return content[0].length + 2;
+            })
+        };
+
+        expect(utils.getImageLinkMatchFromEditor(image, mockEditor, view)?.linkText)
+            .toBe('![Second|right](https://example.com/diagram.png)');
+    });
+
     it('refuses an ambiguous repeated embed without a source offset', () => {
         const content = [
             '![[assets/pic.png|First]]',

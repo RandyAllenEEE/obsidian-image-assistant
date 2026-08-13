@@ -194,4 +194,62 @@ describe("ImageContextMenuPolicy", () => {
                 .toEqual(["copy", "copy-base64"]);
         }
     });
+
+    it("exposes safe drawing actions by role without enabling pixel mutation", () => {
+        const source = fakeTFile({
+            path: "assets/Flow.excalidraw.md",
+            extension: "md"
+        });
+        const preview = fakeTFile({
+            path: "assets/Flow.excalidraw.svg",
+            extension: "svg"
+        });
+        const inspect = (file: any) => ({
+            providerId: "excalidraw",
+            file,
+            sourceFile: source,
+            role: file === source ? "source" : "generated-preview",
+            compoundSuffix: file === source
+                ? ".excalidraw.md"
+                : ".excalidraw.svg",
+            protectedFromImageMutation: true
+        }) as any;
+        const drawingPolicy = new ImageContextMenuPolicy(
+            undefined,
+            () => true,
+            () => true,
+            inspect
+        );
+        const sourceCapabilities = drawingPolicy.getCapabilities(context({
+            sourceKind: "local",
+            resolution: "resolved",
+            viewContext: {},
+            localFile: source
+        }));
+        expect(sourceCapabilities).toMatchObject({
+            properties: true,
+            copy: true,
+            copyBase64: true,
+            process: false,
+            crop: false,
+            annotate: false,
+            upload: false,
+            delete: true
+        });
+
+        const previewCapabilities = drawingPolicy.getCapabilities(context({
+            sourceKind: "local",
+            resolution: "resolved",
+            viewContext: {},
+            localFile: preview
+        }));
+        expect(previewCapabilities).toMatchObject({
+            properties: true,
+            upload: true,
+            process: false,
+            crop: false,
+            annotate: false,
+            delete: true
+        });
+    });
 });

@@ -23,6 +23,7 @@ describe('AIModelConverter', () => {
         } as any;
 
         mockSettings = {
+            enabled: true,
             latexProvider: 'LLM',
             markdownProvider: 'LLM',
             simpleTex: {

@@ -575,4 +575,62 @@ describe("DeleteHandler vault-wide workflow", () => {
             .toHaveBeenCalledWith(new Set(["notes/current.md"]));
         expect(fixture.app.fileManager.trashFile).not.toHaveBeenCalled();
     });
+
+    it("retains referenced Excalidraw previews after deleting their source", async () => {
+        const fixture = createFixture({
+            noteContent: "![[attachments/Flow.excalidraw.md]]",
+            imagePath: "attachments/Flow.excalidraw.md"
+        });
+        const preview = await fixture.app.vault.create(
+            "attachments/Flow.excalidraw.svg",
+            "<svg/>"
+        );
+        fixture.plugin.drawingModule = {
+            inspectFile: vi.fn((file: any) => file === fixture.image ? ({
+                providerId: "excalidraw",
+                file,
+                sourceFile: file,
+                role: "source",
+                compoundSuffix: ".excalidraw.md",
+                protectedFromImageMutation: true
+            }) : null)
+        };
+        const coordinator = (fixture.handler as any).coordinator;
+        vi.spyOn(coordinator, "executeDecision").mockResolvedValue({
+            complete: true,
+            changed: 0,
+            found: 0,
+            changedFiles: [],
+            failedFiles: [],
+            uncertainFiles: [],
+            sourceDeleted: true
+        });
+        const deleteSource = vi.spyOn(coordinator, "deleteSource")
+            .mockResolvedValue({
+                complete: false,
+                changed: 0,
+                found: 1,
+                failedFiles: [],
+                uncertainFiles: [],
+                sourceDeleted: false
+            });
+
+        await (fixture.handler as any).handleDecision(
+            { kind: "local", file: fixture.image },
+            fixture.context.viewContext,
+            { source: { kind: "local", file: fixture.image } } as any,
+            {
+                action: "delete-source-only",
+                scope: "none",
+                deleteSource: true
+            }
+        );
+
+        expect(deleteSource).toHaveBeenCalledWith(
+            { kind: "local", file: preview },
+            undefined,
+            expect.any(AbortSignal)
+        );
+        expect(fixture.app.vault.getAbstractFileByPath(preview.path)).toBe(preview);
+    });
 });

@@ -7,15 +7,31 @@ function makeUIState(): SettingsUIState {
   return {
     pasteHandlingSectionCollapsed: false,
     imageAlignmentSectionCollapsed: false,
-    imageDragResizeSectionCollapsed: false,
     imageCaptionSectionCollapsed: false,
     cleanerSectionCollapsed: false,
     ocrSectionCollapsed: false,
+    drawingSectionCollapsed: false,
+    nextAiSectionCollapsed: false,
     otherSectionCollapsed: false
   };
 }
 
 describe('CleanerSettingsSection', () => {
+  it('hides child settings when its master toggle is off', () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.cleanerSettings.enabled = false;
+    const plugin = {
+      settings,
+      saveSettings: vi.fn().mockResolvedValue(undefined)
+    } as any;
+    const container = document.createElement('div');
+
+    renderCleanerSettingsSection(container, plugin, makeUIState(), vi.fn());
+
+    expect(container.textContent).not.toContain('File types');
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
+  });
+
   it('exposes file types and the custom trash path and saves changes', async () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     settings.cleanerSettings.trashMode = 'custom';
@@ -91,7 +107,7 @@ describe('CleanerSettingsSection', () => {
     } as any;
     const container = document.createElement('div');
     renderCleanerSettingsSection(container, plugin, makeUIState(), vi.fn());
-    const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    const toggle = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1]!;
 
     toggle.checked = false;
     toggle.dispatchEvent(new Event('change', { bubbles: true }));

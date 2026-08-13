@@ -16,6 +16,11 @@ export type { ResizeScaleMode, ResizeUnits } from "./NonDestructiveResizeSetting
 
 // Paste handling mode types
 export type PasteHandlingMode = "local" | "cloud" | "disabled";
+export type DrawingEngineId = "drawio" | "excalidraw";
+export type DrawingProvider = "disabled" | DrawingEngineId;
+export type ExcalidrawEmbedMode = "source" | "auto-export-preview";
+export type DrawioTheme = "kennedy" | "atlas" | "dark" | "minimal" | "sketch" | "simple";
+export type VisualValidationMode = "disabled" | "user-model" | "next-ai-server";
 export type CaptionWidthMode = "auto" | "container";
 export type CaptionInlinePolicy = "all" | "standalone-only";
 export type CaptionAlignment = "left" | "center" | "right";
@@ -66,12 +71,53 @@ export type EnlargeReduce = "Always" | "Reduce" | "Enlarge" | "Auto";
 
 export interface SettingsUIState {
     pasteHandlingSectionCollapsed: boolean;
+    drawingSectionCollapsed: boolean;
+    nextAiSectionCollapsed: boolean;
     imageAlignmentSectionCollapsed: boolean;
-    imageDragResizeSectionCollapsed: boolean;
     imageCaptionSectionCollapsed: boolean;
     cleanerSectionCollapsed: boolean;
     ocrSectionCollapsed: boolean;
     otherSectionCollapsed: boolean;
+}
+
+export interface NextAiDrawingSettings {
+    enabled: boolean;
+    serviceUrl: string;
+    accessCodeSecretId: string;
+    apiBaseUrl: string;
+    apiKeySecretId: string;
+    model: string;
+    customSystemMessage: string;
+    minimalStyle: boolean;
+    visualValidationMode: VisualValidationMode;
+    allowInsecureRemoteHttp: boolean;
+    sendShortcut: "mod-enter" | "enter";
+    promptTemplates: NextAiPromptTemplate[];
+}
+
+export interface NextAiPromptTemplate {
+    id: string;
+    title: string;
+    description: string;
+    body: string;
+    pinned: boolean;
+    createdAt: number;
+    updatedAt: number;
+    useCount: number;
+}
+
+export interface DrawingSettings {
+    provider: DrawingProvider;
+    drawio: {
+        embedUrl: string;
+        theme: DrawioTheme;
+        followObsidianTheme: boolean;
+        nextAi: NextAiDrawingSettings;
+    };
+    excalidraw: {
+        manageCreatedFileLocation: boolean;
+        embedMode: ExcalidrawEmbedMode;
+    };
 }
 
 // Re-export OCRSettings from its source (already imported and exported above)
@@ -181,6 +227,7 @@ export interface OperationDefaults {
 export interface ImageAssistantSettings {
     localProcessing: LocalProcessingSettings;
     operationDefaults: OperationDefaults;
+    drawing: DrawingSettings;
 
     global: {
         enableContextMenu: boolean;
@@ -191,6 +238,7 @@ export interface ImageAssistantSettings {
 
     ocrSettings: OCRSettings;
     cleanerSettings: {
+        enabled: boolean;
         enableDeleteContextMenu: boolean;
         basePath: string;
         trashMode: 'follow-obsidian' | 'system' | 'obsidian' | 'custom';
@@ -206,16 +254,6 @@ export interface ImageAssistantSettings {
         enableEditModeWrap: boolean;
     };
 
-    interactiveResize: {
-        enabled: boolean;
-        dragEnabled: boolean;
-        scrollEnabled: boolean;
-        aspectRatioLocked: boolean;
-        readingModeEnabled: boolean;
-        sensitivity: number;
-        scrollModifier: "None" | "Shift" | "Control" | "Alt" | "Meta";
-    };
-
     pasteHandling: {
         mode: PasteHandlingMode;
         cursorLocation: "front" | "back";
@@ -223,7 +261,6 @@ export interface ImageAssistantSettings {
         neverProcessFilenames: string;
     };
 
-    resizeCursorLocation: "front" | "back" | "below" | "none";
     annotationPresets: {
         drawing: ToolPreset[];
         arrow: ToolPreset[];

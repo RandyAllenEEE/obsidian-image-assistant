@@ -5,11 +5,13 @@ import type { FileContextMenuContext } from "./types";
 export class FileContextMenuPolicy {
     constructor(
         private readonly app: App,
-        private readonly supportedFormats: SupportedImageFormats
+        private readonly supportedFormats: SupportedImageFormats,
+        private readonly isDrawing: (file: TFile) => boolean = () => false
     ) {}
 
     resolve(target: TAbstractFile): FileContextMenuContext | null {
         if (target instanceof TFile) {
+            if (this.isDrawing(target)) return { kind: "drawing", file: target };
             if (this.supportedFormats.isSupported(undefined, target.name)) {
                 return { kind: "image", file: target };
             }

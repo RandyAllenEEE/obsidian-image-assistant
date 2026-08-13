@@ -22,8 +22,21 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     expect(plugin.settings.operationDefaults.batchLocal.convertTo).toBe(DEFAULT_SETTINGS.operationDefaults.batchLocal.convertTo);
     expect(plugin.settings.captions.enabled).toBe(DEFAULT_SETTINGS.captions.enabled);
     expect(plugin.settings.cleanerSettings).toMatchObject({
+      enabled: true,
       enableDeleteContextMenu: true,
       trashMode: 'follow-obsidian'
+    });
+    expect(plugin.settings.ocrSettings.enabled).toBe(true);
+    expect(plugin.settings.drawing).toMatchObject({
+      provider: 'disabled',
+      drawio: {
+        embedUrl: 'https://embed.diagrams.net/',
+        nextAi: { enabled: false }
+      },
+      excalidraw: {
+        manageCreatedFileLocation: true,
+        embedMode: 'source'
+      }
     });
 
     [
@@ -49,6 +62,43 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     ].forEach((key) => {
       expect((plugin.settings.captions as any)[key]).toBe((DEFAULT_SETTINGS.captions as any)[key]);
     });
+  });
+
+  it('migrates the former visual validation toggle to the explicit server mode', async () => {
+    const plugin = makePlugin();
+    vi.spyOn(plugin as any, 'loadData').mockResolvedValue({
+      drawing: {
+        drawio: {
+          nextAi: { visualValidationEnabled: true }
+        }
+      }
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.drawing.drawio.nextAi.visualValidationMode).toBe('next-ai-server');
+    expect((plugin.settings.drawing.drawio.nextAi as any).visualValidationEnabled).toBeUndefined();
+  });
+
+  it('prefers a saved validation mode over the legacy toggle and normalizes invalid modes', async () => {
+    const plugin = makePlugin();
+    vi.spyOn(plugin as any, 'loadData').mockResolvedValue({
+      drawing: {
+        drawio: {
+          nextAi: {
+            visualValidationEnabled: true,
+            visualValidationMode: 'user-model'
+          }
+        }
+      }
+    });
+
+    await plugin.loadSettings();
+    expect(plugin.settings.drawing.drawio.nextAi.visualValidationMode).toBe('user-model');
+
+    (plugin.settings.drawing.drawio.nextAi as any).visualValidationMode = 'unknown';
+    await plugin.saveSettings();
+    expect(plugin.settings.drawing.drawio.nextAi.visualValidationMode).toBe('disabled');
   });
 
   it('falls back to defaults when the settings file cannot be parsed', async () => {
@@ -107,6 +157,59 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     expect(plugin.settings.captions.maxLines).toBe(0);
     expect(plugin.settings.cleanerSettings.enableDeleteContextMenu).toBe(true);
     expect(plugin.settings.cleanerSettings.trashMode).toBe('follow-obsidian');
+    expect(plugin.settings.cleanerSettings.enabled).toBe(true);
+    expect(plugin.settings.ocrSettings.enabled).toBe(true);
+    expect(plugin.settings.drawing.provider).toBe('disabled');
+  });
+
+  it('normalizes drawing provider and Secret Storage references while retaining invalid URLs for correction', async () => {
+    const plugin = makePlugin();
+    vi.spyOn(plugin as any, 'loadData').mockResolvedValue({
+      drawing: {
+        provider: 'unknown-provider',
+        drawio: {
+          embedUrl: 'not a URL',
+          nextAi: {
+            enabled: true,
+            serviceUrl: 'also invalid',
+            accessCodeSecretId: ' invalid secret ',
+            apiKeySecretId: 'valid-secret-id',
+            sendShortcut: 'spacebar'
+          }
+        }
+      }
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.drawing.provider).toBe('disabled');
+    expect(plugin.settings.drawing.drawio.embedUrl).toBe('not a URL');
+    expect(plugin.settings.drawing.drawio.nextAi.serviceUrl).toBe('also invalid');
+    expect(plugin.settings.drawing.drawio.nextAi.enabled).toBe(true);
+    expect(plugin.settings.drawing.drawio.nextAi.accessCodeSecretId).toBe('');
+    expect(plugin.settings.drawing.drawio.nextAi.apiKeySecretId).toBe('valid-secret-id');
+    expect(plugin.settings.drawing.drawio.nextAi.sendShortcut).toBe('mod-enter');
+  });
+
+  it('accepts Excalidraw as the default creation engine and normalizes its embed mode', async () => {
+    const plugin = makePlugin();
+    vi.spyOn(plugin as any, 'loadData').mockResolvedValue({
+      drawing: {
+        provider: 'excalidraw',
+        excalidraw: { embedMode: 'auto-export-preview' }
+      }
+    });
+
+    await plugin.loadSettings();
+    expect(plugin.settings.drawing.provider).toBe('excalidraw');
+    expect(plugin.settings.drawing.excalidraw.embedMode).toBe('auto-export-preview');
+    expect(plugin.settings.drawing.excalidraw.manageCreatedFileLocation).toBe(true);
+
+    (plugin.settings.drawing.excalidraw as any).embedMode = 'invalid';
+    (plugin.settings.drawing.excalidraw as any).manageCreatedFileLocation = 'invalid';
+    await plugin.saveSettings();
+    expect(plugin.settings.drawing.excalidraw.embedMode).toBe('source');
+    expect(plugin.settings.drawing.excalidraw.manageCreatedFileLocation).toBe(true);
   });
 
   it('drops the retired hideFolders setting while retaining relative-prefix state', async () => {
@@ -136,7 +239,7 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     expect((saveData.mock.calls[0][0] as any).localProcessing.link.hideFolders).toBeUndefined();
   });
 
-  it('preserves optional destination and embed-resize values across reloads', async () => {
+  it('preserves supported optional destination and embed-resize values across reloads', async () => {
     const plugin = makePlugin();
     vi.spyOn(plugin as any, 'loadData').mockResolvedValue({
       localProcessing: {
@@ -150,8 +253,7 @@ describe('ImageAssistantSettings defaults and persistence', () => {
           height: 180,
           longestEdge: 640,
           shortestEdge: 240,
-          editorMaxWidthValue: 75,
-          customValue: '50x25'
+          editorMaxWidthValue: 75
         }
       }
     });
@@ -164,8 +266,7 @@ describe('ImageAssistantSettings defaults and persistence', () => {
       height: 180,
       longestEdge: 640,
       shortestEdge: 240,
-      editorMaxWidthValue: 75,
-      customValue: '50x25'
+      editorMaxWidthValue: 75
     });
   });
 
@@ -308,6 +409,24 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     expect(plugin.settings.captions.maxLines).toBe(5);
   });
 
+  it('preserves a valid cloud height-only intent for intrinsic-ratio conversion', async () => {
+    const plugin = makePlugin();
+    vi.spyOn(plugin as any, 'loadData').mockResolvedValue({
+      pasteHandling: {
+        cloud: {
+          imageSizeSource: 'settings',
+          imageSizeWidth: undefined,
+          imageSizeHeight: 300
+        }
+      }
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.pasteHandling.cloud.imageSizeWidth).toBeUndefined();
+    expect(plugin.settings.pasteHandling.cloud.imageSizeHeight).toBe(300);
+  });
+
   it('normalizes all runtime-sensitive settings before saving', async () => {
     const plugin = makePlugin();
     vi.spyOn(plugin as any, 'loadData').mockResolvedValue(undefined);
@@ -319,9 +438,7 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     settings.localProcessing.filename.conflictResolution = 'replace';
     settings.localProcessing.link.linkFormat = 'html';
     settings.localProcessing.embedResize.resizeDimension = 'diagonal';
-    settings.localProcessing.embedResize.customValue = { invalid: true };
     settings.ocrSettings.aiModel.maxTokens = -10;
-    settings.resizeCursorLocation = 'middle';
     settings.annotationPresets.drawing[0].blendMode = 'invalid';
     const saveDataSpy = vi.spyOn(plugin as any, 'saveData').mockResolvedValue(undefined);
 
@@ -333,9 +450,7 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     expect(settings.localProcessing.filename.conflictResolution).toBe(DEFAULT_SETTINGS.localProcessing.filename.conflictResolution);
     expect(settings.localProcessing.link.linkFormat).toBe(DEFAULT_SETTINGS.localProcessing.link.linkFormat);
     expect(settings.localProcessing.embedResize.resizeDimension).toBe(DEFAULT_SETTINGS.localProcessing.embedResize.resizeDimension);
-    expect(settings.localProcessing.embedResize.customValue).toBeUndefined();
     expect(settings.ocrSettings.aiModel.maxTokens).toBe(1);
-    expect(settings.resizeCursorLocation).toBe(DEFAULT_SETTINGS.resizeCursorLocation);
     expect(settings.annotationPresets.drawing[0].blendMode).toBe(DEFAULT_SETTINGS.annotationPresets.drawing[0].blendMode);
     expect(saveDataSpy).toHaveBeenCalledWith(settings);
   });
@@ -367,6 +482,24 @@ describe('ImageAssistantSettings defaults and persistence', () => {
     expect(settings.localProcessing.conversion.outputFormat).toBe('PNG');
     expect(settings.annotationPresets).toBeDefined();
     expect(settings.localProcessing.externalTools.ffmpegPreset).toBe(DEFAULT_SETTINGS.localProcessing.externalTools.ffmpegPreset);
+  });
+
+  it('drops removed interactive resize settings on load', async () => {
+    const plugin = makePlugin();
+    vi.spyOn(plugin as any, 'loadData').mockResolvedValue({
+      interactiveResize: {
+        enabled: true,
+        allowWheelResize: true,
+        scrollModifier: 'Alt',
+        sensitivity: 0.5
+      },
+      resizeCursorLocation: 'below'
+    });
+
+    await plugin.loadSettings();
+
+    expect((plugin.settings as any).interactiveResize).toBeUndefined();
+    expect((plugin.settings as any).resizeCursorLocation).toBeUndefined();
   });
 
   it('persists the current settings object through saveData', async () => {

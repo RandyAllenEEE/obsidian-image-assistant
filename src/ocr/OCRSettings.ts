@@ -5,6 +5,7 @@ export interface OCRProvider {
 
 // OCR 设置接口
 export interface OCRSettings {
+    enabled: boolean;
     latexProvider: "SimpleTex" | "Pix2Tex" | "Texify" | "LLM";
     markdownProvider: "Texify" | "LLM";
     simpleTex: {
@@ -37,6 +38,7 @@ export interface OCRSettings {
 
 // 默认 OCR 设置
 export const DEFAULT_OCR_SETTINGS: OCRSettings = {
+    enabled: true,
     latexProvider: "SimpleTex",
     markdownProvider: "Texify",
     simpleTex: {

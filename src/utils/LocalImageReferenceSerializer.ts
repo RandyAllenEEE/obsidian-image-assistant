@@ -1,9 +1,6 @@
 import { App, normalizePath, TFile } from "obsidian";
 import type { LocalLinkSettings } from "../settings/types";
-import {
-    LocalImageTargetResolver,
-    type LocalReferenceSyntax
-} from "./LocalImageTargetResolver";
+import { LocalImageTargetResolver } from "./LocalImageTargetResolver";
 import {
     getSharedVaultFileLookupService,
     type VaultFileLookupService
@@ -241,8 +238,4 @@ function getRelativeVaultPath(sourcePath: string, targetPath: string): string {
     const relative = [...parentSegments, ...to.slice(common)].join("/");
     if (!relative) throw new LocalImageReferenceSerializationError("Target path cannot equal source file path");
     return relative;
-}
-
-export function getReferenceSyntax(model: ImageReferenceSyntaxModel): LocalReferenceSyntax {
-    return model.syntax;
 }

@@ -8,6 +8,32 @@ import { DEFAULT_OCR_SETTINGS } from "../ocr/OCRSettings";
 export { DEFAULT_OCR_SETTINGS };
 
 export const DEFAULT_SETTINGS: ImageAssistantSettings = {
+    drawing: {
+        provider: "disabled",
+        drawio: {
+            embedUrl: "https://embed.diagrams.net/",
+            theme: "kennedy",
+            followObsidianTheme: true,
+            nextAi: {
+                enabled: false,
+                serviceUrl: "",
+                accessCodeSecretId: "",
+                apiBaseUrl: "https://api.openai.com/v1",
+                apiKeySecretId: "",
+                model: "",
+                customSystemMessage: "",
+                minimalStyle: false,
+                visualValidationMode: "disabled",
+                allowInsecureRemoteHttp: false,
+                sendShortcut: "mod-enter",
+                promptTemplates: []
+            }
+        },
+        excalidraw: {
+            manageCreatedFileLocation: true,
+            embedMode: "source"
+        }
+    },
     localProcessing: {
         destination: {
             type: "DEFAULT",
@@ -51,7 +77,6 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
             resizeDimension: "none",
             width: undefined,
             height: undefined,
-            customValue: undefined,
             longestEdge: undefined,
             shortestEdge: undefined,
             editorMaxWidthValue: undefined,
@@ -82,6 +107,7 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
 
     ocrSettings: DEFAULT_OCR_SETTINGS,
     cleanerSettings: {
+        enabled: true,
         enableDeleteContextMenu: true,
         basePath: 'attachments',
         trashMode: 'follow-obsidian',
@@ -116,16 +142,6 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
         enabled: true,
         default: 'center',
         enableEditModeWrap: false,
-    },
-
-    interactiveResize: {
-        enabled: true,
-        dragEnabled: true,
-        scrollEnabled: true,
-        aspectRatioLocked: false,
-        readingModeEnabled: false,
-        sensitivity: 0.1,
-        scrollModifier: "Shift",
     },
 
     pasteHandling: {
@@ -170,5 +186,4 @@ export const DEFAULT_SETTINGS: ImageAssistantSettings = {
             backgroundOpacity: 0.7
         }))
     },
-    resizeCursorLocation: "none",
 };

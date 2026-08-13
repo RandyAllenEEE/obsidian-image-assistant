@@ -1,8 +1,9 @@
 import * as obsidian from "obsidian";
-import { Setting, setIcon } from "obsidian";
+import { Setting } from "obsidian";
 import ImageConverterPlugin from "../main";
 import { t } from "../lang/helpers";
 import { SettingsUIState } from "./types";
+import { createCollapsibleSettingsSection } from "./components/CollapsibleSettingsSection";
 
 interface SecretInputComponent {
     setValue(value: string): void;
@@ -35,46 +36,26 @@ export function renderOCRSettingsSection(
     settingsUIState: SettingsUIState,
     refreshDisplay: () => void
 ): void {
-    const ocrSection = containerEl.createDiv({ cls: "ocr-settings-section" });
-    ocrSection.addClass("image-converter-settings-section");
-
-    const settingsContentWrapper = ocrSection.createDiv("settings-section-content");
-
     const SecretComponent = (obsidian as ObsidianWithSecrets).SecretComponent;
     const hasSecretStorage = Boolean((plugin.app as AppWithSecretStorage).secretStorage);
+    const { header: headerSetting, contentEl: settingsContentWrapper } =
+        createCollapsibleSettingsSection(containerEl, {
+            title: t("SETTING_OCR_SECTION"),
+            sectionClass: "ocr-settings-section",
+            isCollapsed: () => settingsUIState.ocrSectionCollapsed,
+            setCollapsed: collapsed => {
+                settingsUIState.ocrSectionCollapsed = collapsed;
+            }
+        });
+    headerSetting.addToggle(toggle => toggle
+        .setValue(plugin.settings.ocrSettings.enabled)
+        .onChange(async value => {
+            plugin.settings.ocrSettings.enabled = value;
+            await plugin.saveSettings();
+            refreshDisplay();
+        }));
 
-    // --- Collapsible Header ---
-    const headerSetting = new Setting(ocrSection)
-        .setName(t("SETTING_OCR_SECTION"))
-        .setHeading();
-
-    ocrSection.prepend(headerSetting.settingEl);
-    headerSetting.settingEl.addClass("settings-section-header");
-    headerSetting.settingEl.style.cursor = "pointer";
-
-    // Add Chevron Icon
-    const chevronContainer = headerSetting.nameEl.createSpan("settings-chevron-container");
-    const chevronIcon = chevronContainer.createDiv();
-    chevronContainer.style.marginRight = "8px";
-    headerSetting.nameEl.prepend(chevronContainer);
-
-    // Initial State & Toggle
-    const updateChevron = () => {
-        if (settingsUIState.ocrSectionCollapsed) {
-            setIcon(chevronIcon, "chevron-right");
-            settingsContentWrapper.style.display = "none";
-        } else {
-            setIcon(chevronIcon, "chevron-down");
-            settingsContentWrapper.style.display = "block";
-        }
-    };
-    updateChevron();
-
-    headerSetting.settingEl.onclick = (e) => {
-        if ((e.target as HTMLElement).tagName === 'A') return;
-        settingsUIState.ocrSectionCollapsed = !settingsUIState.ocrSectionCollapsed;
-        updateChevron();
-    };
+    if (!plugin.settings.ocrSettings.enabled) return;
 
 
     // ========== General Settings (Provider Selection) ==========

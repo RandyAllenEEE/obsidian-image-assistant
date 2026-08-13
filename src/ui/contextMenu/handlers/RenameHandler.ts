@@ -12,6 +12,10 @@ import {
     type PipeSyntaxData,
     type SizeData
 } from "../../../utils/PipeSyntaxParser";
+import {
+    resolveCanonicalImageSize,
+    resolveElementIntrinsicDimensions
+} from "../../../utils/CanonicalImageSize";
 import { normalizeVaultFolderPath } from "../../../utils/VaultPathUtils";
 import type {
     ImageContextMenuContext,
@@ -23,6 +27,8 @@ import {
     ImageRenameMoveCoordinator,
     type ImageRenameMoveResult
 } from "../../../utils/ImageRenameMoveCoordinator";
+import { inspectDrawingFile, stripDrawingCompoundSuffix } from "../../../drawing/DrawingFileSemantics";
+import { DrawingAssetRenameCoordinator } from "../../../drawing/DrawingAssetRenameCoordinator";
 
 /** Applies exact-link property changes before optionally renaming a local file. */
 export class RenameHandler {
@@ -60,7 +66,23 @@ export class RenameHandler {
         const dimensionError = validateDimensions(changes);
         if (dimensionError) return failure(dimensionError);
 
-        const updatedLink = this.buildUpdatedLink(parsed, changes);
+        const size = resolveCanonicalImageSize({
+            width: changes.width,
+            height: changes.height,
+            intrinsic: resolveElementIntrinsicDimensions(
+                context.image ?? context.mediaElement
+            )
+        });
+        if (changes.height !== null && changes.width === null && !size) {
+            return failure(t("MSG_DIMENSIONS_RATIO_REQUIRED"));
+        }
+
+        const updatedLink = this.buildUpdatedLink(
+            viewContext.match.linkText,
+            parsed,
+            changes,
+            size
+        );
         let linkUpdated = false;
         if (updatedLink !== viewContext.match.linkText) {
             const mutation = await this.editorTransaction.run(viewContext, {
@@ -110,15 +132,18 @@ export class RenameHandler {
     }
 
     private buildUpdatedLink(
+        originalLink: string,
         parsed: PipeSyntaxData,
-        changes: ImagePropertyChanges
+        changes: ImagePropertyChanges,
+        size: SizeData | undefined
     ): string {
         parsed.alt = changes.caption
             ? changes.caption.replace(/\|/g, "\\|")
             : " ";
         parsed.align = changes.alignment;
-        parsed.size = toSizeData(changes.width, changes.height);
-        return pipeSyntaxParser.buildPipeSyntax(parsed);
+        parsed.size = size;
+        return pipeSyntaxParser.rewritePipeAttributes(originalLink, parsed)
+            ?? originalLink;
     }
 
     private isExactLinkCurrent(
@@ -182,6 +207,9 @@ export class RenameHandler {
                 variableContext
             );
         fileName = this.folderManagement.sanitizeFilename(fileName);
+        const drawing = inspectDrawingFile(this.plugin, file);
+        const compoundSuffix = drawing?.compoundSuffix ?? null;
+        if (drawing) fileName = stripDrawingCompoundSuffix(fileName, drawing).trim();
         if (!fileName.trim() || /^[.]+$/.test(fileName.trim())) {
             return {
                 complete: false,
@@ -211,7 +239,7 @@ export class RenameHandler {
         try {
             targetPath = this.buildVaultPath(
                 directory,
-                `${fileName}${file.extension ? `.${file.extension}` : ""}`
+                `${fileName}${compoundSuffix ?? (file.extension ? `.${file.extension}` : "")}`
             );
         } catch (error) {
             return {
@@ -237,6 +265,22 @@ export class RenameHandler {
                 sourcePath,
                 targetPath
             };
+        }
+
+        if (drawing?.providerId === "excalidraw") {
+            const coordinator = new DrawingAssetRenameCoordinator(
+                this.app,
+                this.renameCoordinator,
+                async (target, destination) => {
+                    if (destination.toLowerCase() === target.path.toLowerCase()) {
+                        return this.folderManagement.safeRenameFile(target, destination);
+                    }
+                    await this.app.fileManager.renameFile(target, destination);
+                    return true;
+                }
+            );
+            const result = await coordinator.execute(drawing, targetPath);
+            return { ...result, sourcePath, targetPath };
         }
 
         const result = await this.renameCoordinator.execute({
@@ -282,16 +326,6 @@ function validateDimensions(changes: ImagePropertyChanges): string | null {
         }
     }
     return null;
-}
-
-function toSizeData(
-    width: number | null,
-    height: number | null
-): SizeData | undefined {
-    if (width && height) return { width, height, format: "WxH" };
-    if (width) return { width, format: "W" };
-    if (height) return { height, format: "xH" };
-    return undefined;
 }
 
 function success(

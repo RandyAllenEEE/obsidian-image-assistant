@@ -13,6 +13,18 @@ import { FolderAndFilenameManagement } from '../../../src/local/FolderAndFilenam
 import ImageConverterPlugin from '../../../src/main';
 import { DEFAULT_SETTINGS } from '../../../src/settings/defaults';
 
+const networkPolicyMocks = vi.hoisted(() => ({
+    validatePublicHttpUrl: vi.fn(async () => null as string | null),
+}));
+
+// Unit tests below exercise downloader behavior with an injected transport. Keep
+// DNS resolution in NetworkPolicy's dedicated tests so this suite cannot depend
+// on the host machine's DNS sinkhole/proxy configuration.
+vi.mock('../../../src/utils/NetworkPolicy', async importOriginal => ({
+    ...await importOriginal<typeof import('../../../src/utils/NetworkPolicy')>(),
+    validatePublicHttpUrl: networkPolicyMocks.validatePublicHttpUrl,
+}));
+
 // Mock Obsidian API
 vi.mock('obsidian', () => ({
     App: vi.fn(),
@@ -43,6 +55,7 @@ describe('NetworkImageDownloader', () => {
     let mockActiveFile: TFile;
 
     beforeEach(() => {
+        networkPolicyMocks.validatePublicHttpUrl.mockResolvedValue(null);
         mockApp = {
             workspace: {
                 getActiveFile: vi.fn(),

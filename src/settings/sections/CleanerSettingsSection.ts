@@ -1,7 +1,8 @@
-import { Setting, setIcon } from "obsidian";
+import { Setting } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
 import { SettingsUIState } from "../types";
+import { createCollapsibleSettingsSection } from "../components/CollapsibleSettingsSection";
 
 export function renderCleanerSettingsSection(
     containerEl: HTMLElement,
@@ -9,50 +10,24 @@ export function renderCleanerSettingsSection(
     settingsUIState: SettingsUIState,
     refreshDisplay: () => void
 ): void {
-    // --- Unused File Cleaner Settings Section ---
-    const cleanerSection = containerEl.createDiv("image-converter-settings-section");
-    cleanerSection.addClass("unused-file-cleaner-settings-section");
+    const { header: headerSetting, contentEl: settingsContentWrapper } =
+        createCollapsibleSettingsSection(containerEl, {
+            title: t("SETTING_CLEANER_SECTION"),
+            sectionClass: "unused-file-cleaner-settings-section",
+            isCollapsed: () => settingsUIState.cleanerSectionCollapsed,
+            setCollapsed: collapsed => {
+                settingsUIState.cleanerSectionCollapsed = collapsed;
+            }
+        });
+    headerSetting.addToggle(toggle => toggle
+        .setValue(plugin.settings.cleanerSettings.enabled)
+        .onChange(async value => {
+            plugin.settings.cleanerSettings.enabled = value;
+            await plugin.saveSettings();
+            refreshDisplay();
+        }));
 
-    const settingsContentWrapper = cleanerSection.createDiv("settings-section-content");
-
-    // --- Collapsible Header ---
-    const headerSetting = new Setting(cleanerSection)
-        .setName(t("SETTING_CLEANER_SECTION"))
-        .setHeading();
-
-    // Move header to top
-    cleanerSection.prepend(headerSetting.settingEl);
-
-    // Style the header
-    headerSetting.settingEl.addClass("settings-section-header");
-    headerSetting.settingEl.style.cursor = "pointer";
-
-    // Add Chevron Icon
-    const chevronContainer = headerSetting.nameEl.createSpan("settings-chevron-container");
-    chevronContainer.style.marginRight = "8px";
-    const chevronIcon = chevronContainer.createDiv();
-    // Prepend chevron
-    headerSetting.nameEl.prepend(chevronContainer);
-
-    // Function to update chevron state
-    const updateChevron = () => {
-        if (settingsUIState.cleanerSectionCollapsed) {
-            setIcon(chevronIcon, "chevron-right");
-            settingsContentWrapper.style.display = "none";
-        } else {
-            setIcon(chevronIcon, "chevron-down");
-            settingsContentWrapper.style.display = "block";
-        }
-    };
-
-    // Initial State
-    updateChevron();
-
-    // Click handler for collapse/expand
-    headerSetting.settingEl.onclick = () => {
-        settingsUIState.cleanerSectionCollapsed = !settingsUIState.cleanerSectionCollapsed;
-        updateChevron();
-    };
+    if (!plugin.settings.cleanerSettings.enabled) return;
 
     if (plugin.settings.global.enableContextMenu) {
         new Setting(settingsContentWrapper)

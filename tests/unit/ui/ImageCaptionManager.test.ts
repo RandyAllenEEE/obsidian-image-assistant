@@ -69,8 +69,53 @@ describe('ImageCaption', () => {
     expect(styles).toContain('letter-spacing: 0.02em');
     expect(styles).toContain('border: 1px solid var(--background-modifier-border)');
     expect(styles).toContain('margin-top: 8px');
-    expect(styles).toContain('[data-image-assistant-caption-align="right"]');
-    expect(styles).toContain('text-align: var(--image-assistant-caption-text-align, center)');
+    expect(styles).toContain('.cm-editor .image-assistant-live-preview-caption');
+    expect(styles).toContain('margin-top: 0 !important');
+    expect(styles).toContain('margin-bottom: 0 !important');
+    expect(styles).toContain('.has-image-assistant-caption:not([data-image-assistant-layout-sizing="external-renderer"])');
+    expect(styles).toContain('[data-image-assistant-caption-owner="true"]:not([data-image-assistant-layout-sizing="external-renderer"]):not(img)');
+    expect(styles).toContain(':is(.markdown-reading-view, .markdown-preview-view:not(.markdown-source-view))');
+    expect(styles).not.toContain('[data-image-assistant-layout-sizing="external-renderer"]:not([data-image-assistant-layout-placement="true"])');
+    expect(styles).not.toMatch(/^\s*width:\s*auto;/mu);
+    expect(styles).toContain('[data-image-assistant-caption-text-align="right"]');
+    expect(styles).toContain('text-align: center');
+    expect(styles).not.toContain('.image-wrapper');
+    expect(styles).not.toMatch(/has-image-assistant-caption\s+img/);
+    expect(styles).not.toMatch(/caption-owner[^}]*\]\s+img/);
+  });
+
+  it('only clears Live Preview inline margins after geometry is positioned', () => {
+    new ImageCaption(makePlugin());
+    const styles = document.getElementById('image-caption-styles')?.textContent ?? '';
+    const baseRule = cssRuleBody(
+      styles,
+      '.cm-editor .image-assistant-live-preview-caption {'
+    );
+    const positionedRule = cssRuleBody(
+      styles,
+      '.cm-editor .image-assistant-live-preview-caption[data-image-assistant-caption-positioned="true"] {'
+    );
+
+    expect(baseRule).toContain('margin-top: 0 !important');
+    expect(baseRule).not.toContain('margin-inline-start');
+    expect(baseRule).not.toContain('margin-left');
+    expect(positionedRule).toContain('margin-inline-start: 0 !important');
+    expect(positionedRule).toContain('margin-inline-end: 0 !important');
+    expect(styles).toContain(':not([data-image-assistant-caption-positioned="true"])[data-image-assistant-caption-placement="left"]');
+    expect(styles).toContain(':not([data-image-assistant-caption-positioned="true"])[data-image-assistant-caption-placement="center"]');
+    expect(styles).toContain(':not([data-image-assistant-caption-positioned="true"])[data-image-assistant-caption-placement="right"]');
+  });
+
+  it('does not impose a width on external-renderer caption owners', () => {
+    new ImageCaption(makePlugin());
+    const styles = document.getElementById('image-caption-styles')?.textContent ?? '';
+    const rule = cssRuleBody(
+      styles,
+      '[data-image-assistant-caption-owner="true"][data-image-assistant-layout-owner="true"][data-image-assistant-layout-sizing="external-renderer"]:not(img) {'
+    );
+
+    expect(rule).toContain('flex-direction: column');
+    expect(rule).not.toMatch(/^\s*width\s*:/mu);
   });
 
   it('renders a caption without rewriting native alt or title attributes', () => {
@@ -138,21 +183,23 @@ describe('ImageCaption', () => {
     expect(caption?.textContent).toBe('Network caption');
   });
 
-  it('uses image alignment first and the caption setting only as a fallback', () => {
+  it('keeps caption text alignment independent from image placement', () => {
     const plugin = makePlugin({ alignment: 'left' });
     plugin.settings.alignment.default = 'right';
     const manager = new ImageCaption(plugin);
     const { embed, img } = makeEmbed('photo.png');
-    const explicit = getCaptionLinkDescriptors('![[photo.png|center|Explicit caption]]')[0];
+    const explicit = getCaptionLinkDescriptors('![[photo.png|Explicit caption|center]]')[0];
 
     manager.renderImage(img, { descriptor: explicit, linkText: explicit.source });
     expect(embed.querySelector('.image-assistant-caption')
-      ?.getAttribute('data-image-assistant-caption-align')).toBe('center');
+      ?.getAttribute('data-image-assistant-caption-text-align')).toBe('left');
+    expect(embed.getAttribute('data-image-assistant-caption-placement')).toBe('center');
 
     plugin.settings.alignment.enabled = false;
     manager.renderImage(img, { descriptor: explicit, linkText: explicit.source });
     expect(embed.querySelector('.image-assistant-caption')
-      ?.getAttribute('data-image-assistant-caption-align')).toBe('left');
+      ?.getAttribute('data-image-assistant-caption-text-align')).toBe('left');
+    expect(embed.hasAttribute('data-image-assistant-caption-placement')).toBe(false);
   });
 
   it('injects caption styles into the image owner document for popout windows', () => {
@@ -312,3 +359,11 @@ describe('ImageCaption', () => {
     manager.onunload();
   });
 });
+
+function cssRuleBody(css: string, selector: string): string {
+  const selectorIndex = css.indexOf(selector);
+  expect(selectorIndex).toBeGreaterThanOrEqual(0);
+  const bodyStart = css.indexOf('{', selectorIndex);
+  const bodyEnd = css.indexOf('}', bodyStart);
+  return css.slice(bodyStart + 1, bodyEnd);
+}

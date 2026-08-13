@@ -1,7 +1,10 @@
 import { EventEmitter } from "events";
+import { createServer, type IncomingMessage, type ServerResponse } from "http";
+import type { AddressInfo } from "net";
 import { describe, expect, it, vi } from "vitest";
 import {
-    AbortableDesktopHttpClient
+    AbortableDesktopHttpClient,
+    resolveNodeHttpTransport
 } from "../../../src/utils/AbortableDesktopHttpClient";
 
 class FakeResponse extends EventEmitter {
@@ -41,6 +44,60 @@ function createElectron(start: (request: FakeRequest) => void) {
 }
 
 describe("AbortableDesktopHttpClient", () => {
+    it("uses the Node desktop transport when Electron net is unavailable", async () => {
+        await withHttpServer((request, response) => {
+            const chunks: Buffer[] = [];
+            request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+            request.on("end", () => {
+                response.writeHead(200, { "content-type": "application/json" });
+                response.end(JSON.stringify({
+                    method: request.method,
+                    body: Buffer.concat(chunks).toString("utf8")
+                }));
+            });
+        }, async baseUrl => {
+            const client = new AbortableDesktopHttpClient(resolveNodeHttpTransport);
+            expect(client.isAvailable()).toBe(true);
+
+            const result = await client.request({
+                url: `${baseUrl}/api/validate-model`,
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: '{"model":"test"}',
+                redirectPolicy: "reject"
+            });
+
+            expect(result.status).toBe(200);
+            expect(JSON.parse(new TextDecoder().decode(result.data))).toEqual({
+                method: "POST",
+                body: '{"model":"test"}'
+            });
+        });
+    });
+
+    it("does not forward credentials through a Node HTTP redirect", async () => {
+        let redirectedRequestCount = 0;
+        await withHttpServer((request, response) => {
+            if (request.url === "/redirect") {
+                response.writeHead(307, { location: "/credential-target" });
+                response.end();
+                return;
+            }
+            redirectedRequestCount++;
+            response.writeHead(200);
+            response.end();
+        }, async baseUrl => {
+            const client = new AbortableDesktopHttpClient(resolveNodeHttpTransport);
+
+            await expect(client.request({
+                url: `${baseUrl}/redirect`,
+                headers: { Authorization: "Bearer secret" },
+                redirectPolicy: "reject"
+            })).rejects.toThrow("Redirects are not allowed");
+        });
+        expect(redirectedRequestCount).toBe(0);
+    });
+
     it("sends a bounded POST body and returns parsed response bytes", async () => {
         const electron = createElectron(request => {
             const response = new FakeResponse(200, {
@@ -121,3 +178,25 @@ describe("AbortableDesktopHttpClient", () => {
         expect(electron.requests[0].abort).toHaveBeenCalledOnce();
     });
 });
+
+async function withHttpServer(
+    handler: (request: IncomingMessage, response: ServerResponse) => void,
+    run: (baseUrl: string) => Promise<void>
+): Promise<void> {
+    const server = createServer(handler);
+    await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+            server.off("error", reject);
+            resolve();
+        });
+    });
+    try {
+        const address = server.address() as AddressInfo;
+        await run(`http://127.0.0.1:${address.port}`);
+    } finally {
+        await new Promise<void>((resolve, reject) => {
+            server.close(error => error ? reject(error) : resolve());
+        });
+    }
+}

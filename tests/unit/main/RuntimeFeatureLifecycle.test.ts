@@ -14,35 +14,22 @@ async function createPlugin() {
 }
 
 describe("runtime feature lifecycle", () => {
-    it("detaches resize listeners immediately when disabled", async () => {
+    it("finishes shared DOM cleanup synchronously during a hot reload", async () => {
         const { plugin } = await createPlugin();
-        const imageResizer = {
-            detachView: vi.fn(),
-            updateSettings: vi.fn(),
-            onActiveViewChange: vi.fn(),
+        const calls: string[] = [];
+        (plugin as any).drawingModule = {
+            disable: vi.fn(() => calls.push("drawing"))
         };
-        (plugin as any).imageResizer = imageResizer;
-
-        plugin.setInteractiveResizeEnabled(false);
-
-        expect(imageResizer.updateSettings).toHaveBeenCalledOnce();
-        expect(imageResizer.detachView).toHaveBeenCalledOnce();
-    });
-
-    it("attaches resize listeners to the active Markdown view when enabled", async () => {
-        const { app, plugin } = await createPlugin();
-        const activeView = { editor: {} };
-        app.workspace.getActiveViewOfType = vi.fn(() => activeView);
-        const imageResizer = {
-            detachView: vi.fn(),
-            updateSettings: vi.fn(),
-            onActiveViewChange: vi.fn(),
+        (plugin as any).imageStateManager = {
+            onunload: vi.fn(() => calls.push("state"))
         };
-        (plugin as any).imageResizer = imageResizer;
+        (plugin as any).imageAlignment = {
+            cleanup: vi.fn(() => calls.push("alignment"))
+        };
+        const result = plugin.onunload();
 
-        plugin.setInteractiveResizeEnabled(true);
-
-        expect(imageResizer.onActiveViewChange).toHaveBeenCalledWith(activeView);
+        expect(result).toBeUndefined();
+        expect(calls).toEqual(["drawing", "state", "alignment"]);
     });
 
     it("unloads an existing context menu immediately when disabled", async () => {
@@ -55,48 +42,6 @@ describe("runtime feature lifecycle", () => {
 
         expect(removeChild).toHaveBeenCalledWith(contextMenu);
         expect(plugin.contextMenu).toBeNull();
-    });
-
-    it("removes the edit-mode wrap class when the plugin unloads", async () => {
-        const { plugin } = await createPlugin();
-        document.body.addClass("image-assistant-wrap-in-edit-mode");
-
-        await plugin.onunload();
-
-        expect(document.body.hasClass("image-assistant-wrap-in-edit-mode")).toBe(false);
-    });
-
-    it("applies and cleans the edit-mode wrap class in main and popout documents", async () => {
-        const { app, plugin } = await createPlugin();
-        const popoutDocument = document.implementation.createHTMLDocument("popout");
-        const popoutContainer = popoutDocument.createElement("div");
-        popoutDocument.body.appendChild(popoutContainer);
-        app.workspace.iterateAllLeaves = vi.fn(callback => callback({
-            view: { containerEl: popoutContainer }
-        }));
-        plugin.settings.alignment.enableEditModeWrap = true;
-
-        plugin.applyEditModeWrapClass();
-
-        expect(document.body.hasClass("image-assistant-wrap-in-edit-mode")).toBe(true);
-        expect(popoutDocument.body.hasClass("image-assistant-wrap-in-edit-mode")).toBe(true);
-
-        await plugin.onunload();
-
-        expect(document.body.hasClass("image-assistant-wrap-in-edit-mode")).toBe(false);
-        expect(popoutDocument.body.hasClass("image-assistant-wrap-in-edit-mode")).toBe(false);
-    });
-
-    it("removes the edit-mode wrap class while image alignment is disabled", async () => {
-        const { plugin } = await createPlugin();
-        plugin.settings.alignment.enableEditModeWrap = true;
-        plugin.settings.alignment.enabled = true;
-        plugin.applyEditModeWrapClass();
-        expect(document.body.hasClass("image-assistant-wrap-in-edit-mode")).toBe(true);
-
-        plugin.settings.alignment.enabled = false;
-        plugin.applyEditModeWrapClass();
-        expect(document.body.hasClass("image-assistant-wrap-in-edit-mode")).toBe(false);
     });
 
     it("clears retained download undo backups when the plugin unloads", async () => {

@@ -205,7 +205,8 @@ describe("ImageReferenceWorkflowCoordinator", () => {
             [
                 `![Alt](${url} "Title")`,
                 `![[${url}|Caption|right]]`,
-                `![[${url}|Existing|320|center]]`
+                `![[${url}|Existing|center|320]]`,
+                `![[${url}|Legacy|320|center]]`
             ].join("\n")
         ]]);
         const { coordinator, plugin } = createFixture({
@@ -228,11 +229,12 @@ describe("ImageReferenceWorkflowCoordinator", () => {
             "all"
         );
 
-        expect(result).toMatchObject({ found: 3, changed: 3, complete: true });
+        expect(result).toMatchObject({ found: 4, changed: 4, complete: true });
         expect(contents.get(note.path)).toBe([
             '![Alt|500](/assets/My%20Photo.png "Title")',
             "![[/assets/My Photo.png|Caption|right|500]]",
-            "![[/assets/My Photo.png|Existing|320|center]]"
+            "![[/assets/My Photo.png|Existing|center|320]]",
+            "![[/assets/My Photo.png|Legacy|320|center]]"
         ].join("\n"));
     });
 

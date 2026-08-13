@@ -9,6 +9,7 @@ import { OperationResultModal } from "../../OperationResultModal";
 import { getErrorMessage } from "../../../../utils/ErrorUtils";
 import { ImageReferenceWorkflowCoordinator } from "../../../../utils/ImageReferenceWorkflowCoordinator";
 import { CloudImageDeleter } from "../../../../cloud/CloudImageDeleter";
+import { isProtectedDrawingFile } from "../../../../drawing/DrawingFileSemantics";
 
 export class UploadMode implements IBatchMode {
     id = "upload" as const;
@@ -37,6 +38,7 @@ export class UploadMode implements IBatchMode {
 
         // Create tasks
         for (const file of discovery.items) {
+            if (isProtectedDrawingFile(this.plugin, file)) continue;
             // Skip already uploaded?
             if (this.plugin.historyManager.isLocalPathUploaded(file.path)) {
                 continue;
@@ -160,6 +162,10 @@ export class UploadMode implements IBatchMode {
 
         for (const item of result.successful) {
             const file = item.item as TFile;
+            if (isProtectedDrawingFile(this.plugin, file)) {
+                blocked.push(t("NOTICE_DRAWING_PROTECTED"));
+                continue;
+            }
             const cloudUrl = item.output as string;
             if (typeof cloudUrl !== "string" || !cloudUrl.trim()) {
                 blocked.push(t("BATCH_UPLOAD_NO_URL", [file.path]));

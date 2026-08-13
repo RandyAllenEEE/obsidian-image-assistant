@@ -1,6 +1,6 @@
 import { App } from "obsidian";
 import { OCRProvider, OCRSettings } from "../OCRSettings";
-import { fetchWithTimeout } from "../../utils/NetworkRequestUtils";
+import { fetchWithTimeout, readResponseTextWithLimit } from "../../utils/NetworkRequestUtils";
 import { createOcrImagePayload } from "./ImagePayload";
 
 /**
@@ -137,7 +137,7 @@ export class AIModelConverter implements OCRProvider {
     private async readJsonObject(response: Response, provider: string): Promise<Record<string, unknown>> {
         let data: unknown;
         try {
-            data = await response.json();
+            data = JSON.parse(await readResponseTextWithLimit(response));
         } catch {
             throw new Error(`${provider} returned malformed JSON`);
         }
@@ -147,7 +147,7 @@ export class AIModelConverter implements OCRProvider {
 
     private async readErrorDetail(response: Response): Promise<string> {
         try {
-            const detail = (await response.text()).trim();
+            const detail = (await readResponseTextWithLimit(response, 16 * 1024)).trim();
             return detail ? `: ${detail.slice(0, 300)}` : "";
         } catch {
             return "";

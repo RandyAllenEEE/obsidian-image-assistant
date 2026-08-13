@@ -16,7 +16,7 @@ import type ImageConverterPlugin from '../../main';
 import {
     getImageLayoutKey,
     getImageSourceKey,
-    type CaptionLinkDescriptor
+    type ImageSourceDescriptor
 } from '../../utils/MarkdownSourceContext';
 import { IMAGE_LAYOUT_KEY_ATTRIBUTE } from '../../utils/RefinedImageUtils';
 import { CaptionRenderPolicy } from './CaptionRenderPolicy';
@@ -27,7 +27,7 @@ import {
 } from './CaptionSourceScanner';
 import { CaptionResolver } from './CaptionResolver';
 import type { CaptionWidthMode } from './types';
-import type { CaptionSettings } from '../../settings/types';
+import type { CaptionAlignment, CaptionSettings } from '../../settings/types';
 import {
     resolveCaptionLayout,
     type HorizontalImageAlignment
@@ -65,7 +65,8 @@ class CaptionWidget extends WidgetType {
         private readonly width: number | undefined,
         private readonly widthMode: CaptionWidthMode,
         private readonly maxLines: number,
-        private readonly alignment: HorizontalImageAlignment,
+        private readonly placement: HorizontalImageAlignment | null,
+        private readonly textAlignment: CaptionAlignment,
         private readonly wrap: boolean,
         private readonly standalone: boolean,
         private readonly sourceKey: string,
@@ -80,7 +81,8 @@ class CaptionWidget extends WidgetType {
             && this.width === other.width
             && this.widthMode === other.widthMode
             && this.maxLines === other.maxLines
-            && this.alignment === other.alignment
+            && this.placement === other.placement
+            && this.textAlignment === other.textAlignment
             && this.wrap === other.wrap
             && this.standalone === other.standalone
             && this.sourceKey === other.sourceKey
@@ -98,7 +100,10 @@ class CaptionWidget extends WidgetType {
         caption.setAttribute('data-image-assistant-caption-node', 'true');
         caption.setAttribute('data-image-assistant-caption-renderer', 'codemirror');
         caption.setAttribute('data-image-assistant-caption-width', this.widthMode);
-        caption.setAttribute('data-image-assistant-caption-align', this.alignment);
+        caption.setAttribute('data-image-assistant-caption-text-align', this.textAlignment);
+        if (this.placement) {
+            caption.setAttribute('data-image-assistant-caption-placement', this.placement);
+        }
         caption.setAttribute('data-image-assistant-caption-wrap', this.wrap ? 'true' : 'false');
         caption.setAttribute('data-image-assistant-caption-standalone', this.standalone ? 'true' : 'false');
         caption.setAttribute('data-image-assistant-source-key', this.sourceKey);
@@ -145,7 +150,7 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
     };
 
     const buildRanges = (
-        descriptors: readonly CaptionLinkDescriptor[],
+        descriptors: readonly ImageSourceDescriptor[],
         from = 0,
         to = Number.POSITIVE_INFINITY
     ): Range<Decoration>[] => {
@@ -182,7 +187,8 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
                     resolved.size?.width,
                     settings.widthMode ?? 'auto',
                     settings.maxLines ?? 0,
-                    layout.alignment,
+                    layout.placement,
+                    layout.textAlignment,
                     safeWrap,
                     link.standalone,
                     getImageSourceKey(link),
@@ -310,15 +316,20 @@ export function createLivePreviewCaptionExtension(plugin: ImageConverterPlugin) 
         provide: field => [
             EditorView.decorations.from(field, value => value.decorations),
             EditorView.updateListener.of(update => {
-                if (!update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
-                const imageUpdate = {
-                    reconcileSource: update.docChanged || update.viewportChanged,
-                    geometryChanged: update.geometryChanged
-                };
-                if (update.transactions.some(transaction =>
+                const modeChanged = update.transactions.some(transaction =>
                     transaction.effects.some(effect =>
                         effect.is(setLivePreviewCaptionModeEffect)
-                    ))) {
+                    ));
+                if (!update.docChanged
+                    && !update.viewportChanged
+                    && !update.geometryChanged
+                    && !modeChanged) return;
+                const imageUpdate = {
+                    reconcileSource: update.docChanged || update.viewportChanged || modeChanged,
+                    geometryChanged: update.geometryChanged || modeChanged,
+                    ...(modeChanged ? { modeChanged: true } : {})
+                };
+                if (modeChanged) {
                     scheduleAfterEditorMeasure(update.view, () => {
                         plugin.imageStateManager?.handleLivePreviewEditorUpdate(
                             update.view.dom,
@@ -360,13 +371,11 @@ function estimateCaptionWidgetHeight(
         estimatedLines
     );
     const verticalPadding = parseBoxVerticalOrHorizontal(settings.padding, 'vertical');
-    const marginTop = parsePixelValue(settings.marginTop) ?? 0;
     const border = (parsePixelValue(settings.border) ?? 0) * 2;
     return Math.max(
         1,
         Math.ceil(visibleLines * fontSize * CAPTION_LINE_HEIGHT
             + verticalPadding
-            + marginTop
             + border)
     );
 }

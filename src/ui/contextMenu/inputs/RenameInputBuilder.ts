@@ -15,6 +15,7 @@ import type {
     ImagePropertyUpdateResult
 } from "../types";
 import { OperationResultModal } from "../../modals/OperationResultModal";
+import { inspectDrawingFile, stripDrawingCompoundSuffix } from "../../../drawing/DrawingFileSemantics";
 
 type ApplyProperties = (
     changes: ImagePropertyChanges
@@ -47,12 +48,19 @@ export class RenameInputBuilder extends Component {
         if (context.sourceKind !== "local" && context.sourceKind !== "url") {
             throw new Error("Image properties require a local or URL source.");
         }
-        const state = this.plugin.imageStateManager?.getImageState(context.image);
+        const state = context.image
+            ? this.plugin.imageStateManager?.getImageState(context.image)
+            : null;
         const pipeData = context.descriptor?.pipeData;
         const file = context.localFile;
+        const drawing = file ? inspectDrawingFile(this.plugin, file) : null;
         return Object.freeze({
             sourceKind: context.sourceKind,
-            fileName: file?.basename ?? "",
+            fileName: file
+                ? drawing
+                    ? stripDrawingCompoundSuffix(file.name, drawing)
+                    : file.basename
+                : "",
             directory: file?.parent?.path || "/",
             caption: state?.caption
                 ?? pipeData?.alt?.replace(/\\\|/g, "|").trim()

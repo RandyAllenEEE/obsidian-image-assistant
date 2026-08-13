@@ -5,6 +5,7 @@ import { IBatchMode, ReviewAction } from "./IBatchMode";
 import { t } from "../../../../lang/helpers";
 import { ImageFileCollector } from "../../../../utils/batch/ImageFileCollector";
 import { BatchScopeResolver } from "../../../../utils/batch/BatchScopeResolver";
+import { isProtectedDrawingFile } from "../../../../drawing/DrawingFileSemantics";
 
 export class LocalProcessMode implements IBatchMode {
     id = "local_process" as const;
@@ -180,7 +181,7 @@ export class LocalProcessMode implements IBatchMode {
         const skipFormats = collector.parseSkipFormats(batchSkipFormats);
 
         return files.filter(file =>
-            collector.shouldProcessImage(
+            !isProtectedDrawingFile(this.plugin, file) && collector.shouldProcessImage(
                 file,
                 isKeepOriginalFormat,
                 convertTo,

@@ -89,7 +89,9 @@ export default [
 		rules: {
 			...js.configs.recommended.rules,
 			"no-unused-vars": "off",
+			"no-useless-assignment": "off",
 			"no-prototype-builtins": "off",
+			"preserve-caught-error": "off",
 			"prefer-const": "error",
 
 			// Airbnb 3.3 & 3.4: Use object method and property shorthand

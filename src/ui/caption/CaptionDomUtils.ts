@@ -4,11 +4,6 @@ export function isElementNode(value: unknown): value is Element {
         && (value as Node).nodeType === 1;
 }
 
-export function isTextNode(value: unknown): value is Text {
-    return !!value && typeof value === 'object'
-        && (value as Node).nodeType === 3;
-}
-
 export function isHtmlElementNode(value: unknown): value is HTMLElement {
     return isElementNode(value) && 'style' in value;
 }

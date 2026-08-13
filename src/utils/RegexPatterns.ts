@@ -28,24 +28,15 @@ const REGEX_REFERENCE_FILE = /(!?)\[([^\]]*)\]\((<[^>\n]+>(?:\s+(?:"[^"]*"|'[^']
 // 2. path and optional pipe attributes
 const REGEX_REFERENCE_WIKI_FILE = /(!?)\[\[([^\]]+)\]\]/g;
 
-// Matches WikiLink network images specifically:
-// ![[https://example.com/image.png]]
-// ![[https://example.com/image.png|alt text]]
-export const REGEX_WIKI_NETWORK_IMAGE = /!\[\[(https?:\/\/[^\]|]+)(\s*?\|.*?)?\]\]/g;
-
 // ==== Pipe Syntax Patterns ====
 
 // Matches align keywords: left, center, right, left-wrap, right-wrap
 export const PIPE_ALIGN_PATTERN = /^(left|center|right|left-wrap|right-wrap)$/;
 
-// Matches size formats: 300x200, 300, 300x, x200
-export const PIPE_SIZE_PATTERN = /^(\d+)(x(\d+)?)?$|^x(\d+)$/i;
-
-// Matches Wiki link with full pipe syntax: ![[path|attr1|attr2|...]]
-export const WIKI_LINK_FULL_PATTERN = /!\[\[([^\]]+?)(?:\|([^\]]+?))?\]\]/;
-
-// Matches Markdown link with full pipe syntax: ![attr1|attr2|...](path)
-export const MARKDOWN_LINK_FULL_PATTERN = /!\[([^\]]*)\]\(([^)]+)\)/;
+// Obsidian 1.13.4 canonical image sizes: a positive width, optionally followed
+// by a positive height. The token is only interpreted as a size when it is the
+// final PipeSyntax segment (enforced by PipeSyntaxParser).
+export const PIPE_SIZE_PATTERN = /^([1-9]\d*)(?:x([1-9]\d*))?$/;
 
 export interface ImageLink {
     path: string;
@@ -220,30 +211,3 @@ function extractMarkdownDestinationPath(destination: string): string {
 
 // ==== Anchored Validators for Parser ====
 export const REGEX_WIKI_LINK_VALIDATE = /^!\[\[([^\]]+?)\]\]$/;
-export const REGEX_MD_LINK_VALIDATE = /^!\[([^\]]*)\]\(([^)]+)\)$/;
-
-// ==== Dynamic Regex Factories ====
-
-export function createWikiLinkRegex(filename: string): RegExp {
-    // ![[ ... filename ... ]]
-    // Captures path
-    return new RegExp(`!\\[\\[([^\\]]*${filename}[^\\]]*)\\]\\]`, 'g');
-}
-
-export function createMarkdownLinkRegex(filename: string): RegExp {
-    // ![ ... ]( ... filename ... )
-    // Captures alt, path
-    return new RegExp(`!\\[([^\\]]*)\\]\\(([^)]*${filename}[^)]*)\\)`, 'g');
-}
-
-export function createUrlLinkRegex(escapedUrl: string, escapedDecodedUrl: string): RegExp {
-    // ![...](...url...)
-    return new RegExp(`!\\[([^\\]]*)\\]\\(([^)]*(${escapedUrl}|${escapedDecodedUrl})[^)]*)\\)`, 'g');
-}
-
-export function createAnyLinkRegex(filename: string): RegExp {
-    // Matches both Wiki and Markdown links for a given filename
-    // Used for global search/replace operations
-    const escapedName = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`!\\[\\[${escapedName}(?:\\|[^\\]]+)?\\]\\]|!\\[.*?\\]\\((${escapedName})(?:\\?[^)]*)?\\)`, 'g');
-}

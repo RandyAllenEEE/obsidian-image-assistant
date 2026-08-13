@@ -9,7 +9,3 @@ export class CaptionRenderPolicy {
         return (settings.inlinePolicy ?? 'all') === 'all' || standalone;
     }
 }
-
-export function shouldRenderCaption(input: CaptionRenderPolicyInput): boolean {
-    return new CaptionRenderPolicy().shouldRender(input);
-}

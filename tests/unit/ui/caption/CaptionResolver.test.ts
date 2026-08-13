@@ -4,8 +4,8 @@ import { CaptionResolver } from '../../../../src/ui/caption/CaptionResolver';
 describe('CaptionResolver', () => {
   const resolver = new CaptionResolver();
 
-  it('resolves shuffled Wiki URL pipe syntax', () => {
-    const state = resolver.resolveFromLinkText('![[https://example.com/photo.png?size=large|300|right|Network caption]]');
+  it('resolves canonical Wiki URL pipe syntax', () => {
+    const state = resolver.resolveFromLinkText('![[https://example.com/photo.png?size=large|Network caption|right|300]]');
 
     expect(state).toMatchObject({
       path: 'https://example.com/photo.png?size=large',
@@ -17,8 +17,8 @@ describe('CaptionResolver', () => {
     });
   });
 
-  it('resolves permissive Markdown pipe syntax in any order', () => {
-    const state = resolver.resolveFromLinkText('![left-wrap|640x360|Markdown caption](https://example.com/a.png "Title")');
+  it('resolves canonical Markdown pipe syntax', () => {
+    const state = resolver.resolveFromLinkText('![Markdown caption|left-wrap|640x360](https://example.com/a.png "Title")');
 
     expect(state).toMatchObject({
       path: 'https://example.com/a.png',
@@ -51,7 +51,7 @@ describe('CaptionResolver', () => {
     embed.className = 'external-embed';
     embed.setAttribute('src', 'https://example.com/photo.png');
     const img = document.createElement('img');
-    img.setAttribute('alt', 'right|Caption\\|with pipe|320');
+    img.setAttribute('alt', 'Caption\\|with pipe|right|320');
     embed.appendChild(img);
 
     const state = resolver.resolveFromImage(img);

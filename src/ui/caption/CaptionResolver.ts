@@ -5,6 +5,7 @@ import {
     SizeData
 } from '../../utils/PipeSyntaxParser';
 import type { ImageSourceDescriptor } from '../../utils/MarkdownSourceContext';
+import { resolveRenderedMediaLayoutTarget } from '../RenderedMediaLayoutTarget';
 
 export interface CaptionResolverOptions {
     enabled?: boolean;
@@ -125,9 +126,7 @@ export class CaptionResolver {
     }
 
     private findMetadataContainer(img: HTMLImageElement): HTMLElement | null {
-        return img.closest(
-            '.image-resize-container, .image-wrapper, .internal-embed.image-embed, .external-embed, .cm-embed-block'
-        ) as HTMLElement | null;
+        return resolveRenderedMediaLayoutTarget(img)?.owner ?? null;
     }
 
     private resolvePath(img: HTMLImageElement, container: HTMLElement | null): string {

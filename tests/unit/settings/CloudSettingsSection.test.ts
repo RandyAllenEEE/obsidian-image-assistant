@@ -15,10 +15,11 @@ function makeUIState(): SettingsUIState {
   return {
     pasteHandlingSectionCollapsed: false,
     imageAlignmentSectionCollapsed: false,
-    imageDragResizeSectionCollapsed: false,
     imageCaptionSectionCollapsed: false,
     cleanerSectionCollapsed: false,
     ocrSectionCollapsed: false,
+    drawingSectionCollapsed: false,
+    nextAiSectionCollapsed: false,
     otherSectionCollapsed: false
   };
 }
@@ -123,6 +124,7 @@ describe('CloudSettingsSection', () => {
       .find(input => (input as HTMLInputElement).value === '480') as HTMLInputElement;
     widthInput.value = '12px';
     widthInput.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(heightInput.value).toBe('480');
     heightInput.value = '-1';
     heightInput.dispatchEvent(new Event('change', { bubbles: true }));
     await Promise.resolve();
@@ -130,5 +132,27 @@ describe('CloudSettingsSection', () => {
     expect(settings.pasteHandling.cloud.imageSizeWidth).toBeUndefined();
     expect(settings.pasteHandling.cloud.imageSizeHeight).toBeUndefined();
     expect(plugin.saveSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a height-only intent so upload can convert it using intrinsic ratio', async () => {
+    const settings = makeSettings();
+    settings.pasteHandling.cloud.imageSizeWidth = undefined;
+    settings.pasteHandling.cloud.imageSizeHeight = undefined;
+    const plugin = {
+      settings,
+      saveSettings: vi.fn().mockResolvedValue(undefined),
+      updateConcurrentQueue: vi.fn()
+    } as any;
+    const container = document.createElement('div');
+
+    renderCloudSettingsSection(container, plugin, makeUIState(), vi.fn());
+    const heightInput = Array.from(container.querySelectorAll('input[type="text"]'))
+      .find(input => (input as HTMLInputElement).placeholder === 'e.g. 600') as HTMLInputElement;
+    heightInput.value = '300';
+    heightInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await Promise.resolve();
+
+    expect(settings.pasteHandling.cloud.imageSizeWidth).toBeUndefined();
+    expect(settings.pasteHandling.cloud.imageSizeHeight).toBe(300);
   });
 });

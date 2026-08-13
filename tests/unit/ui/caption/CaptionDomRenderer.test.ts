@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CaptionDomRenderer } from '../../../../src/ui/caption/CaptionDomRenderer';
 import { ResolvedCaptionState } from '../../../../src/ui/caption/CaptionResolver';
+import { resolveRenderedMediaLayoutTarget } from '../../../../src/ui/RenderedMediaLayoutTarget';
 
 function state(caption: string | null): ResolvedCaptionState {
   return {
@@ -34,7 +35,7 @@ describe('CaptionDomRenderer', () => {
     expect(embed.classList.contains('has-image-assistant-caption')).toBe(true);
   });
 
-  it('places image-wrapper captions after the wrapper and updates without duplicates', () => {
+  it('does not make an Obsidian image-wrapper the caption layout owner', () => {
     const wrapper = document.createElement('span');
     wrapper.className = 'image-wrapper';
     const img = document.createElement('img');
@@ -46,7 +47,8 @@ describe('CaptionDomRenderer', () => {
 
     const captions = document.body.querySelectorAll('.image-assistant-caption');
     expect(captions).toHaveLength(1);
-    expect(captions[0].previousElementSibling).toBe(wrapper);
+    expect(captions[0].parentElement).toBe(wrapper);
+    expect(captions[0].previousElementSibling).toBe(img);
     expect(captions[0].textContent).toBe('Updated caption');
   });
 
@@ -65,6 +67,23 @@ describe('CaptionDomRenderer', () => {
     expect(caption?.tagName).toBe('SPAN');
     expect(caption?.getAttribute('aria-hidden')).toBe('true');
     expect(caption?.getAttribute('data-image-assistant-caption-renderer')).toBe('dom');
+  });
+
+  it('uses the unified outer owner for an Excalidraw IMG source render', () => {
+    const view = document.body.appendChild(document.createElement('div'));
+    view.className = 'markdown-preview-view';
+    const embed = view.appendChild(document.createElement('span'));
+    embed.className = 'internal-embed image-embed';
+    const img = embed.appendChild(document.createElement('img'));
+    img.className = 'excalidraw-embedded-img';
+    img.setAttribute('fileSource', 'Drawing.excalidraw.md');
+
+    const caption = renderer.render(img, state('Drawing caption'));
+
+    expect(caption?.parentElement).toBe(embed);
+    expect(caption?.textContent).toBe('Drawing caption');
+    expect(img.style.width).toBe('');
+    expect(img.style.maxWidth).toBe('');
   });
 
   it('keeps captions distinct for multiple bare images in one container', () => {
@@ -157,7 +176,7 @@ describe('CaptionDomRenderer', () => {
     expect(mutations).toHaveLength(0);
   });
 
-  it('writes resolved alignment, wrap, standalone, and source ownership metadata', () => {
+  it('writes independent figure-placement and caption-text metadata', () => {
     const embed = document.createElement('span');
     embed.className = 'internal-embed image-embed';
     const img = embed.appendChild(document.createElement('img'));
@@ -166,14 +185,66 @@ describe('CaptionDomRenderer', () => {
     const caption = renderer.render(img, state('Aligned caption'), {
       sourceKey: '10:40:0:image.png',
       standalone: true,
-      layout: { alignment: 'right', wrap: true, source: 'pipe' }
+      layout: {
+        placement: 'right',
+        textAlignment: 'center',
+        wrap: true,
+        source: 'pipe'
+      }
     });
 
-    expect(caption?.getAttribute('data-image-assistant-caption-align')).toBe('right');
+    expect(caption?.getAttribute('data-image-assistant-caption-text-align')).toBe('center');
+    expect(caption?.hasAttribute('data-image-assistant-caption-align')).toBe(false);
     expect(caption?.getAttribute('data-image-assistant-caption-wrap')).toBe('true');
     expect(caption?.getAttribute('data-image-assistant-caption-standalone')).toBe('true');
     expect(caption?.getAttribute('data-image-assistant-source-key')).toBe('10:40:0:image.png');
-    expect(embed.getAttribute('data-image-assistant-caption-align')).toBe('right');
+    expect(embed.getAttribute('data-image-assistant-caption-placement')).toBe('right');
+  });
+
+  it('anchors an external Excalidraw caption to its actual SVG surface', () => {
+    const view = document.body.appendChild(document.createElement('div'));
+    view.className = 'markdown-preview-view';
+    const embed = view.appendChild(document.createElement('span'));
+    embed.className = 'internal-embed image-embed';
+    const marker = embed.appendChild(document.createElement('div'));
+    marker.className = 'excalidraw-embedded-img';
+    marker.setAttribute('fileSource', 'Drawing.excalidraw.md');
+    const svg = marker.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'svg'));
+    svg.classList.add('excalidraw-svg');
+    const target = resolveRenderedMediaLayoutTarget(svg)!;
+    const diagramState = {
+      ...state('Drawing caption'),
+      size: { width: 160, format: 'W' as const }
+    };
+
+    const caption = renderer.renderTarget(target, diagramState, {
+      widthMode: 'auto',
+      layout: {
+        placement: 'left',
+        textAlignment: 'center',
+        wrap: false,
+        source: 'pipe'
+      }
+    })!;
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({
+      left: 500,
+      width: 320
+    } as DOMRect);
+    vi.spyOn(caption, 'getBoundingClientRect').mockImplementation(() => {
+      const offset = Number.parseFloat(
+        caption.style.getPropertyValue('--image-assistant-caption-offset')
+      ) || 0;
+      return { left: 40 + offset, width: 320 } as DOMRect;
+    });
+
+    renderer.renderTarget(target, diagramState, { widthMode: 'auto' });
+
+    expect(caption.style.getPropertyValue('--img-width')).toBe('320px');
+    expect(caption.getAttribute('data-image-assistant-caption-positioned')).toBe('true');
+    expect(caption.style.getPropertyValue('--image-assistant-caption-offset')).toBe('460px');
+    expect(svg.style.width).toBe('');
+    expect(svg.style.maxWidth).toBe('');
+    renderer.cleanup(view);
   });
 
   it('tracks popout image widths with the owner window ResizeObserver', () => {

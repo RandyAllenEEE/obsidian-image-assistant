@@ -1,12 +1,22 @@
 import { App, Component } from 'obsidian';
 import ImageConverterPlugin from '../main';
 import type { HorizontalImageAlignment, ResolvedImageLayout } from './ImageLayoutResolver';
+import {
+    resolveRenderedMediaLayoutTarget,
+    type RenderedMediaLayoutTarget,
+    type RenderedMediaSizing
+} from './RenderedMediaLayoutTarget';
 
 export const IMAGE_LAYOUT_OWNER_ATTRIBUTE = 'data-image-assistant-layout-owner';
+export const IMAGE_LAYOUT_PLACEMENT_ATTRIBUTE = 'data-image-assistant-layout-placement';
 export const IMAGE_LAYOUT_ALIGN_ATTRIBUTE = 'data-image-assistant-align';
 export const IMAGE_LAYOUT_WRAP_ATTRIBUTE = 'data-image-assistant-wrap';
+export const IMAGE_LAYOUT_SIZING_ATTRIBUTE = 'data-image-assistant-layout-sizing';
+export const IMAGE_LAYOUT_FLOW_ATTRIBUTE = 'data-image-assistant-layout-flow';
 
-const ALIGNMENT_CLASSES = [
+export type ImageLayoutFlow = 'block' | 'float-start' | 'float-end';
+
+const LEGACY_ALIGNMENT_CLASSES = [
     'image-position-left',
     'image-position-center',
     'image-position-right',
@@ -15,211 +25,232 @@ const ALIGNMENT_CLASSES = [
     'image-converter-aligned'
 ] as const;
 
-const LAYOUT_OWNER_SELECTOR = [
-    '.image-resize-container',
-    '.image-wrapper',
-    '.internal-embed.image-embed',
-    '.external-embed',
-    '.cm-embed-block'
-].join(', ');
+const LEGACY_DIMENSION_OWNER_ATTRIBUTE = 'data-image-assistant-dimension-owner';
+const LEGACY_DIMENSION_MODE_ATTRIBUTE = 'data-image-assistant-dimension-mode';
 
-export interface ImageAlignmentOptions {
-    align: HorizontalImageAlignment | 'none';
-    wrap: boolean;
-}
+/**
+ * Short-lived layout experiments from pre-6.0 development builds. They were
+ * written to CodeMirror containers and must be removed when the replacement
+ * plugin instance first sees a document.
+ */
+const LEGACY_EXPERIMENTAL_LAYOUT_ATTRIBUTES = [
+    'data-image-assistant-layout-context',
+    'data-image-assistant-layout-context-align',
+    'data-image-assistant-layout-context-candidate',
+    'data-image-assistant-layout-direct-widget',
+    'data-image-assistant-layout-direct-widget-align',
+    'data-image-assistant-layout-visual',
+    'data-image-assistant-layout-positioned'
+] as const;
 
-export interface ImagePositionData {
-    position: HorizontalImageAlignment | 'none';
-    wrap: boolean;
-}
+const COORDINATOR_OFFSET_PROPERTY = '--image-assistant-layout-offset';
 
-/** Owns the DOM representation of resolved image layout. */
+const CODE_MIRROR_LAYOUT_CONTAINER_SELECTOR = '.cm-line, .cm-embed-block, .cm-content';
+
+/** Applies semantic layout state to one stable media owner and placement. */
 export class ImageAlignment extends Component {
-    constructor(_app: App, _plugin: ImageConverterPlugin) {
+    private readonly cleanedLegacyDocuments = new WeakSet<Document>();
+
+    constructor(_app: App, private readonly plugin: ImageConverterPlugin) {
         super();
-    }
-
-    /** Compatibility wrapper used by existing callers and context-menu tests. */
-    applyAlignmentToImage(img: HTMLImageElement, positionData: ImagePositionData): void {
-        if (!positionData) {
-            console.error('No position data provided for image:', img.src);
-            return;
-        }
-
-        this.applyLayout(img, {
-            alignment: positionData.position === 'none' ? null : positionData.position,
-            wrap: positionData.position === 'none' ? false : positionData.wrap,
-            source: positionData.position === 'none' ? 'none' : 'pipe'
-        });
     }
 
     applyLayout(
         img: HTMLImageElement,
         layout: ResolvedImageLayout
     ): HTMLElement | null {
-        const owner = layout.alignment ? this.findPreferredOwner(img) : null;
-        this.clearOtherOwners(img, owner);
-        if (!owner || !layout.alignment) {
-            this.clearPluginDisplay(img);
+        const target = resolveRenderedMediaLayoutTarget(img);
+        if (!target) {
+            this.clearImage(img);
+            return null;
+        }
+        return this.applyLayoutTarget(target, layout);
+    }
+
+    applyLayoutTarget(
+        target: RenderedMediaLayoutTarget,
+        layout: ResolvedImageLayout
+    ): HTMLElement | null {
+        this.cleanupLegacyExperimentalStateOnce(target.owner.ownerDocument);
+        this.clearLegacyDimensionState(target.owner);
+        this.clearCompetingOwners(target.owner);
+        this.clearCompetingPlacements(target.owner, target.placement);
+
+        if (!layout.alignment || isCodeMirrorLayoutContainer(target.owner)
+            || isCodeMirrorLayoutContainer(target.placement)) {
+            this.clearTargetState(target);
             return null;
         }
 
-        this.applyOwnerState(owner, layout.alignment, layout.wrap);
-        return owner;
+        const effectiveWrap = this.resolveEffectiveWrap(target.owner, layout);
+        const flow = resolveFlow(layout.alignment, effectiveWrap);
+        this.applyOwnerState(
+            target.owner,
+            layout.alignment,
+            effectiveWrap,
+            target.sizing,
+            flow
+        );
+        this.applyPlacementState(target.placement);
+        return target.owner;
     }
 
     clearImage(img: HTMLImageElement): void {
-        this.clearOtherOwners(img, null);
-        this.clearPluginDisplay(img);
+        const target = resolveRenderedMediaLayoutTarget(img);
+        this.cleanupLegacyExperimentalStateOnce(img.ownerDocument);
+        this.clearLegacyDimensionState(target?.owner ?? img);
+        if (target) {
+            this.clearTargetState(target);
+            this.clearCompetingOwners(target.owner);
+            this.clearCompetingPlacements(target.owner, null);
+        } else {
+            this.clearOwnerState(img);
+            this.clearPlacementState(img);
+            this.clearCompetingOwners(img);
+            this.clearCompetingPlacements(img, null);
+        }
     }
 
     cleanup(root: ParentNode = document): void {
-        const owned = this.collectElements(root, `[${IMAGE_LAYOUT_OWNER_ATTRIBUTE}]`);
-        owned.forEach(element => this.clearOwnerState(element));
-
-        const legacy = this.collectElements(root, '.image-converter-aligned');
-        legacy.forEach(element => this.clearOwnerState(element));
-
-        this.collectElements(root, '[data-image-assistant-inline-display="true"]')
-            .forEach(element => {
-                element.style.removeProperty('display');
-                element.removeAttribute('data-image-assistant-inline-display');
-            });
+        this.collectElements(root, `[${IMAGE_LAYOUT_OWNER_ATTRIBUTE}], .image-converter-aligned`)
+            .forEach(element => this.clearOwnerState(element));
+        this.collectElements(root, `[${IMAGE_LAYOUT_PLACEMENT_ATTRIBUTE}]`)
+            .forEach(element => this.clearPlacementState(element));
+        this.collectElements(root, `[${LEGACY_DIMENSION_OWNER_ATTRIBUTE}]`)
+            .forEach(element => this.clearLegacyDimensionElement(element));
+        this.cleanupLegacyExperimentalState(root);
     }
 
-    getLayoutOwner(img: HTMLImageElement): HTMLElement | null {
-        if (img.hasAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE)) return img;
-        const owner = img.closest(`[${IMAGE_LAYOUT_OWNER_ATTRIBUTE}]`);
-        return isHTMLElement(owner) ? owner : null;
+    private resolveEffectiveWrap(owner: HTMLElement, layout: ResolvedImageLayout): boolean {
+        if (!layout.wrap || layout.alignment === 'center') return false;
+        const livePreview = !!owner.closest('.markdown-source-view');
+        return !livePreview || !!this.plugin.settings.alignment.enableEditModeWrap;
     }
 
-    getResolvedLayout(img: HTMLImageElement): ResolvedImageLayout {
-        const owner = this.getLayoutOwner(img) ?? img;
-        const dataAlignment = owner.getAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE);
-        const classAlignment = ALIGNMENT_CLASSES
-            .find(className => className.startsWith('image-position-') && owner.classList.contains(className))
-            ?.replace('image-position-', '');
-        const alignment = isHorizontalAlignment(dataAlignment)
-            ? dataAlignment
-            : isHorizontalAlignment(classAlignment) ? classAlignment : null;
-
-        return {
-            alignment,
-            wrap: alignment !== null && (
-                owner.getAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE) === 'true'
-                || owner.classList.contains('image-wrap')
-            ),
-            source: alignment ? 'pipe' : 'none'
-        };
+    private clearTargetState(target: RenderedMediaLayoutTarget): void {
+        this.clearOwnerState(target.owner);
+        this.clearPlacementState(target.placement);
     }
 
-    /** Transfers ownership while Resize temporarily wraps an image. */
-    transferLayoutOwner(img: HTMLImageElement, target: HTMLElement): void {
-        const layout = this.getResolvedLayout(img);
-        this.clearOtherOwners(img, null);
-        if (layout.alignment) {
-            this.applyOwnerState(target, layout.alignment, layout.wrap);
-        }
-    }
-
-    /** Kept for compatibility; layout is now handled exclusively by the owner CSS. */
-    ensureReadingModeLayout(img: HTMLImageElement, position: string): void {
-        if (position === 'none') this.clearPluginDisplay(img);
-    }
-
-    getCurrentImageAlignment(img: HTMLImageElement): ImageAlignmentOptions {
-        const layout = this.getResolvedLayout(img);
-        return {
-            align: layout.alignment ?? 'none',
-            wrap: layout.wrap
-        };
-    }
-
-    private findPreferredOwner(img: HTMLImageElement): HTMLElement {
-        const container = img.closest(LAYOUT_OWNER_SELECTOR);
-        if (isHTMLElement(container)) return container;
-
-        const paragraph = img.parentElement;
-        if (paragraph?.tagName === 'P' && Array.from(paragraph.childNodes).every(node =>
-            node === img
-            || node.nodeType === 3 && !node.textContent?.trim()
-            || isHTMLElement(node)
-                && node.getAttribute('data-image-assistant-caption-renderer') === 'dom'
-        )) {
-            return paragraph;
-        }
-        return img;
-    }
-
-    private clearOtherOwners(img: HTMLImageElement, retained: HTMLElement | null): void {
-        const candidates = new Set<HTMLElement>([img]);
-        let parent = img.parentElement;
+    private clearCompetingOwners(retained: HTMLElement): void {
+        const candidates = new Set<HTMLElement>();
+        if (hasOwnerState(retained)) candidates.add(retained);
+        retained.querySelectorAll<HTMLElement>(
+            `[${IMAGE_LAYOUT_OWNER_ATTRIBUTE}], .image-converter-aligned`
+        ).forEach(candidate => candidates.add(candidate));
+        let parent = retained.parentElement;
         while (parent) {
-            if (parent.hasAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE)
-                || parent.classList.contains('image-converter-aligned')) {
-                candidates.add(parent);
-            }
+            if (hasOwnerState(parent)) candidates.add(parent);
             parent = parent.parentElement;
         }
-
         for (const candidate of candidates) {
             if (candidate !== retained) this.clearOwnerState(candidate);
+        }
+    }
+
+    private clearCompetingPlacements(
+        owner: HTMLElement,
+        retained: HTMLElement | null
+    ): void {
+        const candidates = new Set<HTMLElement>();
+        if (owner.hasAttribute(IMAGE_LAYOUT_PLACEMENT_ATTRIBUTE)) candidates.add(owner);
+        owner.querySelectorAll<HTMLElement>(`[${IMAGE_LAYOUT_PLACEMENT_ATTRIBUTE}]`)
+            .forEach(candidate => candidates.add(candidate));
+        let parent = owner.parentElement;
+        while (parent) {
+            if (parent.hasAttribute(IMAGE_LAYOUT_PLACEMENT_ATTRIBUTE)) candidates.add(parent);
+            parent = parent.parentElement;
+        }
+        for (const candidate of candidates) {
+            if (candidate !== retained) this.clearPlacementState(candidate);
         }
     }
 
     private applyOwnerState(
         owner: HTMLElement,
         alignment: HorizontalImageAlignment,
-        wrap: boolean
+        wrap: boolean,
+        sizing: RenderedMediaSizing,
+        flow: ImageLayoutFlow
     ): void {
+        const clearLegacyInline = hasLegacyInlineLayoutOwnership(owner);
         setAttributeIfChanged(owner, IMAGE_LAYOUT_OWNER_ATTRIBUTE, 'true');
         setAttributeIfChanged(owner, IMAGE_LAYOUT_ALIGN_ATTRIBUTE, alignment);
         setAttributeIfChanged(owner, IMAGE_LAYOUT_WRAP_ATTRIBUTE, wrap ? 'true' : 'false');
-
-        toggleClassIfChanged(owner, 'image-converter-aligned', true);
-        for (const value of ['left', 'center', 'right'] as const) {
-            toggleClassIfChanged(owner, `image-position-${value}`, value === alignment);
+        setAttributeIfChanged(owner, IMAGE_LAYOUT_SIZING_ATTRIBUTE, sizing);
+        setAttributeIfChanged(owner, IMAGE_LAYOUT_FLOW_ATTRIBUTE, flow);
+        if (clearLegacyInline) {
+            clearLegacyInlineLayout(owner);
+            clearLegacyOwnerMarker(owner);
         }
-        toggleClassIfChanged(owner, 'image-wrap', wrap);
-        toggleClassIfChanged(owner, 'image-no-wrap', !wrap);
+        LEGACY_ALIGNMENT_CLASSES.forEach(className => {
+            if (owner.classList.contains(className)) owner.classList.remove(className);
+        });
+    }
 
-        const inlineMargins = getInlineMargins(alignment, wrap);
-        setImportantPropertyIfChanged(owner, 'margin-inline-start', inlineMargins.start);
-        setImportantPropertyIfChanged(owner, 'margin-inline-end', inlineMargins.end);
+    private applyPlacementState(placement: HTMLElement): void {
+        setAttributeIfChanged(placement, IMAGE_LAYOUT_PLACEMENT_ATTRIBUTE, 'true');
     }
 
     private clearOwnerState(owner: HTMLElement): void {
-        const pluginOwned = owner.hasAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE);
-        const legacyOwned = owner.classList.contains('image-converter-aligned');
-        const hasPluginState = pluginOwned
-            || owner.hasAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE)
-            || owner.hasAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE)
-            || ALIGNMENT_CLASSES.some(className => owner.classList.contains(className));
+        const clearLegacyInline = hasLegacyInlineLayoutOwnership(owner);
+        const hasPluginState = hasOwnerState(owner)
+            || owner.hasAttribute(IMAGE_LAYOUT_PLACEMENT_ATTRIBUTE)
+            || clearLegacyInline;
         if (!hasPluginState) return;
+
         owner.removeAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE);
         owner.removeAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE);
         owner.removeAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE);
-        owner.removeAttribute('data-image-assistant-layout-positioned');
-        owner.style.removeProperty('--image-assistant-layout-offset');
-        ALIGNMENT_CLASSES.forEach(className => owner.classList.remove(className));
+        owner.removeAttribute(IMAGE_LAYOUT_SIZING_ATTRIBUTE);
+        owner.removeAttribute(IMAGE_LAYOUT_FLOW_ATTRIBUTE);
+        owner.removeAttribute(IMAGE_LAYOUT_PLACEMENT_ATTRIBUTE);
+        clearLegacyOwnerMarker(owner);
+        LEGACY_ALIGNMENT_CLASSES.forEach(className => {
+            if (owner.classList.contains(className)) owner.classList.remove(className);
+        });
+        if (clearLegacyInline) clearLegacyInlineLayout(owner);
+    }
 
-        if (pluginOwned || legacyOwned) {
-            owner.style.removeProperty('float');
-            owner.style.removeProperty('clear');
-            owner.style.removeProperty('margin-left');
-            owner.style.removeProperty('margin-right');
-            owner.style.removeProperty('margin-inline-start');
-            owner.style.removeProperty('margin-inline-end');
-            if (owner.tagName === 'IMG' && owner.style.display === 'inline-block') {
-                owner.style.removeProperty('display');
-            }
+    private clearPlacementState(placement: Element): void {
+        placement.removeAttribute(IMAGE_LAYOUT_PLACEMENT_ATTRIBUTE);
+    }
+
+    private clearLegacyDimensionState(root: Element): void {
+        if (root.hasAttribute(LEGACY_DIMENSION_OWNER_ATTRIBUTE)) {
+            this.clearLegacyDimensionElement(root);
+        }
+        root.querySelectorAll<HTMLElement>(`[${LEGACY_DIMENSION_OWNER_ATTRIBUTE}]`)
+            .forEach(element => this.clearLegacyDimensionElement(element));
+    }
+
+    private clearLegacyDimensionElement(element: Element): void {
+        element.removeAttribute(LEGACY_DIMENSION_OWNER_ATTRIBUTE);
+        element.removeAttribute(LEGACY_DIMENSION_MODE_ATTRIBUTE);
+        if (isHTMLElement(element)) {
+            element.style.removeProperty('width');
+            element.style.removeProperty('height');
         }
     }
 
-    private clearPluginDisplay(img: HTMLImageElement): void {
-        if (!img.hasAttribute('data-image-assistant-inline-display')) return;
-        img.style.removeProperty('display');
-        img.removeAttribute('data-image-assistant-inline-display');
+    private cleanupLegacyExperimentalStateOnce(ownerDocument: Document): void {
+        if (this.cleanedLegacyDocuments.has(ownerDocument)) return;
+        this.cleanedLegacyDocuments.add(ownerDocument);
+        this.cleanupLegacyExperimentalState(ownerDocument);
+    }
+
+    private cleanupLegacyExperimentalState(root: ParentNode): void {
+        const stalePositioned = this.collectElements(
+            root,
+            `[data-image-assistant-layout-positioned], [style*="${COORDINATOR_OFFSET_PROPERTY}"]`
+        );
+        for (const attribute of LEGACY_EXPERIMENTAL_LAYOUT_ATTRIBUTES) {
+            this.collectElements(root, `[${attribute}]`)
+                .forEach(element => element.removeAttribute(attribute));
+        }
+        stalePositioned.forEach(element => {
+            element.style.removeProperty(COORDINATOR_OFFSET_PROPERTY);
+        });
     }
 
     private collectElements(root: ParentNode, selector: string): HTMLElement[] {
@@ -230,8 +261,48 @@ export class ImageAlignment extends Component {
     }
 }
 
-function isHorizontalAlignment(value: string | null | undefined): value is HorizontalImageAlignment {
-    return value === 'left' || value === 'center' || value === 'right';
+function resolveFlow(
+    alignment: HorizontalImageAlignment,
+    wrap: boolean
+): ImageLayoutFlow {
+    if (!wrap) return 'block';
+    return alignment === 'right' ? 'float-end' : 'float-start';
+}
+
+function hasOwnerState(owner: HTMLElement): boolean {
+    return owner.hasAttribute(IMAGE_LAYOUT_OWNER_ATTRIBUTE)
+        || owner.hasAttribute(IMAGE_LAYOUT_ALIGN_ATTRIBUTE)
+        || owner.hasAttribute(IMAGE_LAYOUT_WRAP_ATTRIBUTE)
+        || owner.hasAttribute(IMAGE_LAYOUT_SIZING_ATTRIBUTE)
+        || owner.hasAttribute(IMAGE_LAYOUT_FLOW_ATTRIBUTE)
+        || LEGACY_ALIGNMENT_CLASSES.some(className => owner.classList.contains(className));
+}
+
+function clearLegacyInlineLayout(owner: HTMLElement): void {
+    for (const property of [
+        'float',
+        'clear',
+        'margin-left',
+        'margin-right',
+        'margin-inline-start',
+        'margin-inline-end'
+    ]) {
+        if (owner.style.getPropertyValue(property)) owner.style.removeProperty(property);
+    }
+    if (owner.style.display === 'inline-block') owner.style.removeProperty('display');
+}
+
+function hasLegacyInlineLayoutOwnership(owner: HTMLElement): boolean {
+    return LEGACY_ALIGNMENT_CLASSES.some(className => owner.classList.contains(className))
+        || owner.hasAttribute('data-image-assistant-layout-host');
+}
+
+function clearLegacyOwnerMarker(owner: HTMLElement): void {
+    owner.removeAttribute('data-image-assistant-layout-host');
+}
+
+function isCodeMirrorLayoutContainer(element: Element): boolean {
+    return element.matches(CODE_MIRROR_LAYOUT_CONTAINER_SELECTOR);
 }
 
 function isHTMLElement(value: unknown): value is HTMLElement {
@@ -240,34 +311,4 @@ function isHTMLElement(value: unknown): value is HTMLElement {
 
 function setAttributeIfChanged(element: Element, name: string, value: string): void {
     if (element.getAttribute(name) !== value) element.setAttribute(name, value);
-}
-
-function toggleClassIfChanged(element: Element, className: string, enabled: boolean): void {
-    if (element.classList.contains(className) !== enabled) {
-        element.classList.toggle(className, enabled);
-    }
-}
-
-function getInlineMargins(
-    alignment: HorizontalImageAlignment,
-    wrap: boolean
-): { start: string; end: string } {
-    if (wrap) {
-        return alignment === 'right'
-            ? { start: '1.5rem', end: '0' }
-            : { start: '0', end: '1.5rem' };
-    }
-    if (alignment === 'left') return { start: '0', end: 'auto' };
-    if (alignment === 'right') return { start: 'auto', end: '0' };
-    return { start: 'auto', end: 'auto' };
-}
-
-function setImportantPropertyIfChanged(
-    element: HTMLElement,
-    name: string,
-    value: string
-): void {
-    if (element.style.getPropertyValue(name) === value
-        && element.style.getPropertyPriority(name) === 'important') return;
-    element.style.setProperty(name, value, 'important');
 }

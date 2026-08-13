@@ -26,21 +26,37 @@ describe('ImageLayoutResolver', () => {
       wrap: false,
       source: 'none'
     });
+    expect(resolveImageLayout(null, enabled, false)).toEqual({
+      alignment: null,
+      wrap: false,
+      source: 'none'
+    });
   });
 
-  it('lets captions follow the final image alignment before their fallback', () => {
+  it('allows an explicit alignment to promote inline media to a block', () => {
+    expect(resolveImageLayout('right', enabled, false)).toEqual({
+      alignment: 'right',
+      wrap: false,
+      source: 'pipe'
+    });
+  });
+
+  it('keeps caption text alignment independent from figure placement', () => {
     expect(resolveCaptionLayout('left', enabled, 'right', true)).toEqual({
-      alignment: 'left',
+      placement: 'left',
+      textAlignment: 'right',
       wrap: false,
       source: 'pipe'
     });
     expect(resolveCaptionLayout(null, enabled, 'right', true)).toEqual({
-      alignment: 'center',
+      placement: 'center',
+      textAlignment: 'right',
       wrap: false,
       source: 'image-default'
     });
     expect(resolveCaptionLayout('left', { ...enabled, enabled: false }, 'right', true)).toEqual({
-      alignment: 'right',
+      placement: null,
+      textAlignment: 'right',
       wrap: false,
       source: 'caption-fallback'
     });
@@ -48,14 +64,22 @@ describe('ImageLayoutResolver', () => {
 
   it('disables caption floating for inline and multi-image descriptors', () => {
     expect(resolveCaptionLayout('left-wrap', enabled, 'center', false)).toEqual({
-      alignment: 'left',
+      placement: 'left',
+      textAlignment: 'center',
       wrap: false,
       source: 'pipe'
     });
     expect(resolveCaptionLayout('right-wrap', enabled, 'center', true)).toEqual({
-      alignment: 'right',
+      placement: 'right',
+      textAlignment: 'center',
       wrap: true,
       source: 'pipe'
+    });
+    expect(resolveCaptionLayout(null, enabled, 'right', false)).toEqual({
+      placement: null,
+      textAlignment: 'right',
+      wrap: false,
+      source: 'caption-fallback'
     });
   });
 });

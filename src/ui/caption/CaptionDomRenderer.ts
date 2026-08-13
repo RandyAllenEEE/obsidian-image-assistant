@@ -1,7 +1,11 @@
 import type { CaptionWidthMode } from '../../settings/types';
 import type { ResolvedCaptionLayout } from '../ImageLayoutResolver';
 import type { ResolvedCaptionState } from './CaptionResolver';
-import { isHtmlElementNode, isTextNode } from './CaptionDomUtils';
+import { isHtmlElementNode } from './CaptionDomUtils';
+import {
+    resolveRenderedMediaLayoutTarget,
+    type RenderedMediaLayoutTarget
+} from '../RenderedMediaLayoutTarget';
 
 export interface CaptionRenderContext {
     document?: Document;
@@ -18,24 +22,27 @@ type CaptionPlacement = 'append' | 'after';
 interface CaptionTarget {
     host: HTMLElement;
     placement: CaptionPlacement;
+    anchor: Element;
+    preferMeasuredWidth: boolean;
 }
 
 interface CaptionWidthTracker {
     readonly document: Document;
     readonly observer: ResizeObserver;
-    readonly images: Set<HTMLImageElement>;
-    readonly pendingWidths: Map<HTMLImageElement, number>;
+    readonly media: Map<Element, Element>;
+    readonly pendingWidths: Map<Element, number>;
     cancelScheduledFlush: (() => void) | null;
 }
 
 const DOM_CAPTION_SELECTOR = '.image-assistant-caption[data-image-assistant-caption-renderer="dom"]';
 
 export class CaptionDomRenderer {
-    private readonly captionKeys = new WeakMap<HTMLImageElement, string>();
-    private readonly explicitWidths = new WeakMap<HTMLImageElement, number | undefined>();
-    private readonly widthModes = new WeakMap<HTMLImageElement, CaptionWidthMode>();
+    private readonly captionKeys = new WeakMap<Element, string>();
+    private readonly explicitWidths = new WeakMap<Element, number | undefined>();
+    private readonly widthModes = new WeakMap<Element, CaptionWidthMode>();
     private readonly widthTrackers = new Map<Document, CaptionWidthTracker>();
-    private readonly trackedDocuments = new WeakMap<HTMLImageElement, Document>();
+    private readonly trackedDocuments = new WeakMap<Element, Document>();
+    private readonly trackedAnchors = new WeakMap<Element, Element>();
     private readonly loadHandlers = new Map<HTMLImageElement, () => void>();
 
     render(
@@ -43,27 +50,37 @@ export class CaptionDomRenderer {
         state: ResolvedCaptionState,
         context: CaptionRenderContext = {}
     ): HTMLElement | null {
-        const target = this.findTarget(img);
+        const media = resolveRenderedMediaLayoutTarget(img);
+        return media ? this.renderTarget(media, state, context) : null;
+    }
+
+    renderTarget(
+        media: RenderedMediaLayoutTarget,
+        state: ResolvedCaptionState,
+        context: CaptionRenderContext = {}
+    ): HTMLElement | null {
+        const visual = media.visual;
+        const target = this.toCaptionTarget(media);
         if (!target) return null;
 
-        const captionKey = context.captionKey ?? context.sourceKey ?? this.getCaptionKey(img);
-        const previousKey = this.captionKeys.get(img);
+        const captionKey = context.captionKey ?? context.sourceKey ?? this.getCaptionKey(visual);
+        const previousKey = this.captionKeys.get(visual);
         if (previousKey && previousKey !== captionKey) {
             this.findExistingCaption(target, previousKey)?.remove();
         }
-        this.captionKeys.set(img, captionKey);
+        this.captionKeys.set(visual, captionKey);
         if (!state.shouldRender || !state.caption) {
-            this.removeCaption(target, img, captionKey);
+            this.removeCaption(target, visual, captionKey);
             return null;
         }
 
         const widthMode = context.widthMode ?? 'auto';
         const maxLines = context.maxLines ?? 0;
-        this.explicitWidths.set(img, state.size?.width);
-        this.widthModes.set(img, widthMode);
+        this.explicitWidths.set(visual, state.size?.width);
+        this.widthModes.set(visual, widthMode);
 
         let caption = this.findExistingCaption(target, captionKey);
-        if (!caption) caption = this.createCaption(img, target, context, captionKey);
+        if (!caption) caption = this.createCaption(visual, target, context, captionKey);
         if (!caption) return null;
 
         if (caption.textContent !== state.caption) caption.textContent = state.caption;
@@ -76,31 +93,39 @@ export class CaptionDomRenderer {
             target.host.classList.add('image-assistant-caption-host');
         }
         setAttributeIfChanged(target.host, 'data-image-assistant-caption-owner', 'true');
-        const layoutContainer = this.findLayoutContainer(img, target.host);
+        const layoutContainer = media.owner;
         if (layoutContainer && !layoutContainer.classList.contains('has-image-assistant-caption')) {
             layoutContainer.classList.add('has-image-assistant-caption');
         }
 
-        this.syncWidthVariable(target, img, caption, state.size?.width, widthMode);
-        this.ensureWidthTracking(img);
+        this.syncWidthVariable(target, caption, state.size?.width, widthMode);
+        this.syncCaptionGeometry(target, caption, widthMode);
+        this.ensureWidthTracking(visual, target, widthMode);
         return caption;
     }
 
     removeImage(img: HTMLImageElement): void {
-        const target = this.findTarget(img);
-        if (target) this.removeCaption(target, img, this.getCaptionKey(img));
-        else this.releaseWidthTracking(img);
+        this.removeTarget(img);
+    }
+
+    removeTarget(visual: Element): void {
+        const target = this.findTarget(visual);
+        if (target) this.removeCaption(target, visual, this.getCaptionKey(visual));
+        else this.releaseWidthTracking(visual);
     }
 
     cleanup(root: ParentNode = this.getDefaultDocument()): void {
         const trackedImages = [...this.widthTrackers.values()]
-            .flatMap(tracker => [...tracker.images]);
+            .flatMap(tracker => [...tracker.media.keys()]);
         for (const image of new Set([...trackedImages, ...this.loadHandlers.keys()])) {
             if (root === image || root.contains?.(image)) this.releaseWidthTracking(image);
         }
         root.querySelectorAll?.(DOM_CAPTION_SELECTOR).forEach(caption => caption.remove());
         root.querySelectorAll?.('[data-image-assistant-caption-owner="true"]').forEach(owner => {
             owner.removeAttribute('data-image-assistant-caption-owner');
+            owner.removeAttribute('data-image-assistant-caption-placement');
+            // Remove the pre-6.0.0 combined attribute as well. A plugin
+            // reload can otherwise leave old CSS semantics on rendered notes.
             owner.removeAttribute('data-image-assistant-caption-align');
             owner.removeAttribute('data-image-assistant-caption-wrap');
             owner.removeAttribute('data-image-assistant-caption-standalone');
@@ -114,26 +139,18 @@ export class CaptionDomRenderer {
         });
     }
 
-    private findTarget(img: HTMLImageElement): CaptionTarget | null {
-        const targetSelectors: Array<{ selector: string; placement: CaptionPlacement }> = [
-            { selector: '.image-resize-container', placement: 'append' },
-            { selector: '.image-wrapper', placement: 'after' },
-            { selector: '.internal-embed.image-embed', placement: 'append' },
-            { selector: '.external-embed', placement: 'append' },
-            { selector: '.cm-embed-block', placement: 'append' }
-        ];
+    private findTarget(visual: Element): CaptionTarget | null {
+        const media = resolveRenderedMediaLayoutTarget(visual);
+        return media && media.visual === visual ? this.toCaptionTarget(media) : null;
+    }
 
-        for (const target of targetSelectors) {
-            const host = img.closest(target.selector);
-            if (isHtmlElementNode(host)) return { host, placement: target.placement };
-        }
-
-        const paragraph = img.parentElement;
-        if (paragraph?.tagName === 'P' && this.isStandaloneImageParagraph(paragraph, img)) {
-            return { host: paragraph, placement: 'append' };
-        }
-
-        return { host: img, placement: 'after' };
+    private toCaptionTarget(media: RenderedMediaLayoutTarget): CaptionTarget {
+        return {
+            host: media.owner,
+            placement: media.owner === media.visual ? 'after' : 'append',
+            anchor: media.captionAnchor,
+            preferMeasuredWidth: media.sizing === 'external-renderer'
+        };
     }
 
     private findExistingCaption(target: CaptionTarget, captionKey: string): HTMLElement | null {
@@ -155,12 +172,12 @@ export class CaptionDomRenderer {
     }
 
     private createCaption(
-        img: HTMLImageElement,
+        visual: Element,
         target: CaptionTarget,
         context: CaptionRenderContext,
         captionKey: string
     ): HTMLElement | null {
-        const doc = context.document ?? img.ownerDocument ?? this.getDefaultDocument();
+        const doc = context.document ?? visual.ownerDocument ?? this.getDefaultDocument();
         const caption = doc.createElement('span');
         caption.className = 'image-assistant-caption';
         caption.setAttribute('data-image-assistant-caption-node', 'true');
@@ -177,19 +194,20 @@ export class CaptionDomRenderer {
         return caption;
     }
 
-    private removeCaption(target: CaptionTarget, img: HTMLImageElement, captionKey: string): void {
+    private removeCaption(target: CaptionTarget, visual: Element, captionKey: string): void {
         this.findExistingCaption(target, captionKey)?.remove();
-        this.releaseWidthTracking(img);
-        this.explicitWidths.delete(img);
-        this.widthModes.delete(img);
+        this.releaseWidthTracking(visual);
+        this.explicitWidths.delete(visual);
+        this.widthModes.delete(visual);
         if (!target.host.querySelector(DOM_CAPTION_SELECTOR)) {
             target.host.classList.remove('image-assistant-caption-host');
             target.host.removeAttribute('data-image-assistant-caption-owner');
+            target.host.removeAttribute('data-image-assistant-caption-placement');
             target.host.removeAttribute('data-image-assistant-caption-align');
             target.host.removeAttribute('data-image-assistant-caption-wrap');
             target.host.removeAttribute('data-image-assistant-caption-standalone');
             target.host.style.removeProperty('--img-width');
-            const layout = this.findLayoutContainer(img, target.host);
+            const layout = resolveRenderedMediaLayoutTarget(visual)?.owner ?? target.host;
             if (layout && !layout.querySelector(DOM_CAPTION_SELECTOR)) {
                 layout.classList.remove('has-image-assistant-caption');
             }
@@ -198,14 +216,17 @@ export class CaptionDomRenderer {
 
     private syncWidthVariable(
         target: CaptionTarget,
-        img: HTMLImageElement,
         caption: HTMLElement,
         explicitWidth: number | undefined,
         widthMode: CaptionWidthMode
     ): void {
         const width = widthMode === 'container'
             ? '100%'
-            : this.resolveAutoWidth(img, explicitWidth);
+            : this.resolveAutoWidth(
+                target.anchor,
+                explicitWidth,
+                target.preferMeasuredWidth
+            );
         this.applyWidthVariable(target, caption, width);
     }
 
@@ -222,20 +243,18 @@ export class CaptionDomRenderer {
         }
     }
 
-    private resolveAutoWidth(img: HTMLImageElement, explicitWidth: number | undefined): string {
-        const width = explicitWidth
-            ?? this.explicitWidths.get(img)
-            ?? this.parseNumber(img.getAttribute('width'))
-            ?? positiveNumber(img.getBoundingClientRect?.().width)
-            ?? positiveNumber(img.width);
+    private resolveAutoWidth(
+        anchor: Element,
+        explicitWidth: number | undefined,
+        preferMeasuredWidth = false
+    ): string {
+        const measuredWidth = positiveNumber(anchor.getBoundingClientRect?.().width)
+            ?? this.parseNumber(anchor.getAttribute('width'))
+            ?? (isHtmlImageElement(anchor) ? positiveNumber(anchor.width) : undefined);
+        const width = preferMeasuredWidth
+            ? measuredWidth ?? explicitWidth
+            : explicitWidth ?? measuredWidth;
         return width ? `${width}px` : '100%';
-    }
-
-    private findLayoutContainer(img: HTMLImageElement, host: HTMLElement): HTMLElement | null {
-        const selector = '.image-embed, .external-embed, .cm-embed-block, .image-resize-container';
-        if (host.matches(selector)) return host;
-        const container = img.closest(selector);
-        return isHtmlElementNode(container) ? container : null;
     }
 
     private parseNumber(value: string | null): number | undefined {
@@ -248,11 +267,11 @@ export class CaptionDomRenderer {
         return document;
     }
 
-    private getCaptionKey(img: HTMLImageElement): string {
-        let key = this.captionKeys.get(img);
+    private getCaptionKey(visual: Element): string {
+        let key = this.captionKeys.get(visual);
         if (!key) {
             key = `image-caption-${Math.random().toString(36).slice(2)}`;
-            this.captionKeys.set(img, key);
+            this.captionKeys.set(visual, key);
         }
         return key;
     }
@@ -262,13 +281,26 @@ export class CaptionDomRenderer {
         host: HTMLElement,
         context: CaptionRenderContext
     ): void {
-        const alignment = context.layout?.alignment ?? 'center';
+        const placement = context.layout?.placement ?? null;
+        const textAlignment = context.layout?.textAlignment ?? 'center';
         const wrap = context.layout?.wrap === true;
         const standalone = context.standalone !== false;
-        setAttributeIfChanged(caption, 'data-image-assistant-caption-align', alignment);
+        setAttributeIfChanged(
+            caption,
+            'data-image-assistant-caption-text-align',
+            textAlignment
+        );
+        // Old versions used this one attribute for both placement and text.
+        // Always remove it when a caption is refreshed.
+        removeAttributeIfPresent(caption, 'data-image-assistant-caption-align');
         setAttributeIfChanged(caption, 'data-image-assistant-caption-wrap', wrap ? 'true' : 'false');
         setAttributeIfChanged(caption, 'data-image-assistant-caption-standalone', standalone ? 'true' : 'false');
-        setAttributeIfChanged(host, 'data-image-assistant-caption-align', alignment);
+        if (placement) {
+            setAttributeIfChanged(host, 'data-image-assistant-caption-placement', placement);
+        } else {
+            removeAttributeIfPresent(host, 'data-image-assistant-caption-placement');
+        }
+        removeAttributeIfPresent(host, 'data-image-assistant-caption-align');
         setAttributeIfChanged(host, 'data-image-assistant-caption-wrap', wrap ? 'true' : 'false');
         setAttributeIfChanged(host, 'data-image-assistant-caption-standalone', standalone ? 'true' : 'false');
         if (context.sourceKey) {
@@ -278,80 +310,84 @@ export class CaptionDomRenderer {
         }
     }
 
-    private isStandaloneImageParagraph(paragraph: HTMLElement, image: HTMLImageElement): boolean {
-        return Array.from(paragraph.childNodes).every(node =>
-            node === image
-            || isTextNode(node) && !node.textContent?.trim()
-            || isHtmlElementNode(node) && node.matches(DOM_CAPTION_SELECTOR)
-        );
-    }
-
-    private ensureWidthTracking(img: HTMLImageElement): void {
-        const explicitWidth = this.explicitWidths.get(img);
-        const widthMode = this.widthModes.get(img) ?? 'auto';
-        if (widthMode === 'container' || explicitWidth !== undefined) {
-            this.releaseWidthTracking(img);
+    private ensureWidthTracking(
+        visual: Element,
+        target: CaptionTarget,
+        widthMode: CaptionWidthMode
+    ): void {
+        // Keep the actual rendered width/position authoritative even when the
+        // Markdown supplies `|W`: themes, responsive constraints and external
+        // renderers can all change the visual surface after first paint.
+        if (widthMode === 'container') {
+            this.releaseWidthTracking(visual);
             return;
         }
 
-        const ownerDocument = img.ownerDocument;
-        if (this.trackedDocuments.get(img) === ownerDocument) return;
-        this.releaseWidthTracking(img);
+        const ownerDocument = visual.ownerDocument;
+        if (this.trackedDocuments.get(visual) === ownerDocument
+            && this.trackedAnchors.get(visual) === target.anchor) return;
+        this.releaseWidthTracking(visual);
 
-        const OwnerResizeObserver = img.ownerDocument.defaultView?.ResizeObserver
+        const OwnerResizeObserver = ownerDocument.defaultView?.ResizeObserver
             ?? (typeof ResizeObserver === 'undefined' ? undefined : ResizeObserver);
         if (OwnerResizeObserver) {
             const tracker = this.getOrCreateWidthTracker(
                 ownerDocument,
                 OwnerResizeObserver
             );
-            tracker.images.add(img);
-            tracker.observer.observe(img);
-            this.trackedDocuments.set(img, ownerDocument);
+            tracker.media.set(visual, target.anchor);
+            tracker.observer.observe(target.anchor);
+            this.trackedDocuments.set(visual, ownerDocument);
+            this.trackedAnchors.set(visual, target.anchor);
             return;
         }
 
-        if (!this.loadHandlers.has(img)) {
-            const handler = () => this.refreshTrackedWidth(img);
-            img.addEventListener('load', handler);
-            this.loadHandlers.set(img, handler);
+        if (isHtmlImageElement(visual) && !this.loadHandlers.has(visual)) {
+            const handler = () => this.refreshTrackedWidth(visual);
+            visual.addEventListener('load', handler);
+            this.loadHandlers.set(visual, handler);
         }
     }
 
-    private refreshTrackedWidth(img: HTMLImageElement): void {
-        const target = this.findTarget(img);
+    private refreshTrackedWidth(visual: Element): void {
+        const target = this.findTarget(visual);
         if (!target) return;
-        const caption = this.findExistingCaption(target, this.getCaptionKey(img));
+        const caption = this.findExistingCaption(target, this.getCaptionKey(visual));
         if (!caption) return;
         this.syncWidthVariable(
             target,
-            img,
             caption,
-            this.explicitWidths.get(img),
-            this.widthModes.get(img) ?? 'auto'
+            this.explicitWidths.get(visual),
+            this.widthModes.get(visual) ?? 'auto'
         );
+        this.syncCaptionGeometry(target, caption, this.widthModes.get(visual) ?? 'auto');
     }
 
-    private releaseWidthTracking(img: HTMLImageElement): void {
-        const ownerDocument = this.trackedDocuments.get(img);
+    private releaseWidthTracking(visual: Element): void {
+        const ownerDocument = this.trackedDocuments.get(visual);
         const tracker = ownerDocument
             ? this.widthTrackers.get(ownerDocument)
             : undefined;
         if (tracker) {
-            tracker.images.delete(img);
-            tracker.pendingWidths.delete(img);
-            tracker.observer.unobserve?.(img);
-            if (tracker.images.size === 0) {
+            const anchor = tracker.media.get(visual) ?? this.trackedAnchors.get(visual);
+            tracker.media.delete(visual);
+            tracker.pendingWidths.delete(visual);
+            if (anchor && ![...tracker.media.values()].some(candidate => candidate === anchor)) {
+                tracker.observer.unobserve?.(anchor);
+            }
+            if (tracker.media.size === 0) {
                 tracker.cancelScheduledFlush?.();
                 tracker.cancelScheduledFlush = null;
                 tracker.observer.disconnect();
                 this.widthTrackers.delete(ownerDocument!);
             }
         }
-        this.trackedDocuments.delete(img);
-        const handler = this.loadHandlers.get(img);
-        if (handler) img.removeEventListener('load', handler);
-        this.loadHandlers.delete(img);
+        this.trackedDocuments.delete(visual);
+        this.trackedAnchors.delete(visual);
+        if (!isHtmlImageElement(visual)) return;
+        const handler = this.loadHandlers.get(visual);
+        if (handler) visual.removeEventListener('load', handler);
+        this.loadHandlers.delete(visual);
     }
 
     private getOrCreateWidthTracker(
@@ -361,13 +397,15 @@ export class CaptionDomRenderer {
         const existing = this.widthTrackers.get(ownerDocument);
         if (existing) return existing;
 
-        const images = new Set<HTMLImageElement>();
-        const pendingWidths = new Map<HTMLImageElement, number>();
+        const media = new Map<Element, Element>();
+        const pendingWidths = new Map<Element, number>();
         const observer = new Observer(entries => {
             for (const entry of entries) {
-                if (!isHtmlImageElement(entry.target)
-                    || !images.has(entry.target)) continue;
-                pendingWidths.set(entry.target, entry.contentRect.width);
+                for (const [visual, anchor] of media) {
+                    if (anchor === entry.target) {
+                        pendingWidths.set(visual, entry.contentRect.width);
+                    }
+                }
             }
             const current = this.widthTrackers.get(ownerDocument);
             if (current) this.scheduleWidthFlush(current);
@@ -375,7 +413,7 @@ export class CaptionDomRenderer {
         const tracker: CaptionWidthTracker = {
             document: ownerDocument,
             observer,
-            images,
+            media,
             pendingWidths,
             cancelScheduledFlush: null
         };
@@ -409,24 +447,77 @@ export class CaptionDomRenderer {
             width: string;
         }> = [];
 
-        for (const [img, observedWidth] of measurements) {
-            if (!img.isConnected || !tracker.images.has(img)) {
-                this.releaseWidthTracking(img);
+        for (const [visual, observedWidth] of measurements) {
+            if (!visual.isConnected || !tracker.media.has(visual)) {
+                this.releaseWidthTracking(visual);
                 continue;
             }
-            const target = this.findTarget(img);
+            const target = this.findTarget(visual);
             if (!target) continue;
-            const caption = this.findExistingCaption(target, this.getCaptionKey(img));
+            const caption = this.findExistingCaption(target, this.getCaptionKey(visual));
             if (!caption) continue;
             const width = positiveNumber(observedWidth)
                 ? `${roundLayoutWidth(observedWidth)}px`
-                : this.resolveAutoWidth(img, undefined);
+                : this.resolveAutoWidth(
+                    target.anchor,
+                    this.explicitWidths.get(visual),
+                    target.preferMeasuredWidth
+                );
             updates.push({ target, caption, width });
         }
 
         for (const update of updates) {
             this.applyWidthVariable(update.target, update.caption, update.width);
+            this.syncCaptionGeometry(
+                update.target,
+                update.caption,
+                update.caption.getAttribute('data-image-assistant-caption-width') === 'container'
+                    ? 'container'
+                    : 'auto'
+            );
         }
+    }
+
+    /**
+     * A renderer may keep its own full-line wrapper while the actual visual is
+     * a centered or floated child (notably native Excalidraw SVG output).
+     * Anchor only the caption box to the measured surface; never move or style
+     * the external renderer itself.
+     */
+    private syncCaptionGeometry(
+        target: CaptionTarget,
+        caption: HTMLElement,
+        widthMode: CaptionWidthMode
+    ): void {
+        if (target.placement !== 'append'
+            || widthMode !== 'auto'
+            || caption.getAttribute('data-image-assistant-caption-wrap') === 'true') {
+            clearCaptionGeometry(caption);
+            return;
+        }
+
+        const anchorRect = target.anchor.getBoundingClientRect?.();
+        const captionRect = caption.getBoundingClientRect?.();
+        if (!anchorRect
+            || !captionRect
+            || !positiveNumber(anchorRect.width)
+            || !Number.isFinite(anchorRect.left)
+            || !Number.isFinite(captionRect.left)) {
+            clearCaptionGeometry(caption);
+            return;
+        }
+
+        const previousOffset = parsePixels(
+            caption.style.getPropertyValue('--image-assistant-caption-offset')
+        );
+        const baselineLeft = captionRect.left - previousOffset;
+        const offset = anchorRect.left - baselineLeft;
+        setAttributeIfChanged(caption, 'data-image-assistant-caption-positioned', 'true');
+        setPropertyIfChanged(
+            caption,
+            '--image-assistant-caption-offset',
+            toPixels(offset)
+        );
     }
 
     private applyLineClamp(caption: HTMLElement, text: string, maxLines: number): void {
@@ -460,6 +551,33 @@ function positiveNumber(value: number | undefined): number | undefined {
 
 function roundLayoutWidth(value: number): number {
     return Math.round(value * 2) / 2;
+}
+
+function clearCaptionGeometry(caption: HTMLElement): void {
+    removeAttributeIfPresent(caption, 'data-image-assistant-caption-positioned');
+    removePropertyIfPresent(caption, '--image-assistant-caption-offset');
+}
+
+function parsePixels(value: string): number {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toPixels(value: number): string {
+    const rounded = roundLayoutWidth(value);
+    return `${Object.is(rounded, -0) ? 0 : rounded}px`;
+}
+
+function setPropertyIfChanged(element: HTMLElement, name: string, value: string): void {
+    if (element.style.getPropertyValue(name) !== value) element.style.setProperty(name, value);
+}
+
+function removeAttributeIfPresent(element: Element, name: string): void {
+    if (element.hasAttribute(name)) element.removeAttribute(name);
+}
+
+function removePropertyIfPresent(element: HTMLElement, name: string): void {
+    if (element.style.getPropertyValue(name)) element.style.removeProperty(name);
 }
 
 function isHtmlImageElement(value: unknown): value is HTMLImageElement {

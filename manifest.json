@@ -1,9 +1,9 @@
 {
   "id": "obsidian-image-assistant",
   "name": "Image Assistant",
-  "version": "5.1.1",
-  "minAppVersion": "1.11.4",
-  "description": "Convert, compress, resize, annotate, upload, download, caption, and OCR images directly in Obsidian.",
+  "version": "6.0.0",
+  "minAppVersion": "1.13.4",
+  "description": "Process images and create editable Draw.io or Excalidraw drawings in Obsidian.",
   "author": "RandyAllen",
   "authorUrl": "https://github.com/RandyAllenEEE/obsidian-image-assistant",
   "isDesktopOnly": true

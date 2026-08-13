@@ -1,7 +1,7 @@
-import type { CaptionLinkDescriptor } from "../utils/MarkdownSourceContext";
+import type { ImageSourceDescriptor } from "../utils/MarkdownSourceContext";
 
 export interface ReadingImageSourceBinding {
-    readonly descriptor: CaptionLinkDescriptor;
+    readonly descriptor: ImageSourceDescriptor;
     readonly sourcePath: string;
     readonly line: number;
     readonly start: number;

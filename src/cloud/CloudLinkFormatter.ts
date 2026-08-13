@@ -1,5 +1,11 @@
 import type { CloudUploadSettings } from "../settings/types";
 import { ImageLinkPathReplacer } from "../utils/ImageLinkPathReplacer";
+import {
+    pipeSyntaxParser,
+    type PipeSyntaxData,
+    type SizeData
+} from "../utils/PipeSyntaxParser";
+import { resolveCanonicalImageSize } from "../utils/CanonicalImageSize";
 
 /**
  * CloudLinkFormatter - 处理图床链接的格式化
@@ -8,7 +14,7 @@ import { ImageLinkPathReplacer } from "../utils/ImageLinkPathReplacer";
  * 1. 根据图床配置生成 Markdown 格式链接
  * 2. 支持在链接中添加尺寸标记 (|WxH)
  * 3. 优先保留原始链接的题注和尺寸
- * 4. Alt 文本默认为空格(如果原始链接没有题注),以配合题注功能
+ * 4. 无原始题注时生成标准空 alt
  */
 export class CloudLinkFormatter {
     /**
@@ -18,65 +24,30 @@ export class CloudLinkFormatter {
      * @param originalLink 原始链接文本 (可选,用于提取题注和尺寸)
      * @returns 格式化后的 Markdown 链接
      */
-    static formatCloudLink(cloudUrl: string, settings: CloudUploadSettings, originalLink?: string): string {
+    static formatCloudLink(
+        cloudUrl: string,
+        settings: CloudUploadSettings,
+        originalLink?: string,
+        resolvedSize?: SizeData
+    ): string {
         // 1. 确保获取纯 URL (防止重复包裹)
         const rawUrl = this.extractUrlFromMarkdown(cloudUrl);
 
-        // 2. 提取原始链接的题注和尺寸信息
-        const metadata = originalLink ? this.parseOriginalLink(originalLink) : null;
-
-        let alt = "";
-        let sizeParam = "";
-
-        // 3. 处理题注 (Alt Text)
-        if (metadata && metadata.alt) {
-            alt = metadata.alt;
-        } else {
-            // 如果没有原始题注，使用空格(配合题注插件)
-            alt = " ";
-        }
-
-        // 4. 处理尺寸参数
-        if (metadata && metadata.size) {
-            // 优先使用原始链接中的尺寸
-            sizeParam = `|${metadata.size}`;
-        } else {
-            // 否则使用全局设置
-            sizeParam = this.generateSizeParameter(settings);
-        }
-
-        // 5. 组装最终的 Alt 部分
-        let finalAlt = alt;
-        // 如果有尺寸参数，且 Alt 末尾不是该尺寸参数(防止重复)，则追加
-        // 注意：metadata.alt 应该是不包含尺寸部分的纯文本
-        if (sizeParam) {
-            finalAlt += sizeParam;
-        }
-
-        // 6. 生成链接
-        if (settings.cloudLinkFormat === 'wikilink') {
-            // WikiLink format: ![[url|alt]] or ![[url|width]] or ![[url]]
-
-            // Clean up finalAlt for WikiLinks
-            let wikiAlt = finalAlt;
-
-            // 如果 wikiAlt 以 | 开头（说明没有 alt 只有 sizeParam），移除开头的 |
-            // 因为 ![[url|...]] 已经在 url 后面加了 |
-            if (wikiAlt.startsWith('|')) {
-                wikiAlt = wikiAlt.substring(1);
-            }
-
-            // 只要 wikiAlt 有内容（即使是空格），也添加到链接中
-            // 这样可以满足用户"填充一个空格"的需求，生成 ![[url| ]]
-            if (wikiAlt && wikiAlt.length > 0) {
-                return `![[${rawUrl}|${wikiAlt}]]`;
-            } else {
-                return `![[${rawUrl}]]`;
-            }
-        } else {
-            // Markdown format: ![alt](url)
-            return `![${finalAlt}](${this.formatMarkdownDestination(rawUrl)})`;
-        }
+        // 2. Parse attributes through the same strict W/WxH grammar used by
+        // local links. An existing canonical size wins over cloud defaults.
+        const original = originalLink
+            ? pipeSyntaxParser.parsePipeSyntax(originalLink)
+            : null;
+        const data: PipeSyntaxData = {
+            path: rawUrl,
+            alt: original?.alt ?? " ",
+            align: original?.align ?? null,
+            size: original?.size ?? resolvedSize ?? this.generateSize(settings),
+            linkType: settings.cloudLinkFormat === "wikilink"
+                ? "wiki"
+                : "markdown"
+        };
+        return pipeSyntaxParser.buildPipeSyntax(data);
     }
 
     /**
@@ -87,116 +58,18 @@ export class CloudLinkFormatter {
         return ImageLinkPathReplacer.extractPureUrlFromPossibleMarkdown(text);
     }
 
-    private static formatMarkdownDestination(url: string): string {
-        if (!/[\s()]/.test(url)) {
-            return url;
-        }
-
-        return `<${url.replace(/>/g, "%3E")}>`;
-    }
-
-    /**
-     * 解析原始链接，提取题注和尺寸
-     * 支持格式:
-     * - ![caption|size](path)
-     * - ![[path|caption|size]] (Wiki Links)
-     */
-    private static parseOriginalLink(link: string): { alt: string, size: string | null } | null {
-        try {
-            // 1. 处理 Markdown 链接: ![alt](url)
-            const mdMatch = link.match(/!\[(.*?)\]\(.*?\)/);
-            if (mdMatch) {
-                const fullAlt = mdMatch[1];
-                return this.parseAltText(fullAlt);
-            }
-
-            // 2. 处理 Wiki 链接: ![[path|alt]]
-            const wikiMatch = link.match(/^!\[\[(.*)\]\]$/);
-            if (wikiMatch) {
-                const content = wikiMatch[1];
-                const firstPipe = this.findFirstUnescapedPipe(content);
-                if (firstPipe >= 0) {
-                    return this.parseAltText(content.slice(firstPipe + 1));
-                }
-                return { alt: "", size: null };
-            }
-
-            return null;
-        } catch (error) {
-            console.error("Error parsing original link:", error);
-            return null;
-        }
-    }
-
-    private static findFirstUnescapedPipe(text: string): number {
-        for (let i = 0; i < text.length; i++) {
-            if (text[i] !== "|") continue;
-
-            let slashCount = 0;
-            for (let j = i - 1; j >= 0 && text[j] === "\\"; j--) {
-                slashCount++;
-            }
-
-            if (slashCount % 2 === 0) {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    /**
-     * 解析 Alt 文本，分离纯文本和尺寸参数
-     * 例如: "caption|300" -> { alt: "caption", size: "300" }
-     */
-    private static parseAltText(fullAlt: string): { alt: string, size: string | null } {
-        // 匹配末尾的尺寸参数
-        // 支持: |100, |x100, |100x100
-        const sizeRegex = /\|(\d+(?:x\d+)?|x\d+)$/;
-        const match = fullAlt.match(sizeRegex);
-
-        if (match) {
-            const size = match[1];
-            // 移除尺寸部分的 alt
-            const alt = fullAlt.replace(sizeRegex, '');
-            return { alt, size };
-        }
-
-        return { alt: fullAlt, size: null };
-    }
-
     /**
      * 根据配置生成尺寸参数
      * @param settings 图床配置
-     * @returns 尺寸参数字符串,如 "|300x200"、"|500"、"|x300" 或空字符串
+     * @returns 严格的 W 或 WxH 尺寸数据；缺少宽度时不输出尺寸
      */
-    private static generateSizeParameter(settings: CloudUploadSettings): string {
-        if (settings.imageSizeSource !== "settings") return "";
+    private static generateSize(settings: CloudUploadSettings): SizeData | undefined {
+        if (settings.imageSizeSource !== "settings") return undefined;
 
-        const { imageSizeWidth, imageSizeHeight } = settings;
-
-        // 检查是否有有效的宽度值
-        const hasWidth = Number.isFinite(imageSizeWidth) && (imageSizeWidth ?? 0) > 0;
-        // 检查是否有有效的高度值
-        const hasHeight = Number.isFinite(imageSizeHeight) && (imageSizeHeight ?? 0) > 0;
-
-        // 如果两者都没有配置,返回空字符串(不添加尺寸参数)
-        if (!hasWidth && !hasHeight) {
-            return "";
-        }
-
-        // 如果都配置了,返回 |WxH
-        if (hasWidth && hasHeight) {
-            return `|${imageSizeWidth}x${imageSizeHeight}`;
-        }
-
-        // 只配置了宽度,返回 |W
-        if (hasWidth) {
-            return `|${imageSizeWidth}`;
-        }
-
-        // 只配置了高度,返回 |xH
-        return `|x${imageSizeHeight}`;
+        return resolveCanonicalImageSize({
+            width: settings.imageSizeWidth,
+            height: settings.imageSizeHeight
+        });
     }
 
     /**

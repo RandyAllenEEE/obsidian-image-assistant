@@ -16,8 +16,7 @@ describe('Texify', () => {
     beforeEach(() => {
         mockSettings = {
             url: 'https://texify.example.com/predict',
-            username: '',
-            password: ''
+            username: ''
         };
 
         texify = new Texify(mockSettings);
@@ -71,8 +70,10 @@ describe('Texify', () => {
 
         it('Given 有认证设置, When 发送请求, Then 包含 Basic Authorization 头', async () => {
             mockSettings.username = 'testuser';
-            mockSettings.password = 'testpass';
-            texify = new Texify(mockSettings);
+            mockSettings.passwordSecretId = 'image-assistant-texify-password';
+            texify = new Texify(mockSettings, {
+                secretStorage: { getSecret: vi.fn(() => 'testpass') }
+            } as any);
 
             const mockImage = pngImage();
 
@@ -97,7 +98,6 @@ describe('Texify', () => {
 
         it('reads the Basic Auth password from Obsidian Secret Storage', async () => {
             mockSettings.username = 'secret-user';
-            mockSettings.password = undefined;
             mockSettings.passwordSecretId = 'image-assistant-texify-password';
             texify = new Texify(mockSettings, {
                 secretStorage: { getSecret: vi.fn(() => 'stored-password') }
@@ -240,8 +240,10 @@ describe('Texify', () => {
 
         it('Given 特殊字符密码, When 构建认证, Then 正确编码', async () => {
             mockSettings.username = 'user@example.com';
-            mockSettings.password = 'p@ss:w0rd!';
-            texify = new Texify(mockSettings);
+            mockSettings.passwordSecretId = 'image-assistant-texify-password';
+            texify = new Texify(mockSettings, {
+                secretStorage: { getSecret: vi.fn(() => 'p@ss:w0rd!') }
+            } as any);
 
             const mockImage = pngImage();
 

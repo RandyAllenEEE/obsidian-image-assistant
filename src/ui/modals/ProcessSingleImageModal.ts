@@ -14,6 +14,7 @@ import { createReferenceMutationScanPolicy } from "../../utils/ReferenceScanPoli
 import { ImageResourceRefreshService } from "../../utils/ImageResourceRefreshService";
 import { ModalCommitGuard } from "../../utils/ModalCommitGuard";
 import { captureImageFileRevision } from "../../utils/ImageFileRevision";
+import { isProtectedDrawingFile } from "../../drawing/DrawingFileSemantics";
 
 export interface SingleImageModalSettings extends SingleImageOperationDefaults {
     outputFormat: OutputFormat;
@@ -552,7 +553,8 @@ export class ProcessSingleImageModal extends Modal {
                     ),
                     () => this.plugin.settings.localProcessing.link,
                     this.plugin.referenceIndexService,
-                    () => this.plugin.settings.cleanerSettings
+                    () => this.plugin.settings.cleanerSettings,
+                    file => isProtectedDrawingFile(this.plugin, file)
                 );
                 if (!this.commitGuard.beginCommitting(commitToken)) return;
                 this.imageFile = await committer.commit(

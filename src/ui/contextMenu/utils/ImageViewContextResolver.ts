@@ -185,6 +185,14 @@ export class ImageViewContextResolver {
         return null;
     }
 
+    /** Resolves non-image rendered media that remains inside a Markdown leaf. */
+    resolveElementOwner(element: Element): ImageViewOwnerContext | null {
+        if (!this.app?.workspace || !element.isConnected) return null;
+        const view = collectUsableMarkdownViews(this.app)
+            .find(candidate => candidate.contentEl.contains(element));
+        return view ? this.toOwnerContext(view) : null;
+    }
+
     private toOwnerContext(view: MarkdownView): ImageViewOwnerContext | null {
         const file = view.file;
         if (!file) return null;

@@ -12,12 +12,14 @@ import type { ReadingImageContext } from './caption/types';
 import { resolveCaptionLayout } from './ImageLayoutResolver';
 import { getImageSourceKey } from '../utils/MarkdownSourceContext';
 import {
-    isHtmlElementNode,
-    isHtmlImageElement,
-    isTextNode
+    isHtmlImageElement
 } from './caption/CaptionDomUtils';
 import { collectUsableMarkdownViews, getMarkdownViewMode } from './MarkdownViewRegistry';
 import { resolveEditorView } from '../utils/EditorViewResolver';
+import {
+    isStandaloneRenderedMediaTarget,
+    resolveRenderedMediaLayoutTarget
+} from './RenderedMediaLayoutTarget';
 
 type ReadingCaptionContext = CaptionRenderContext & ReadingImageContext & {
     captionText?: string | null;
@@ -119,8 +121,61 @@ export class ImageCaption extends Component {
         });
     }
 
+    renderExternalMedia(
+        media: Element,
+        context: ReadingCaptionContext = {}
+    ): HTMLElement | null {
+        const target = resolveRenderedMediaLayoutTarget(media);
+        if (!target || target.kind !== 'excalidraw-source' || target.image) {
+            return null;
+        }
+        const ownerDocument = context.document ?? media.ownerDocument ?? document;
+        this.ensureDocument(ownerDocument);
+        const options = this.getResolverOptions();
+        const resolved = context.descriptor
+            ? this.resolver.resolveFromDescriptor(context.descriptor, options)
+            : context.linkText
+                ? this.resolver.resolveFromLinkText(context.linkText, options)
+                : null;
+        if (!resolved) {
+            this.renderer.removeTarget(target.visual);
+            return null;
+        }
+        const standalone = context.descriptor?.standalone
+            ?? isStandaloneRenderedMediaTarget(target);
+        const layout = resolveCaptionLayout(
+            resolved.align,
+            this.plugin.settings.alignment,
+            this.plugin.settings.captions.alignment,
+            standalone
+        );
+        if (!this.renderPolicy.shouldRender({
+            settings: this.plugin.settings.captions,
+            mode: 'reading',
+            standalone
+        })) {
+            resolved.caption = null;
+            resolved.shouldRender = false;
+        }
+        return this.renderer.renderTarget(target, resolved, {
+            ...context,
+            document: ownerDocument,
+            sourceKey: context.descriptor
+                ? getImageSourceKey(context.descriptor)
+                : context.sourceKey,
+            layout,
+            standalone,
+            widthMode: this.plugin.settings.captions.widthMode,
+            maxLines: this.plugin.settings.captions.maxLines
+        });
+    }
+
     removeImage(img: HTMLImageElement): void {
         this.renderer.removeImage(img);
+    }
+
+    removeExternalMedia(media: Element): void {
+        this.renderer.removeTarget(media);
     }
 
     cleanup(root?: ParentNode): void {
@@ -175,52 +230,29 @@ export class ImageCaption extends Component {
 
         const settings = this.plugin.settings.captions;
         const cssText = `
-            .image-captions-enabled .has-image-assistant-caption,
-            .image-captions-enabled [data-image-assistant-caption-owner="true"]:not(img):not(.image-wrapper) {
+            .image-captions-enabled .has-image-assistant-caption:not([data-image-assistant-layout-sizing="external-renderer"]),
+            .image-captions-enabled [data-image-assistant-caption-owner="true"]:not([data-image-assistant-layout-sizing="external-renderer"]):not(img) {
                 display: inline-flex !important;
                 flex-direction: column;
                 justify-content: center;
+                align-items: center;
                 width: fit-content;
                 max-width: 100%;
                 min-width: 0;
             }
 
-            .image-captions-enabled [data-image-assistant-caption-owner="true"][data-image-assistant-layout-owner="true"]:not(img):not(.image-wrapper) {
+            .image-captions-enabled [data-image-assistant-caption-owner="true"][data-image-assistant-layout-owner="true"]:not([data-image-assistant-layout-sizing="external-renderer"]):not(img) {
                 display: flex !important;
             }
 
-            .image-captions-enabled [data-image-assistant-caption-align="left"] {
-                --image-assistant-caption-inline-start: 0;
-                --image-assistant-caption-inline-end: auto;
-                --image-assistant-caption-text-align: left;
-            }
-
-            .image-captions-enabled [data-image-assistant-caption-align="center"] {
-                --image-assistant-caption-inline-start: auto;
-                --image-assistant-caption-inline-end: auto;
-                --image-assistant-caption-text-align: center;
-            }
-
-            .image-captions-enabled [data-image-assistant-caption-align="right"] {
-                --image-assistant-caption-inline-start: auto;
-                --image-assistant-caption-inline-end: 0;
-                --image-assistant-caption-text-align: right;
-            }
-
-            .image-captions-enabled [data-image-assistant-caption-owner="true"][data-image-assistant-caption-align="left"] {
-                align-items: flex-start;
-            }
-
-            .image-captions-enabled [data-image-assistant-caption-owner="true"][data-image-assistant-caption-align="center"] {
+            .image-captions-enabled :is(.markdown-reading-view, .markdown-preview-view:not(.markdown-source-view))
+                [data-image-assistant-caption-owner="true"][data-image-assistant-layout-owner="true"][data-image-assistant-layout-sizing="external-renderer"]:not(img) {
+                display: flex !important;
+                flex-direction: column;
+                justify-content: center;
                 align-items: center;
-            }
-
-            .image-captions-enabled [data-image-assistant-caption-owner="true"][data-image-assistant-caption-align="right"] {
-                align-items: flex-end;
-            }
-
-            .image-captions-enabled .has-image-assistant-caption > .image-wrapper {
-                width: 100%;
+                max-width: 100%;
+                min-width: 0;
             }
 
             .image-captions-enabled .image-assistant-caption {
@@ -243,12 +275,33 @@ export class ImageCaption extends Component {
                 text-transform: ${settings.textTransform || 'none'};
                 letter-spacing: ${settings.letterSpacing || 'normal'};
                 border: ${settings.border || 'none'};
-                text-align: var(--image-assistant-caption-text-align, center);
-                margin-left: var(--image-assistant-caption-inline-start, auto);
-                margin-right: var(--image-assistant-caption-inline-end, auto);
+                text-align: center;
+                margin-left: auto;
+                margin-right: auto;
                 line-height: 1.4;
                 box-sizing: border-box;
                 pointer-events: none;
+            }
+
+            .image-captions-enabled .image-assistant-caption[data-image-assistant-caption-text-align="left"] {
+                text-align: left;
+            }
+
+            .image-captions-enabled .image-assistant-caption[data-image-assistant-caption-text-align="center"] {
+                text-align: center;
+            }
+
+            .image-captions-enabled .image-assistant-caption[data-image-assistant-caption-text-align="right"] {
+                text-align: right;
+            }
+
+            .image-captions-enabled .image-assistant-caption[data-image-assistant-caption-renderer="dom"][data-image-assistant-caption-positioned="true"] {
+                position: relative;
+                left: var(--image-assistant-caption-offset, 0px);
+                margin-left: 0 !important;
+                margin-right: 0 !important;
+                margin-inline-start: 0 !important;
+                margin-inline-end: 0 !important;
             }
 
             .image-captions-enabled .image-assistant-caption[data-image-assistant-caption-clamped="true"] {
@@ -263,23 +316,33 @@ export class ImageCaption extends Component {
                 width: 100%;
             }
 
-            .image-captions-enabled img[data-image-assistant-caption-owner="true"] +
-                .image-assistant-caption[data-image-assistant-caption-renderer="dom"],
-            .image-captions-enabled .image-wrapper +
-                .image-assistant-caption[data-image-assistant-caption-renderer="dom"] {
-                width: var(--img-width, 100%);
-            }
-
-            .image-captions-enabled .has-image-assistant-caption img,
-            .image-captions-enabled [data-image-assistant-caption-owner="true"] img {
-                display: block;
-                max-width: 100%;
-                height: auto;
-            }
-
             .image-captions-enabled .cm-editor .image-assistant-live-preview-caption {
                 box-sizing: border-box;
                 max-width: 100%;
+                margin-top: 0 !important;
+                margin-bottom: 0 !important;
+            }
+
+            .image-captions-enabled .cm-editor .image-assistant-live-preview-caption[data-image-assistant-caption-positioned="true"] {
+                margin-left: 0 !important;
+                margin-right: 0 !important;
+                margin-inline-start: 0 !important;
+                margin-inline-end: 0 !important;
+            }
+
+            .image-captions-enabled .cm-editor .image-assistant-live-preview-caption:not([data-image-assistant-caption-positioned="true"])[data-image-assistant-caption-placement="left"] {
+                margin-inline-start: 0 !important;
+                margin-inline-end: auto !important;
+            }
+
+            .image-captions-enabled .cm-editor .image-assistant-live-preview-caption:not([data-image-assistant-caption-positioned="true"])[data-image-assistant-caption-placement="center"] {
+                margin-inline-start: auto !important;
+                margin-inline-end: auto !important;
+            }
+
+            .image-captions-enabled .cm-editor .image-assistant-live-preview-caption:not([data-image-assistant-caption-positioned="true"])[data-image-assistant-caption-placement="right"] {
+                margin-inline-start: auto !important;
+                margin-inline-end: 0 !important;
             }
         `;
         if (styleElement.textContent !== cssText) styleElement.textContent = cssText;
@@ -395,15 +458,8 @@ export class ImageCaption extends Component {
     }
 
     private isStandaloneDomImage(img: HTMLImageElement): boolean {
-        const host = img.closest('.image-wrapper, .image-embed, .external-embed') ?? img;
-        const parent = host.parentElement;
-        if (!parent) return true;
-        return Array.from(parent.childNodes).every(node =>
-            node === host
-            || isTextNode(node) && !node.textContent?.trim()
-            || isHtmlElementNode(node)
-                && node.getAttribute('data-image-assistant-caption-renderer') === 'dom'
-        );
+        const target = resolveRenderedMediaLayoutTarget(img);
+        return target ? isStandaloneRenderedMediaTarget(target) : true;
     }
 
     private scheduleViewModeSync(): void {

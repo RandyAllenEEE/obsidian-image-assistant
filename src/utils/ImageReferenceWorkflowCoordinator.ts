@@ -122,8 +122,6 @@ export interface ReferenceWorkflowResult {
     readonly staleInventory?: ReferenceInventory;
 }
 
-export type ReferenceWorkflowExecutionResult = ReferenceWorkflowResult;
-
 export type ReferenceWorkflowProgressStage =
     | "index"
     | "verify"

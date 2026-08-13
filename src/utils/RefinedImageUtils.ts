@@ -74,17 +74,28 @@ export class RefinedImageUtils {
             if (!src) return { status: 'absent' };
 
             const sourceIndex = preparedIndex ?? this.getImageSourceIndex(editor);
-            const editorOffset = this.getEditorOffset(img, editor);
+            const directWidget = getDirectCodeMirrorBlockWidget(img);
+            const editorOffset = this.getEditorOffset(img, editor, directWidget);
             if (editorOffset !== null) {
                 const positioned = this.selectDescriptorAtOffset(
                     sourceIndex.descriptors.map(descriptor => ({ descriptor, score: 4 })),
                     editorOffset,
                     sourceIndex
                 );
-                if (positioned) {
+                // A normal inline render has a stable CodeMirror position, so
+                // an unresolvable position is a transient mapping gap. In
+                // contrast, a standalone image is a replace decoration in
+                // Obsidian 1.11.x and its raw IMG is recreated on every
+                // decoration update. Query the direct widget root, but only
+                // trust that position when it still identifies this image's
+                // source. A stale adjacent position must fall through to the
+                // source-key/unique-target paths below instead of clearing an
+                // otherwise valid layout during widget replacement.
+                if (positioned && (!directWidget
+                    || this.descriptorMatchesImageSource(positioned.descriptor, src))) {
                     return { status: 'resolved', match: this.toImageLinkMatch(positioned, sourceIndex) };
                 }
-                return { status: 'pending' };
+                if (!directWidget) return { status: 'pending' };
             }
 
             const sourceKey = img.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
@@ -245,13 +256,24 @@ export class RefinedImageUtils {
         return Array.from({ length: lineCount }, (_, index) => editor.getLine(index)).join('\n');
     }
 
-    private getEditorOffset(img: HTMLImageElement, editor: Editor): number | null {
+    private getEditorOffset(
+        img: HTMLImageElement,
+        editor: Editor,
+        directWidget: HTMLElement | null
+    ): number | null {
         const codeMirror = (editor as EditorWithCodeMirror).cm;
         if (!codeMirror?.posAtDOM) return null;
 
-        const nodes: Node[] = [img];
-        const embed = img.closest('.cm-embed-block, .cm-line');
-        if (embed && embed !== img) nodes.push(embed);
+        // A standalone Live Preview image is a CodeMirror block decoration.
+        // Ask CodeMirror about the replacement root itself (not its IMG
+        // descendant), then validate the resulting descriptor in the caller.
+        // This gives a newly created widget its exact source identity even
+        // when the same remote URL occurs more than once in the note.
+        const nodes: Node[] = directWidget ? [directWidget] : [img];
+        if (!directWidget) {
+            const embed = img.closest('.cm-embed-block, .cm-line');
+            if (embed && embed !== img) nodes.push(embed);
+        }
 
         for (const node of nodes) {
             try {
@@ -262,6 +284,13 @@ export class RefinedImageUtils {
             }
         }
         return null;
+    }
+
+    private descriptorMatchesImageSource(descriptor: ImageSourceDescriptor, src: string): boolean {
+        const isNetwork = isHttpUrl(src);
+        const candidates = this.buildSourceCandidates(src, isNetwork);
+        return candidates.length > 0
+            && this.scoreLinkMatch(descriptor, candidates, isNetwork) > 0;
     }
 
     private selectDescriptorAtOffset(
@@ -330,6 +359,17 @@ export class RefinedImageUtils {
             return value;
         }
     }
+}
+
+function getDirectCodeMirrorBlockWidget(img: HTMLImageElement): HTMLElement | null {
+    let widget: HTMLElement = img;
+    while (widget.parentElement && !widget.parentElement.matches('.cm-content')) {
+        widget = widget.parentElement;
+    }
+    return widget.parentElement?.matches('.cm-content') === true
+        && !!widget.closest('.markdown-source-view')
+        ? widget
+        : null;
 }
 
 interface SourceCandidate {

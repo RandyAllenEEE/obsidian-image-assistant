@@ -13,6 +13,11 @@ import { BasePasteHandler } from "../../core/BasePasteHandler";
 import type { EditorImageInsertionContext } from "../../core/EditorImageInsertionContext";
 import { createTrackedRangeSession } from "../../utils/EditorReplacement";
 import { ImageLinkPathReplacer } from "../../utils/ImageLinkPathReplacer";
+import {
+    decodeBlobIntrinsicDimensions,
+    resolveCanonicalImageSize
+} from "../../utils/CanonicalImageSize";
+import type { SizeData } from "../../utils/PipeSyntaxParser";
 
 export class PasteHandler extends BasePasteHandler {
     private helpers: CloudResourceHelpers;
@@ -79,6 +84,7 @@ export class PasteHandler extends BasePasteHandler {
         context?: EditorImageInsertionContext
     ): Promise<void> {
         if (!context) return;
+        let sizeWarningShown = false;
         for (const file of files) {
             // Insert uploading placeholder using EditorContentInserter
             const inserter = new EditorContentInserter(
@@ -90,6 +96,11 @@ export class PasteHandler extends BasePasteHandler {
                 await inserter.runWithLoadingText(
                     `${t("LOADING_UPLOAD") || "Uploading"} ${file.name}...`,
                     async session => {
+                        const resolvedSize = await this.resolveUploadSize(
+                            file,
+                            context.ownerDocument
+                        );
+
                         const uploaderManager = new UploaderManager(
                             this.plugin.settings.pasteHandling.cloud.uploader,
                             this.plugin
@@ -110,10 +121,16 @@ export class PasteHandler extends BasePasteHandler {
                         const cloudUrl = uploadResult.result[0];
                         const cloudLink = CloudLinkFormatter.formatCloudLink(
                             cloudUrl,
-                            this.plugin.settings.pasteHandling.cloud
+                            this.plugin.settings.pasteHandling.cloud,
+                            undefined,
+                            resolvedSize ?? undefined
                         );
                         if (!session.insertResponseToEditor(cloudLink)) {
                             throw new Error(t("MSG_IMAGE_CONTEXT_UNRESOLVED"));
+                        }
+                        if (resolvedSize === null && !sizeWarningShown) {
+                            sizeWarningShown = true;
+                            new Notice(t("MSG_EMBED_SIZE_OMITTED"));
                         }
                     }
                 );
@@ -127,6 +144,43 @@ export class PasteHandler extends BasePasteHandler {
         if (this.plugin.settings.captions.enabled) {
             this.plugin.imageStateManager?.refreshAllImages();
         }
+    }
+
+    /**
+     * Resolve upload sizing before the source bytes leave the client. A null
+     * result means sizing was requested but decoding failed; undefined means
+     * the configured mode does not require intrinsic dimensions.
+     */
+    private async resolveUploadSize(
+        file: File,
+        ownerDocument: Document
+    ): Promise<SizeData | null | undefined> {
+        const settings = this.plugin.settings.pasteHandling.cloud;
+        const useActualSize = settings.imageSizeSource === "actual";
+        const needsAspectRatio = settings.imageSizeSource === "settings"
+            && settings.imageSizeWidth === undefined
+            && settings.imageSizeHeight !== undefined;
+        if (!useActualSize && !needsAspectRatio) return undefined;
+
+        let intrinsic: { readonly width: number; readonly height: number } | null;
+        try {
+            intrinsic = await decodeBlobIntrinsicDimensions(file, ownerDocument);
+        } catch (error) {
+            console.warn("[Cloud Upload] Unable to read intrinsic image dimensions:", error);
+            return null;
+        }
+        if (!intrinsic) return null;
+        return useActualSize
+            ? resolveCanonicalImageSize({
+                width: intrinsic.width,
+                height: intrinsic.height,
+                intrinsic
+            }) ?? null
+            : resolveCanonicalImageSize({
+                width: settings.imageSizeWidth,
+                height: settings.imageSizeHeight,
+                intrinsic
+            }) ?? null;
     }
 
     public async handlePasteText(

@@ -61,6 +61,20 @@ describe("RenameInputBuilder", () => {
         builder.unload();
     });
 
+    it("treats .drawio.svg as one suffix in the editable filename", () => {
+        const builder = makeBuilder();
+        const context = makeContext("local");
+        Object.assign(context.localFile, {
+            path: "assets/Drawing.drawio.svg",
+            name: "Drawing.drawio.svg",
+            basename: "Drawing.drawio",
+            extension: "svg"
+        });
+
+        expect(builder.createModel(context).fileName).toBe("Drawing");
+        builder.unload();
+    });
+
     it("uses the same modal form and hides local file controls for URL properties", () => {
         const builder = makeBuilder();
         const open = vi.spyOn(Modal.prototype, "open")
@@ -109,5 +123,34 @@ describe("RenameInputBuilder", () => {
             fileMoved: false
         });
         await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    });
+
+    it("passes a valid height-only edit to the handler for ratio resolution", async () => {
+        const builder = makeBuilder();
+        const apply = vi.fn().mockResolvedValue({
+            complete: false,
+            linkUpdated: false,
+            fileMoved: false,
+            error: "ratio unavailable"
+        });
+        const open = vi.spyOn(Modal.prototype, "open")
+            .mockImplementation(function (this: Modal) {
+                this.onOpen();
+            });
+
+        builder.openModal(makeContext("url"), apply);
+        const modal = open.mock.instances.at(-1) as unknown as Modal;
+        const dimensions = modal.contentEl.querySelectorAll<HTMLInputElement>(
+            ".image-converter-contextmenu-dimension-input"
+        );
+        dimensions[0].value = "";
+        dimensions[1].value = "240";
+        modal.contentEl.querySelector<HTMLButtonElement>(
+            ".image-converter-contextmenu-confirm"
+        )!.click();
+
+        await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(
+            expect.objectContaining({ width: null, height: 240 })
+        ));
     });
 });

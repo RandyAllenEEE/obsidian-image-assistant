@@ -27,7 +27,6 @@ export function renderAlignmentSettingsSection(
                 .onChange(async (value) => {
                     plugin.settings.alignment.enabled = value;
                     await plugin.saveSettings();
-                    plugin.applyEditModeWrapClass();
                     plugin.imageStateManager?.refreshAllImages();
                     plugin.imageCaption?.refreshAllViews();
                     // Force refresh to update child settings visibility
@@ -108,8 +107,6 @@ export function renderAlignmentSettingsSection(
                 .onChange(async (value) => {
                     plugin.settings.alignment.enableEditModeWrap = value;
                     await plugin.saveSettings();
-                    // Update body class
-                    plugin.applyEditModeWrapClass();
                     plugin.imageStateManager?.refreshAllImages();
                     plugin.imageCaption?.refreshAllViews();
                 })

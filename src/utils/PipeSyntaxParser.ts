@@ -7,7 +7,7 @@
  * 
  * Attributes:
  * - align: left, center, right, left-wrap, right-wrap
- * - size: 300x200, 300, 300x, x200
+ * - size: 300x200 or 300, as the final pipe token
  * - alt: any text (caption)
  */
 
@@ -15,17 +15,14 @@ import {
     PIPE_SIZE_PATTERN,
     PIPE_ALIGN_PATTERN,
     REGEX_WIKI_LINK_VALIDATE,
-    REGEX_MD_LINK_VALIDATE,
     getAllImageLinks
 } from './RegexPatterns';
 
 export type AlignType = 'left' | 'center' | 'right' | 'left-wrap' | 'right-wrap' | null;
 
-export interface SizeData {
-    width?: number;   // 宽度（像素）
-    height?: number;  // 高度（像素）
-    format: 'WxH' | 'W' | 'Wx' | 'xH';  // 尺寸格式
-}
+export type SizeData =
+    | { width: number; height?: never; format: 'W' }
+    | { width: number; height: number; format: 'WxH' };
 
 export interface PipeSyntaxData {
     path: string;                       // 图片路径或 URL
@@ -36,7 +33,7 @@ export interface PipeSyntaxData {
     linkType: 'wiki' | 'markdown';      // 链接类型
 }
 
-/** A dimension-only update used by interactive resizing. */
+/** A dimension-only update used by reference and property edit workflows. */
 export interface PipeSyntaxSizeUpdate {
     readonly width?: number | null;
     readonly height?: number | null;
@@ -74,9 +71,6 @@ export class PipeSyntaxParser {
 
     // Wiki 链接正则
     private static readonly WIKI_LINK_PATTERN = REGEX_WIKI_LINK_VALIDATE;
-
-    // Markdown 链接正则
-    private static readonly MARKDOWN_LINK_PATTERN = REGEX_MD_LINK_VALIDATE;
 
     /**
      * 解析图片链接的 Pipe Syntax
@@ -127,7 +121,7 @@ export class PipeSyntaxParser {
         const path = this.unescapeWikiPath(parts[0].trim());
         const attrContent = parts.slice(1).join('|');
 
-        const { alt, align, size } = this.parsePipeAttributes(attrContent, false, options.attributeMode);
+        const { alt, align, size } = this.parsePipeAttributes(attrContent, options.attributeMode);
 
         return {
             path,
@@ -223,7 +217,7 @@ export class PipeSyntaxParser {
         const bracketContent = match[1]; // alt|attr1|attr2
         const destination = this.parseMarkdownDestination(match[2].trim());
 
-        const { alt, align, size } = this.parsePipeAttributes(bracketContent, true, options.attributeMode);
+        const { alt, align, size } = this.parsePipeAttributes(bracketContent, options.attributeMode);
 
         return {
             path: destination.path,
@@ -313,11 +307,10 @@ export class PipeSyntaxParser {
     private buildMarkdownLink(data: PipeSyntaxData): string {
         const parts: string[] = [];
 
-        // 第一个位置是 alt
+        // A numeric-only Markdown alt is Obsidian's canonical width syntax:
+        // `![300](image.png)`. Do not force an empty leading segment.
         if (data.alt && data.alt !== ' ') {
             parts.push(data.alt);
-        } else {
-            parts.push(''); // alt 缺省时留空
         }
 
         // 添加 align
@@ -331,9 +324,45 @@ export class PipeSyntaxParser {
         }
 
         const bracketContent = parts.join('|');
-        const path = /\s/.test(data.path) ? `<${data.path}>` : data.path;
+        const path = /[\s()]/.test(data.path)
+            ? `<${data.path.replace(/>/g, '%3E')}>`
+            : data.path;
         const title = data.title ? ` "${data.title.replace(/"/g, '\\"')}"` : '';
         return `![${bracketContent}](${path}${title})`;
+    }
+
+    /** Formats only the canonical caption/alignment/size attribute sequence. */
+    public formatPipeAttributes(
+        data: Pick<PipeSyntaxData, 'alt' | 'align' | 'size'>
+    ): string {
+        const parts: string[] = [];
+        if (data.alt && data.alt !== ' ') parts.push(data.alt);
+        if (data.align) parts.push(data.align);
+        if (data.size) parts.push(this.formatSizeAttribute(data.size));
+        return parts.join('|');
+    }
+
+    /**
+     * Replaces only the Wiki alias or Markdown alt portion. The path, title,
+     * angle wrapping, escaping and embed shell remain byte-for-byte unchanged.
+     * Use this for explicit property edits; path-only workflows must continue
+     * using their raw-attribute-preserving serializers.
+     */
+    public rewritePipeAttributes(
+        linkText: string,
+        data: Pick<PipeSyntaxData, 'alt' | 'align' | 'size'>
+    ): string | null {
+        const attributes = this.formatPipeAttributes(data);
+        if (linkText.startsWith('![[') && linkText.endsWith(']]')) {
+            const inside = linkText.slice(3, -2);
+            const pathEnd = this.findFirstUnescapedPipe(inside);
+            const rawPath = pathEnd < 0 ? inside : inside.slice(0, pathEnd);
+            return `![[${rawPath}${attributes ? `|${attributes}` : ''}]]`;
+        }
+
+        const markdown = linkText.match(/^!\[([^\]]*)\]\(([\s\S]*)\)$/);
+        if (!markdown) return null;
+        return `![${attributes}](${markdown[2]})`;
     }
 
     /**
@@ -342,7 +371,7 @@ export class PipeSyntaxParser {
      * @param altText The raw alt text (e.g. "Title|100")
      */
     public parseAltText(altText: string, mode: PipeAttributeParseMode = 'storage'): PipeSyntaxData {
-        const { alt, align, size } = this.parsePipeAttributes(altText, true, mode);
+        const { alt, align, size } = this.parsePipeAttributes(altText, mode);
 
         return {
             path: '',
@@ -356,9 +385,8 @@ export class PipeSyntaxParser {
     /**
      * 核心解析逻辑：从 Pipe Syntax 字符串中提取 alt, align, size
      * @param content 管道符分隔的内容片段 (不含 ![[ ]] 或 ![ ]() 外壳)
-     * @param firstPartIsAlt 是否强制首个片段为 alt (Markdown 风格)
      */
-    public parsePipeAttributes(content: string, firstPartIsAlt: boolean, mode: PipeAttributeParseMode = 'storage'): {
+    public parsePipeAttributes(content: string, mode: PipeAttributeParseMode = 'storage'): {
         alt?: string;
         align?: AlignType;
         size?: SizeData;
@@ -367,83 +395,33 @@ export class PipeSyntaxParser {
             return { alt: ' ' };
         }
 
-        const parts = this.splitByUnescapedPipe(content);
-        let segments = [...parts];
-
-        let alt: string | undefined;
+        // Both Markdown and Wiki attributes follow the same tail grammar. A
+        // sole numeric token is intentionally a size, matching Obsidian.
+        const segments = this.splitByUnescapedPipe(content);
         let size: SizeData | undefined;
         let align: AlignType = null;
 
-        if (mode === 'display') {
-            const containsPipe = parts.length > 1;
-            const remaining: string[] = [];
-
-            for (const segment of segments) {
-                const trimmed = segment.trim();
-                const canTreatAsAttribute = containsPipe || !firstPartIsAlt;
-
-                if (canTreatAsAttribute && this.isSizeAttribute(trimmed) && !size) {
-                    size = this.parseSizeAttribute(trimmed);
-                } else if (canTreatAsAttribute && this.isAlignAttribute(trimmed) && !align) {
-                    align = trimmed as AlignType;
-                } else {
-                    remaining.push(segment);
-                }
-            }
-
-            const caption = remaining.join('|').replace(/\\\|/g, '|').trim();
-            return { alt: caption || ' ', align, size };
+        const lastSize = this.parseSizeAttribute(
+            segments.length > 0 ? segments[segments.length - 1].trim() : ''
+        );
+        if (lastSize) {
+            size = lastSize;
+            segments.pop();
         }
 
-        if (firstPartIsAlt) {
-            // Markdown 风格：首位是 alt
-            if (segments[0].trim() === '') {
-                alt = ' ';
-            } else {
-                alt = segments[0];
-            }
-            segments = segments.slice(1);
-
-            // 后续属性顺序不限制
-            for (const segment of segments) {
-                const trimmed = segment.trim();
-                if (this.isSizeAttribute(trimmed) && !size) {
-                    size = this.parseSizeAttribute(trimmed);
-                } else if (this.isAlignAttribute(trimmed) && !align) {
-                    align = trimmed as AlignType;
-                }
-            }
-        } else {
-            // Wiki 风格：从后向前识别 size 和 align，剩余合并为 alt
-            // 步骤1：从后向前识别 size (最多一个)
-            for (let i = segments.length - 1; i >= 0; i--) {
-                const trimmed = segments[i].trim();
-                if (this.isSizeAttribute(trimmed)) {
-                    size = this.parseSizeAttribute(trimmed);
-                    segments.splice(i, 1);
-                    break;
-                }
-            }
-
-            // 步骤2：从后向前识别 align (最多一个)
-            for (let i = segments.length - 1; i >= 0; i--) {
-                const trimmed = segments[i].trim();
-                if (this.isAlignAttribute(trimmed)) {
-                    align = trimmed as AlignType;
-                    segments.splice(i, 1);
-                    break;
-                }
-            }
-
-            // 步骤3：剩余片段合并
-            if (segments.length > 0) {
-                alt = segments.join('|');
-            } else {
-                alt = ' ';
-            }
+        const lastAttribute = segments.length > 0
+            ? segments[segments.length - 1].trim()
+            : '';
+        if (this.isAlignAttribute(lastAttribute)) {
+            align = lastAttribute as AlignType;
+            segments.pop();
         }
 
-        return { alt, align, size };
+        const rawCaption = segments.join('|').trim();
+        const alt = mode === 'display'
+            ? rawCaption.replace(/\\\|/g, '|')
+            : rawCaption;
+        return { alt: alt || ' ', align, size };
     }
 
     private splitByUnescapedPipe(text: string): string[] {
@@ -470,6 +448,20 @@ export class PipeSyntaxParser {
 
         result.push(text.slice(start));
         return result;
+    }
+
+    private findFirstUnescapedPipe(text: string): number {
+        for (let index = 0; index < text.length; index++) {
+            if (text[index] !== '|') continue;
+            let slashCount = 0;
+            for (let cursor = index - 1;
+                cursor >= 0 && text[cursor] === '\\';
+                cursor--) {
+                slashCount++;
+            }
+            if (slashCount % 2 === 0) return index;
+        }
+        return -1;
     }
 
     /**
@@ -499,7 +491,7 @@ export class PipeSyntaxParser {
     /**
      * Updates only the size token while retaining the original link shell and
      * every non-size pipe segment verbatim. This is intentionally stricter
-     * than buildPipeSyntax(): interactive resize must not reorder or discard a
+     * than buildPipeSyntax(): a reference patch must not reorder or discard a
      * caption, title, escaped pipe, or an extension-owned segment.
      */
     public updateSizePreservingSyntax(
@@ -530,6 +522,11 @@ export class PipeSyntaxParser {
                 segments[index] = this.replaceSegmentValue(segments[index], nextValue);
             }
         } else if (nextSize) {
+            if (target.linkType === 'markdown'
+                && segments.length === 1
+                && segments[0] === '') {
+                segments.length = 0;
+            }
             segments.push(this.formatSizeAttribute(nextSize));
         }
 
@@ -569,34 +566,21 @@ export class PipeSyntaxParser {
         linkType: PipeSyntaxData['linkType'],
         segments: readonly string[]
     ): number[] | null {
-        if (linkType === 'wiki') {
-            return this.getMatchingSegmentIndexes(segments, (segment, index) =>
-                index > 0 && this.isSizeAttribute(segment.trim())
-            );
+        const lastIndex = segments.length - 1;
+        if (lastIndex < 0) return [];
+        const firstAttributeIndex = linkType === 'wiki' ? 1 : 0;
+        const sizeIndexes: number[] = [];
+        for (let index = firstAttributeIndex; index <= lastIndex; index++) {
+            if (this.isSizeAttribute(segments[index].trim())) {
+                sizeIndexes.push(index);
+            }
         }
 
-        // Standard Markdown treats the first segment as alt text. A numeric
-        // first segment followed by other segments is therefore ambiguous:
-        // it may be a legacy numeric caption or a non-standard size-first
-        // syntax. Refuse to alter it rather than guessing.
-        if (segments.length > 1 && this.isSizeAttribute(segments[0].trim())) {
-            return null;
-        }
-
-        return this.getMatchingSegmentIndexes(segments, (segment, index) =>
-            index > 0 && this.isSizeAttribute(segment.trim())
-        );
-    }
-
-    private getMatchingSegmentIndexes(
-        segments: readonly string[],
-        matches: (segment: string, index: number) => boolean
-    ): number[] {
-        const indexes: number[] = [];
-        segments.forEach((segment, index) => {
-            if (matches(segment, index)) indexes.push(index);
-        });
-        return indexes;
+        // A size-like token before the final unescaped pipe segment is legacy
+        // or ambiguous content. Automatic workflows must preserve it exactly
+        // instead of appending another size or silently migrating its order.
+        if (sizeIndexes.some(index => index !== lastIndex)) return null;
+        return sizeIndexes;
     }
 
     private resolveSizeUpdate(
@@ -614,13 +598,10 @@ export class PipeSyntaxParser {
             return null;
         }
         if (width === undefined && height === undefined) return undefined;
-        return {
-            ...(width === undefined ? {} : { width }),
-            ...(height === undefined ? {} : { height }),
-            format: width !== undefined && height !== undefined
-                ? 'WxH'
-                : width !== undefined ? 'W' : 'xH'
-        };
+        if (width === undefined) return null;
+        return height === undefined
+            ? { width, format: 'W' }
+            : { width, height, format: 'WxH' };
     }
 
     private isValidDimension(value: number | undefined): boolean {
@@ -656,28 +637,15 @@ export class PipeSyntaxParser {
             return undefined;
         }
 
-        // 匹配 x200 格式
-        if (match[4]) {
-            return {
-                height: parseInt(match[4], 10),
-                format: 'xH'
-            };
+        const width = Number(match[1]);
+        const height = match[2] ? Number(match[2]) : undefined;
+        if (!Number.isSafeInteger(width) || width <= 0
+            || (height !== undefined && (!Number.isSafeInteger(height) || height <= 0))) {
+            return undefined;
         }
-
-        const width = match[1] ? parseInt(match[1], 10) : undefined;
-        const height = match[3] ? parseInt(match[3], 10) : undefined;
-
-        if (width && height) {
-            return { width, height, format: 'WxH' };
-        } else if (width && match[2]) {
-            // 300x 格式
-            return { width, format: 'Wx' };
-        } else if (width) {
-            // 300 格式
-            return { width, format: 'W' };
-        }
-
-        return undefined;
+        return height === undefined
+            ? { width, format: 'W' }
+            : { width, height, format: 'WxH' };
     }
 
     /**
@@ -689,10 +657,6 @@ export class PipeSyntaxParser {
                 return `${size.width}x${size.height}`;
             case 'W':
                 return `${size.width}`;
-            case 'Wx':
-                return `${size.width}x`;
-            case 'xH':
-                return `x${size.height}`;
             default:
                 return '';
         }

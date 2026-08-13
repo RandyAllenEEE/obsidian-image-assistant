@@ -163,7 +163,7 @@ describe("RenameHandler", () => {
                 fileName: "renamed",
                 directory: "images",
                 caption: "Updated",
-                width: null,
+                width: 320,
                 height: 240,
                 alignment: "left-wrap"
             }
@@ -180,9 +180,141 @@ describe("RenameHandler", () => {
             fixture.imageFile,
             "images/renamed.png"
         );
+        expect(fixture.getLine()).toBe(
+            "![[assets/pic.png|Updated|left-wrap|320x240]]"
+        );
         expect(fixture.view.save.mock.invocationCallOrder[0]).toBeLessThan(
             fixture.app.fileManager.renameFile.mock.invocationCallOrder[0]
         );
+    });
+
+    it("converts a height-only edit to canonical width using the visual aspect ratio", async () => {
+        const fixture = makeFixture();
+        fixture.context.image.setAttribute("width", "800");
+        fixture.context.image.setAttribute("height", "600");
+
+        const result = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "pic",
+                directory: "assets",
+                caption: "Updated",
+                width: null,
+                height: 240,
+                alignment: "left-wrap"
+            }
+        );
+
+        expect(result).toEqual({
+            complete: true,
+            linkUpdated: true,
+            fileMoved: false
+        });
+        expect(fixture.getLine()).toBe(
+            "![[assets/pic.png|Updated|left-wrap|320]]"
+        );
+        expect(fixture.view.save).toHaveBeenCalledOnce();
+        expect(fixture.app.fileManager.renameFile).not.toHaveBeenCalled();
+    });
+
+    it("keeps source and file unchanged when a height-only edit has no ratio", async () => {
+        const fixture = makeFixture();
+
+        const result = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "renamed",
+                directory: "images",
+                caption: "Updated",
+                width: null,
+                height: 240,
+                alignment: "left-wrap"
+            }
+        );
+
+        expect(result).toMatchObject({
+            complete: false,
+            linkUpdated: false,
+            fileMoved: false
+        });
+        expect(result.error).toContain("aspect ratio");
+        expect(fixture.getLine()).toBe(
+            "![[assets/pic.png|Old caption|right|500x300]]"
+        );
+        expect(fixture.view.save).not.toHaveBeenCalled();
+        expect(fixture.app.fileManager.renameFile).not.toHaveBeenCalled();
+    });
+
+    it("preserves the complete .drawio.svg suffix when renaming properties", async () => {
+        const fixture = makeFixture("![[assets/Drawing.drawio.svg]]");
+        Object.assign(fixture.imageFile, {
+            path: "assets/Drawing.drawio.svg",
+            name: "Drawing.drawio.svg",
+            basename: "Drawing.drawio",
+            extension: "svg"
+        });
+
+        const result = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "Architecture.drawio.svg",
+                directory: "assets",
+                caption: "",
+                width: null,
+                height: null,
+                alignment: null
+            }
+        );
+
+        expect(result.fileMoved).toBe(true);
+        expect(fixture.app.fileManager.renameFile).toHaveBeenCalledWith(
+            fixture.imageFile,
+            "assets/Architecture.drawio.svg"
+        );
+    });
+
+    it("renames an Excalidraw preview and source as one logical asset", async () => {
+        const fixture = makeFixture("![[assets/Flow.excalidraw.svg]]");
+        Object.assign(fixture.imageFile, {
+            path: "assets/Flow.excalidraw.svg",
+            name: "Flow.excalidraw.svg",
+            basename: "Flow.excalidraw",
+            extension: "svg"
+        });
+        const source = await fixture.app.vault.create(
+            "assets/Flow.excalidraw.md",
+            "---\nexcalidraw-plugin: parsed\n---"
+        );
+        fixture.plugin.drawingModule = {
+            inspectFile: vi.fn((file: any) => file === fixture.imageFile ? ({
+                providerId: "excalidraw",
+                file,
+                sourceFile: source,
+                role: "generated-preview",
+                compoundSuffix: ".excalidraw.svg",
+                protectedFromImageMutation: true
+            }) : null)
+        };
+
+        const result = await fixture.handler.applyProperties(
+            fixture.context,
+            {
+                fileName: "Architecture",
+                directory: "drawings",
+                caption: "",
+                width: null,
+                height: null,
+                alignment: null
+            }
+        );
+
+        expect(result).toMatchObject({ complete: true, fileMoved: true });
+        expect(fixture.app.fileManager.renameFile.mock.calls.map(
+            ([file, target]: any[]) => [file, target]
+        )).toEqual([
+            [fixture.imageFile, "drawings/Architecture.excalidraw.svg"],
+            [source, "drawings/Architecture.excalidraw.md"]
+        ]);
     });
 
     it("does not write when the original source range changed", async () => {

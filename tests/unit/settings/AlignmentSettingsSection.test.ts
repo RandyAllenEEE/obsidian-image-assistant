@@ -18,7 +18,6 @@ function renderSection() {
   const plugin = {
     settings: { alignment: structuredClone(DEFAULT_SETTINGS.alignment) },
     saveSettings: vi.fn().mockResolvedValue(undefined),
-    applyEditModeWrapClass: vi.fn(),
     imageStateManager: { refreshAllImages: vi.fn() },
     imageCaption: { refreshAllViews: vi.fn() }
   } as any;
@@ -46,7 +45,7 @@ describe('AlignmentSettingsSection', () => {
     expect(plugin.imageCaption.refreshAllViews).toHaveBeenCalledOnce();
   });
 
-  it('applies the edit-mode wrap class through the supplied plugin instance', async () => {
+  it('refreshes rendered image layout when edit-mode wrapping changes', async () => {
     const { container, plugin } = renderSection();
     const toggle = getSetting(container, 'Enable Text Wrap in Edit Mode')
       .querySelector('input[type="checkbox"]') as HTMLInputElement;
@@ -56,7 +55,6 @@ describe('AlignmentSettingsSection', () => {
     await flushPromises();
 
     expect(plugin.settings.alignment.enableEditModeWrap).toBe(true);
-    expect(plugin.applyEditModeWrapClass).toHaveBeenCalledOnce();
     expect(plugin.imageStateManager.refreshAllImages).toHaveBeenCalledOnce();
     expect(plugin.imageCaption.refreshAllViews).toHaveBeenCalledOnce();
   });

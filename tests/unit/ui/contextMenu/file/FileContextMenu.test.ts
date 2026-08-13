@@ -12,6 +12,7 @@ interface TestMenuItem {
     getIcon(): string;
     getItems(): TestMenuItem[];
     getSection(): string;
+    getTitle(): string;
     trigger(): void;
 }
 
@@ -29,11 +30,13 @@ function createFixture(readiness: "loading" | "ready" | "degraded" = "ready") {
     const plugin = {
         supportedImageFormats: {
             isSupported: vi.fn((_extension?: string, name?: string) =>
-                /\.(?:png|jpe?g|webp)$/i.test(name ?? "")
+                /\.(?:png|jpe?g|webp|svg)$/i.test(name ?? "")
             )
         },
         cloudImageHandler: { uploadSingleFile },
-        referenceIndexService: { getReadiness: vi.fn(() => readiness) }
+        referenceIndexService: { getReadiness: vi.fn(() => readiness) },
+        settings: { drawing: { provider: "disabled" } },
+        drawingModule: { openFile: vi.fn(async () => null) }
     } as any;
     const launcher = { open: vi.fn() } as any;
     const ownership = new MenuSessionRegistry();
@@ -44,6 +47,7 @@ function createFixture(readiness: "loading" | "ready" | "degraded" = "ready") {
         launcher,
         note,
         ownership,
+        plugin,
         uploadSingleFile
     };
 }
@@ -62,6 +66,74 @@ describe("FileContextMenu", () => {
             .toEqual(["image-assistant", "image-assistant"]);
         items[1].trigger();
         expect(fixture.uploadSingleFile).toHaveBeenCalledWith(fixture.image);
+    });
+
+    it.each(["Flow.drawio", "Flow.drawio.svg"])(
+        "adds one direct editor action for a file-level %s menu",
+        path => {
+            const fixture = createFixture("loading");
+            fixture.plugin.settings.drawing.provider = "drawio";
+            const diagram = fakeTFile({ path: `assets/${path}`, name: path });
+            const menu = new Menu();
+
+            expect(fixture.fileMenu.append(menu, diagram)).toBe(true);
+            const items = getMenuItems(menu);
+            expect(items.map(item => item.getTitle())).toEqual(["Open in editor"]);
+            expect(items[0].getIcon()).toBe("shapes");
+            expect(items[0].getSection()).toBe("image-assistant");
+            items[0].trigger();
+            expect(fixture.plugin.drawingModule.openFile).toHaveBeenCalledWith(diagram);
+        }
+    );
+
+    it("does not expose a drawing action when the provider is disabled", () => {
+        const fixture = createFixture();
+        const diagram = fakeTFile({
+            path: "assets/Flow.drawio.svg",
+            name: "Flow.drawio.svg"
+        });
+        const menu = new Menu();
+
+        expect(fixture.fileMenu.append(menu, diagram)).toBe(false);
+        expect(getMenuItems(menu)).toHaveLength(0);
+    });
+
+    it("routes an existing Excalidraw source even when Draw.io is the default new engine", () => {
+        const fixture = createFixture("loading");
+        fixture.plugin.settings.drawing.provider = "drawio";
+        const source = fakeTFile({
+            path: "drawings/Flow.excalidraw.md",
+            name: "Flow.excalidraw.md",
+            extension: "md"
+        });
+        fixture.plugin.drawingModule.inspectFile = vi.fn(file => file === source ? ({
+            providerId: "excalidraw",
+            file,
+            sourceFile: file,
+            role: "source",
+            compoundSuffix: ".excalidraw.md",
+            protectedFromImageMutation: true
+        }) : null);
+        fixture.plugin.drawingModule.canOpenFile = vi.fn(() => true);
+        const menu = new Menu();
+
+        expect(fixture.fileMenu.append(menu, source)).toBe(true);
+        expect(getMenuItems(menu).map(item => item.getTitle())).toEqual(["Open in editor"]);
+        getMenuItems(menu)[0].trigger();
+        expect(fixture.plugin.drawingModule.openFile).toHaveBeenCalledWith(source);
+    });
+
+    it("keeps an ordinary SVG on the regular local-image menu path", () => {
+        const fixture = createFixture();
+        fixture.plugin.settings.drawing.provider = "drawio";
+        const svg = fakeTFile({ path: "assets/Icon.svg", name: "Icon.svg" });
+        const menu = new Menu();
+
+        expect(fixture.fileMenu.append(menu, svg)).toBe(true);
+        expect(getMenuItems(menu).map(item => item.getTitle())).toEqual([
+            "Process image",
+            "Upload to image host…"
+        ]);
     });
 
     it("adds three direct batch modes to a note submenu", () => {

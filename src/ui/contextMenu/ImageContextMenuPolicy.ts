@@ -6,6 +6,8 @@ import type {
     ImageContextMenuGroup,
     ImageContextMenuItemId
 } from "./types";
+import type { DrawingFileSemantics } from "../../drawing/DrawingContracts";
+import { getDrawingRenderedActionCapabilities } from "../../drawing/DrawingActionPolicy";
 
 /** Pure capability policy for rendered-image context menus. */
 export class ImageContextMenuPolicy {
@@ -21,7 +23,10 @@ export class ImageContextMenuPolicy {
                     : null
             }),
         private readonly isDeleteEnabled: () => boolean = () => true,
-        private readonly isReferenceInventoryReady: () => boolean = () => true
+        private readonly isReferenceInventoryReady: () => boolean = () => true,
+        private readonly inspectDrawing: (
+            file: NonNullable<ImageContextMenuContext["localFile"]>
+        ) => DrawingFileSemantics | null = () => null
     ) { }
 
     getCapabilities(context: ImageContextMenuContext): ImageContextMenuCapabilities {
@@ -32,26 +37,40 @@ export class ImageContextMenuPolicy {
         const exactUrl = exact && url && !!context.viewContext;
         const data = context.sourceKind === "data";
         const exactData = data && exact && !!context.dataReference;
-        const canReadPixels = context.sourceKind !== "url" && !!context.renderedSrc;
+        const canReadPixels = !!context.image
+            && context.sourceKind !== "url"
+            && !!context.renderedSrc;
         const editCapability = context.localFile
             ? this.getEditCapability(context.localFile.extension)
             : null;
         const editable = local
             && !!editCapability?.decodable
             && !!editCapability.encodable;
+        const drawing = context.localFile
+            ? this.inspectDrawing(context.localFile)
+            : null;
+        const drawingActions = drawing
+            ? getDrawingRenderedActionCapabilities(drawing)
+            : null;
+        const protectedDiagram = drawing?.protectedFromImageMutation === true;
 
         return Object.freeze({
-            properties: inventoryReady && (local || exactUrl),
-            copy: canReadPixels,
-            copyBase64: canReadPixels,
-            process: inventoryReady && local,
-            crop: inventoryReady && editable,
-            annotate: inventoryReady && editable,
-            upload: inventoryReady && local,
+            properties: inventoryReady && (local || exactUrl)
+                && (drawingActions?.editReferenceProperties ?? true),
+            copy: canReadPixels
+                && (drawingActions?.copyRenderedImage ?? true),
+            copyBase64: canReadPixels
+                && (drawingActions?.copyRenderedImage ?? true),
+            process: inventoryReady && local && !protectedDiagram,
+            crop: inventoryReady && editable && !protectedDiagram,
+            annotate: inventoryReady && editable && !protectedDiagram,
+            upload: inventoryReady && local
+                && (drawingActions?.uploadRenderedCopy ?? true),
             download: inventoryReady && url && !!context.owner,
             delete: inventoryReady
                 && this.isDeleteEnabled()
                 && (local || exactUrl || exactData)
+                && (drawingActions?.deleteReference ?? true)
         });
     }
 

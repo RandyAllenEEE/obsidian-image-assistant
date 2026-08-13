@@ -2,7 +2,11 @@ import OCRProvider from "./ocr-provider";
 import { TexifyResponse } from "./TexifyResponse";
 import { SelfHostedSettings } from "./SelfHostedSettings";
 import { App } from "obsidian";
-import { createBasicAuthorization, fetchWithTimeout } from "../../utils/NetworkRequestUtils";
+import {
+	createBasicAuthorization,
+	fetchWithTimeout,
+	readResponseTextWithLimit
+} from "../../utils/NetworkRequestUtils";
 import { createOcrImagePayload } from "./ImagePayload";
 
 export default class Texify implements OCRProvider {
@@ -28,14 +32,21 @@ export default class Texify implements OCRProvider {
 			};
 		}
 		const response = await fetchWithTimeout(this.settings.url, options);
+		let responseText: string;
+		try {
+			responseText = (await readResponseTextWithLimit(response)).trim();
+		} catch (error) {
+			if (error instanceof Error && error.message.includes("byte limit")) throw error;
+			throw new Error("Texify returned malformed JSON");
+		}
 		if (response.ok === false) {
-			const detail = (await response.text()).trim();
+			const detail = responseText;
 			throw new Error(`Texify request failed with status ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
 		}
 
 		let parsed: unknown;
 		try {
-			parsed = await response.json();
+			parsed = JSON.parse(responseText);
 		} catch {
 			throw new Error("Texify returned malformed JSON");
 		}
@@ -53,6 +64,6 @@ export default class Texify implements OCRProvider {
 		if (secretId && this.app?.secretStorage) {
 			return this.app.secretStorage.getSecret(secretId) ?? "";
 		}
-		return this.settings.password ?? "";
+		return "";
 	}
 }

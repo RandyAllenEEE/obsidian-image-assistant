@@ -4,6 +4,18 @@ import { fakeTFile } from '../../../factories/obsidian';
 
 const uploadByClipboardMock = vi.hoisted(() => vi.fn());
 const uploadMock = vi.hoisted(() => vi.fn());
+const decodeIntrinsicMock = vi.hoisted(() => vi.fn());
+const noticeMock = vi.hoisted(() => vi.fn());
+
+vi.mock('obsidian', async importOriginal => ({
+  ...await importOriginal<typeof import('obsidian')>(),
+  Notice: noticeMock
+}));
+
+vi.mock('../../../../src/utils/CanonicalImageSize', async importOriginal => ({
+  ...await importOriginal<typeof import('../../../../src/utils/CanonicalImageSize')>(),
+  decodeBlobIntrinsicDimensions: decodeIntrinsicMock
+}));
 
 vi.mock('../../../../src/cloud/uploader/index', () => ({
   UploaderManager: class {
@@ -117,6 +129,8 @@ describe('Cloud PasteHandler applyImage behavior', () => {
   beforeEach(() => {
     uploadByClipboardMock.mockReset();
     uploadMock.mockReset();
+    decodeIntrinsicMock.mockReset();
+    noticeMock.mockReset();
   });
 
   it('ignores paste events already handled by another plugin', async () => {
@@ -319,7 +333,7 @@ describe('Cloud PasteHandler applyImage behavior', () => {
       makeContext(editor)
     );
 
-    expect(editor.value).toBe('![ ](https://cdn.example/first.png)![ ](https://cdn.example/second.png)');
+    expect(editor.value).toBe('![](https://cdn.example/first.png)![](https://cdn.example/second.png)');
     expect(editor.cursor.ch).toBe(editor.value.length);
   });
 
@@ -344,7 +358,103 @@ describe('Cloud PasteHandler applyImage behavior', () => {
       new File(['second'], 'second.png', { type: 'image/png' })
     ], editor as any, makeContext(editor));
 
-    expect(editor.value).toBe('![ ](https://cdn.example/second.png)');
+    expect(editor.value).toBe('![](https://cdn.example/second.png)');
     expect(editor.cursor.ch).toBe(editor.value.length);
+  });
+
+  it('inserts actual intrinsic dimensions with canonical WxH syntax', async () => {
+    decodeIntrinsicMock.mockResolvedValue({ width: 640, height: 480 });
+    uploadByClipboardMock.mockResolvedValue({
+      success: true,
+      result: ['https://cdn.example/image.png']
+    });
+    const editor = new MemoryEditor();
+    const plugin = makePlugin(true, {
+      imageSizeSource: 'actual',
+      cloudLinkFormat: 'markdown'
+    });
+    plugin.settings.captions = { enabled: false };
+
+    await new PasteHandler(makeWritableApp(), plugin).processFiles(
+      [new File(['image'], 'image.png', { type: 'image/png' })],
+      editor as any,
+      makeContext(editor)
+    );
+
+    expect(editor.value).toBe('![640x480](https://cdn.example/image.png)');
+    expect(decodeIntrinsicMock).toHaveBeenCalledOnce();
+  });
+
+  it('converts height-only settings to W using the intrinsic ratio', async () => {
+    decodeIntrinsicMock.mockResolvedValue({ width: 800, height: 600 });
+    uploadByClipboardMock.mockResolvedValue({
+      success: true,
+      result: ['https://cdn.example/image.png']
+    });
+    const editor = new MemoryEditor();
+    const plugin = makePlugin(true, {
+      imageSizeSource: 'settings',
+      imageSizeWidth: undefined,
+      imageSizeHeight: 300,
+      cloudLinkFormat: 'markdown'
+    });
+    plugin.settings.captions = { enabled: false };
+
+    await new PasteHandler(makeWritableApp(), plugin).processFiles(
+      [new File(['image'], 'image.png', { type: 'image/png' })],
+      editor as any,
+      makeContext(editor)
+    );
+
+    expect(editor.value).toBe('![400](https://cdn.example/image.png)');
+  });
+
+  it('continues uploads without size and warns once when intrinsic decoding fails', async () => {
+    decodeIntrinsicMock.mockResolvedValue(null);
+    uploadByClipboardMock
+      .mockResolvedValueOnce({ success: true, result: ['https://cdn.example/first.png'] })
+      .mockResolvedValueOnce({ success: true, result: ['https://cdn.example/second.png'] });
+    const editor = new MemoryEditor();
+    const plugin = makePlugin(true, {
+      imageSizeSource: 'actual',
+      cloudLinkFormat: 'markdown'
+    });
+    plugin.settings.captions = { enabled: false };
+
+    await new PasteHandler(makeWritableApp(), plugin).processFiles([
+      new File(['first'], 'first.png', { type: 'image/png' }),
+      new File(['second'], 'second.png', { type: 'image/png' })
+    ], editor as any, makeContext(editor));
+
+    expect(editor.value).toBe(
+      '![](https://cdn.example/first.png)![](https://cdn.example/second.png)'
+    );
+    expect(noticeMock.mock.calls.filter(
+      ([message]) => message === 'The image dimensions could not be read, so the upload was inserted without a display size.'
+    )).toHaveLength(1);
+  });
+
+  it('continues uploading when the intrinsic decoder throws', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    decodeIntrinsicMock.mockRejectedValue(new Error('decoder unavailable'));
+    uploadByClipboardMock.mockResolvedValue({
+      success: true,
+      result: ['https://cdn.example/image.png']
+    });
+    const editor = new MemoryEditor();
+    const plugin = makePlugin(true, {
+      imageSizeSource: 'actual',
+      cloudLinkFormat: 'markdown'
+    });
+    plugin.settings.captions = { enabled: false };
+
+    await new PasteHandler(makeWritableApp(), plugin).processFiles(
+      [new File(['image'], 'image.png', { type: 'image/png' })],
+      editor as any,
+      makeContext(editor)
+    );
+
+    expect(editor.value).toBe('![](https://cdn.example/image.png)');
+    expect(uploadByClipboardMock).toHaveBeenCalledOnce();
   });
 });

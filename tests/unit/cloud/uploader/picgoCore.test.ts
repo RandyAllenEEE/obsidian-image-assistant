@@ -20,7 +20,6 @@ vi.mock('path-browserify', () => ({
 
 // Mock utils
 vi.mock('../../../../src/utils', () => ({
-    streamToString: vi.fn(),
     getLastImage: vi.fn(),
 }));
 
@@ -92,9 +91,6 @@ describe('PicGoCoreUploader', () => {
 
     describe('文件路径转换逻辑', () => {
         it('Given Image 对象数组, When 上传, Then 转换为绝对路径', async () => {
-            const { streamToString } = await import('../../../../src/utils');
-            (streamToString as any).mockResolvedValue('https://example.com/image1.png\nhttps://example.com/image2.png');
-
             const fileList = [
                 { path: 'attachments/image1.png', name: 'image1.png', source: '![](attachments/image1.png)' },
                 { path: 'attachments/image2.png', name: 'image2.png', source: '![](attachments/image2.png)' },
@@ -265,8 +261,7 @@ describe('PicGoCoreUploader', () => {
 
     describe('剪贴板上传功能', () => {
         it('Given 剪贴板图片, When 上传, Then 使用 picgo upload 命令', async () => {
-            const { streamToString, getLastImage } = await import('../../../../src/utils');
-            (streamToString as any).mockResolvedValue('https://example.com/clipboard.png');
+            const { getLastImage } = await import('../../../../src/utils');
             (getLastImage as any).mockReturnValue('https://example.com/clipboard.png');
 
             const execSpy = vi.spyOn(uploader as any, 'exec').mockResolvedValue(
@@ -283,8 +278,7 @@ describe('PicGoCoreUploader', () => {
         it('Given 配置了 picgoCorePath, When 剪贴板上传, Then 使用自定义路径', async () => {
             mockSettings.picgoCorePath = '/usr/local/bin/picgo';
 
-            const { streamToString, getLastImage } = await import('../../../../src/utils');
-            (streamToString as any).mockResolvedValue('https://example.com/clipboard.png');
+            const { getLastImage } = await import('../../../../src/utils');
             (getLastImage as any).mockReturnValue('https://example.com/clipboard.png');
 
             const execSpy = vi.spyOn(uploader as any, 'exec').mockResolvedValue(
@@ -297,8 +291,7 @@ describe('PicGoCoreUploader', () => {
         });
 
         it('Given 剪贴板上传失败, When 解析响应, Then 返回失败结果', async () => {
-            const { streamToString, getLastImage } = await import('../../../../src/utils');
-            (streamToString as any).mockResolvedValue('[PicGo ERROR]: No image in clipboard');
+            const { getLastImage } = await import('../../../../src/utils');
             (getLastImage as any).mockReturnValue(null);
 
             vi.spyOn(uploader as any, 'exec').mockResolvedValue(
@@ -312,9 +305,8 @@ describe('PicGoCoreUploader', () => {
         });
 
         it('Given 剪贴板上传响应包含多行, When 解析, Then 提取最后一张图片', async () => {
-            const { streamToString, getLastImage } = await import('../../../../src/utils');
+            const { getLastImage } = await import('../../../../src/utils');
             const response = 'Log line 1\nLog line 2\nhttps://example.com/image.png';
-            (streamToString as any).mockResolvedValue(response);
             (getLastImage as any).mockImplementation((lines: string[]) => {
                 return lines[lines.length - 1];
             });
@@ -415,8 +407,7 @@ describe('PicGoCoreUploader', () => {
         });
 
         it('Given 剪贴板为空, When 上传, Then getLastImage 返回 null', async () => {
-            const { streamToString, getLastImage } = await import('../../../../src/utils');
-            (streamToString as any).mockResolvedValue('[PicGo INFO]: 剪贴板无图片');
+            const { getLastImage } = await import('../../../../src/utils');
             (getLastImage as any).mockReturnValue(null);
 
             vi.spyOn(uploader as any, 'exec').mockResolvedValue('[PicGo INFO]: 剪贴板无图片');

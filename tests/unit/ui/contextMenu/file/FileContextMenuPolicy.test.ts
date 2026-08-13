@@ -61,4 +61,19 @@ describe("FileContextMenuPolicy", () => {
 
         expect(policy.resolve(pdf)).toBeNull();
     });
+
+    it.each(["Flow.drawio", "Flow.drawio.svg"])(
+        "recognizes %s before ordinary image extension filtering",
+        name => {
+            const app = fakeApp() as any;
+            const policy = new FileContextMenuPolicy(
+                app,
+                supportedFormats,
+                file => file.name === name
+            );
+            const diagram = fakeTFile({ path: `assets/${name}`, name });
+
+            expect(policy.resolve(diagram)).toEqual({ kind: "drawing", file: diagram });
+        }
+    );
 });

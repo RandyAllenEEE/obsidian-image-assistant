@@ -62,7 +62,6 @@ function makeFixture(readiness: "loading" | "ready" | "degraded" = "ready") {
     const plugin = {
         settings: structuredClone(DEFAULT_SETTINGS),
         supportedImageFormats: {
-            isExcalidrawImage: vi.fn(() => false),
             isSupported: vi.fn((_extension?: string, name?: string) =>
                 /\.(?:png|jpe?g|webp)$/i.test(name ?? "")
             )
@@ -78,7 +77,8 @@ function makeFixture(readiness: "loading" | "ready" | "degraded" = "ready") {
             refreshAllImages: vi.fn()
         },
         imageCaption: { refreshAllViews: vi.fn() },
-        referenceIndexService: { getReadiness: vi.fn(() => readiness) }
+        referenceIndexService: { getReadiness: vi.fn(() => readiness) },
+        drawingModule: { openFile: vi.fn(async () => null) }
     } as any;
     const folderManagement = {
         ensureFolderExists: vi.fn(),
@@ -201,6 +201,122 @@ describe("ContextMenu integration", () => {
         expect(show).not.toHaveBeenCalled();
         expect((fixture.contextMenu as any).pendingByDocument.size).toBe(1);
         await vi.advanceTimersByTimeAsync(1500);
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(0);
+        fixture.manager.unload();
+    });
+
+    it("does not exclude an ordinary drawing preview through CSS-class heuristics", () => {
+        const fixture = makeFixture();
+        const { image } = setupImage("reading");
+        image.classList.add("excalidraw-svg");
+        fixture.plugin.drawingModule.inspectFile = vi.fn(() => ({
+            providerId: "excalidraw",
+            file: fixture.imageFile,
+            sourceFile: fixture.imageFile,
+            role: "source",
+            compoundSuffix: ".excalidraw.md",
+            protectedFromImageMutation: true
+        }));
+        fixture.plugin.drawingModule.canOpenFile = vi.fn(() => true);
+        const context = fixture.makeContext(image);
+        vi.spyOn((fixture.contextMenu as any).imageResolver, "resolve")
+            .mockReturnValue(context);
+
+        image.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true
+        }));
+        expect((fixture.contextMenu as any).pendingByDocument.size).toBe(1);
+
+        const menu = new Menu();
+        fixture.contextMenu.createContextMenuItems(menu, context);
+        expect(menuTitles(menu)).toContain("Edit image properties…");
+        expect(menuTitles(menu)).toContain("Delete reference or source…");
+        expect(menuTitles(menu)).not.toContain("Upload to image host…");
+        expect(submenuTitles(menu, "More image actions...")).toEqual([
+            "Open in editor",
+            "Copy image",
+            "Copy as Base64 encoded image"
+        ]);
+        fixture.manager.unload();
+    });
+
+    it("shows a fallback menu for Excalidraw's real inline SVG render", async () => {
+        vi.useFakeTimers();
+        const fixture = makeFixture();
+        fixture.plugin.settings.drawing.provider = "excalidraw";
+        const sourceFile = fakeTFile({
+            path: "Drawings/Flow.excalidraw.md",
+            name: "Flow.excalidraw.md",
+            extension: "md"
+        });
+        fixture.plugin.drawingModule.inspectFile = vi.fn(() => ({
+            providerId: "excalidraw",
+            file: sourceFile,
+            sourceFile,
+            role: "source",
+            compoundSuffix: ".excalidraw.md",
+            protectedFromImageMutation: true
+        }));
+        fixture.plugin.drawingModule.canOpenFile = vi.fn(() => true);
+
+        document.body.innerHTML = "";
+        const view = document.body.appendChild(document.createElement("div"));
+        view.className = "markdown-preview-view";
+        const wrapper = view.appendChild(document.createElement("div"));
+        wrapper.className = "internal-embed image-embed";
+        const rendered = wrapper.appendChild(document.createElement("div"));
+        rendered.className = "excalidraw-svg excalidraw-embedded-img";
+        rendered.setAttribute("fileSource", sourceFile.path);
+        const svg = rendered.appendChild(document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "svg"
+        ));
+        svg.classList.add("excalidraw-svg");
+        const path = svg.appendChild(document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "path"
+        ));
+        const context = {
+            image: null,
+            mediaElement: rendered,
+            ownerDocument: document,
+            ownerWindow: window,
+            renderedSrc: "",
+            sourceKind: "local",
+            resolution: "unresolved",
+            owner: {
+                view: fixture.view,
+                file: fixture.note,
+                editor: fixture.editor
+            },
+            viewContext: null,
+            descriptor: null,
+            localFile: sourceFile,
+            url: null,
+            dataReference: null
+        } as any;
+        vi.spyOn((fixture.contextMenu as any).excalidrawResolver, "resolve")
+            .mockReturnValue(context);
+        let shownMenu: Menu | null = null;
+        const show = vi.spyOn(Menu.prototype, "showAtMouseEvent")
+            .mockImplementation(function (this: Menu) {
+                shownMenu = this;
+                return this;
+            });
+        const event = new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        });
+
+        path.dispatchEvent(event);
+        await vi.runAllTimersAsync();
+
+        expect(event.defaultPrevented).toBe(true);
+        expect(show).toHaveBeenCalledOnce();
+        expect(shownMenu).not.toBeNull();
+        expect(menuTitles(shownMenu!)).toEqual(["More image actions..."]);
+        expect(submenuTitles(shownMenu!, "More image actions..."))
+            .toEqual(["Open in editor"]);
         expect((fixture.contextMenu as any).pendingByDocument.size).toBe(0);
         fixture.manager.unload();
     });
@@ -328,6 +444,57 @@ describe("ContextMenu integration", () => {
         fixture.manager.unload();
     });
 
+    it("keeps the Draw.io action only in More for a Menu.forEvent menu", () => {
+        const fixture = makeFixture();
+        fixture.plugin.settings.drawing.provider = "drawio";
+        const { image, wrapper } = setupImage("editor");
+        const diagram = fakeTFile({
+            path: "imgs/Drawing.drawio.svg",
+            name: "Drawing.drawio.svg",
+            extension: "svg"
+        });
+        const context = {
+            ...fixture.makeContext(image),
+            localFile: diagram,
+            descriptor: { path: diagram.path, pipeData: null }
+        } as any;
+        const resolver = (fixture.contextMenu as any).imageResolver;
+        vi.spyOn(resolver, "resolve").mockReturnValue(context);
+        vi.spyOn(resolver, "resolveForOfficialMenu").mockReturnValue(context);
+        let nativeMenu: Menu | null = null;
+
+        wrapper.addEventListener("contextmenu", event => {
+            nativeMenu = Menu.forEvent(event);
+            nativeMenu.addItem(item => item
+                .setTitle("Copy image")
+                .setSection("image"));
+        });
+
+        image.dispatchEvent(new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true
+        }));
+
+        expect(nativeMenu).not.toBeNull();
+        expect(menuTitles(nativeMenu!)
+            .filter(title => title === "Open in editor"))
+            .toHaveLength(0);
+        expect(submenuTitles(nativeMenu!, "More image actions...")
+            .filter(title => title === "Open in editor"))
+            .toHaveLength(1);
+        const more = (nativeMenu as any).items.find(
+            (item: any) => item.getTitle() === "More image actions..."
+        );
+        const open = more.getItems().find(
+            (item: any) => item.getTitle() === "Open in editor"
+        );
+        open.trigger();
+        expect(fixture.plugin.drawingModule.openFile).toHaveBeenCalledWith(
+            diagram
+        );
+        fixture.manager.unload();
+    });
+
     it("restores Menu.forEvent when the context menu manager unloads", () => {
         const before = Menu.forEvent;
         const fixture = makeFixture();
@@ -428,6 +595,83 @@ describe("ContextMenu integration", () => {
         )?.isWarning()).toBe(true);
         fixture.manager.unload();
     });
+
+    it("places the Draw.io editor action inside the local image More submenu", () => {
+        const fixture = makeFixture();
+        fixture.plugin.settings.drawing.provider = "drawio";
+        const { image } = setupImage("editor");
+        const diagram = fakeTFile({
+            path: "imgs/Drawing.drawio.svg",
+            name: "Drawing.drawio.svg",
+            extension: "svg"
+        });
+        const context = {
+            ...fixture.makeContext(image),
+            localFile: diagram,
+            descriptor: { path: diagram.path, pipeData: null }
+        } as any;
+        const menu = new Menu();
+
+        fixture.contextMenu.createContextMenuItems(menu, context);
+
+        expect(menuTitles(menu)).not.toContain("Open in editor");
+        expect(submenuTitles(menu, "More image actions..."))
+            .toContain("Open in editor");
+        const parent = (menu as any).items.find(
+            (item: any) => item.getTitle() === "More image actions..."
+        );
+        const open = parent.getItems().find(
+            (item: any) => item.getTitle() === "Open in editor"
+        );
+        open.trigger();
+        expect(fixture.plugin.drawingModule.openFile).toHaveBeenCalledWith(diagram);
+        fixture.manager.unload();
+    });
+
+    it.each(["reading", "editor"] as const)(
+        "does not duplicate the Draw.io action in the %s official menu path",
+        mode => {
+            const fixture = makeFixture();
+            fixture.plugin.settings.drawing.provider = "drawio";
+            const { image } = setupImage(mode);
+            const diagram = fakeTFile({
+                path: "imgs/Drawing.drawio.svg",
+                name: "Drawing.drawio.svg",
+                extension: "svg"
+            });
+            const context = {
+                ...fixture.makeContext(image),
+                localFile: diagram,
+                descriptor: { path: diagram.path, pipeData: null }
+            } as any;
+            const resolver = (fixture.contextMenu as any).imageResolver;
+            vi.spyOn(resolver, "resolve").mockReturnValue(context);
+            vi.spyOn(resolver, "resolveForOfficialMenu").mockReturnValue(context);
+            image.dispatchEvent(new MouseEvent("pointerdown", {
+                bubbles: true,
+                cancelable: true,
+                button: 2
+            }));
+            const menu = new Menu();
+
+            if (mode === "reading") {
+                fixture.listeners["file-menu"]?.(menu, diagram);
+            } else {
+                fixture.listeners["editor-menu"]?.(
+                    menu,
+                    fixture.editor,
+                    { file: fixture.note, editor: fixture.editor }
+                );
+            }
+
+            expect(menuTitles(menu).filter(title => title === "Open in editor"))
+                .toHaveLength(0);
+            expect(submenuTitles(menu, "More image actions...")
+                .filter(title => title === "Open in editor"))
+                .toHaveLength(1);
+            fixture.manager.unload();
+        }
+    );
 
     it("uses the official URL event to expose safe actions for a Blob proxy", () => {
         const fixture = makeFixture();

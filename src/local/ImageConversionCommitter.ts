@@ -75,7 +75,8 @@ export class ImageConversionCommitter {
         private readonly linkSettingsProvider: () => LocalLinkSettings = () => DEFAULT_SETTINGS.localProcessing.link,
         private readonly referenceIndex?: ImageReferenceIndexService,
         deletionSettingsProvider: () => LocalFileDeletionSettings =
-            () => DEFAULT_SETTINGS.cleanerSettings
+            () => DEFAULT_SETTINGS.cleanerSettings,
+        private readonly isProtectedDrawing: (file: TFile) => boolean = () => false
     ) {
         this.localFileDeletion = new LocalFileDeletionService(
             app,
@@ -100,10 +101,21 @@ export class ImageConversionCommitter {
         data: ArrayBuffer,
         expectedRevision?: ImageFileRevision
     ): Promise<TFile> {
+        if (this.isProtectedDrawing(source)) {
+            throw new ImageConversionCommitError(
+                "Managed drawing files must be exported to a separate image before conversion",
+                {
+                    stage: "preflight",
+                    sourcePath: source.path,
+                    sourcePreserved: true,
+                    uncertainFiles: []
+                }
+            );
+        }
         await this.assertExpectedRevision(source, expectedRevision);
         if (source.name === targetFilename) {
             if (expectedRevision) {
-                const result = await new ImageEditCommitService(this.app).commit({
+                const result = await new ImageEditCommitService(this.app, this.isProtectedDrawing).commit({
                     file: source,
                     expectedRevision,
                     data

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ImageStateManager } from '../../../src/ui/ImageStateManager';
 import { ImageAlignment } from '../../../src/ui/ImageAlignment';
+import { resolveRenderedMediaLayoutTarget } from '../../../src/ui/RenderedMediaLayoutTarget';
 import {
   getImageLayoutKey,
   getImageSourceDescriptors,
@@ -21,60 +22,294 @@ function makeManager(app: any = {}) {
     applyLayout: vi.fn(),
     clearImage: vi.fn(),
     cleanup: vi.fn(),
-    applyAlignmentToImage: vi.fn(),
-    ensureReadingModeLayout: vi.fn()
+    applyLayoutTarget: vi.fn()
   };
   (manager as any).caption = {
     renderImage: vi.fn(),
+    renderExternalMedia: vi.fn(),
     removeImage: vi.fn()
   };
   (manager as any).initialized = true;
   return manager;
 }
 
-function makeUpdateFixture(line: string, src = 'app://local/img.png') {
-  const lines = [line];
-  const file = { path: 'notes/current.md', name: 'current.md' };
-  const contentEl = document.createElement('div');
-  const editor = {
-    lineCount: vi.fn(() => lines.length),
-    getValue: vi.fn(() => lines.join('\n')),
-    getLine: vi.fn((index: number) => lines[index]),
-    replaceRange: vi.fn((replacement: string, from: { line: number; ch: number }, to: { line: number; ch: number }) => {
-      lines[from.line] = `${lines[from.line].slice(0, from.ch)}${replacement}${lines[from.line].slice(to.ch)}`;
-    })
-  };
-  const view = {
-    editor,
-    file,
-    contentEl,
-    getMode: () => 'source',
-    save: vi.fn().mockResolvedValue(undefined)
-  };
-  const app = {
-    workspace: {
-      getActiveViewOfType: vi.fn(() => view),
-      getActiveFile: vi.fn(() => file),
-      getLeavesOfType: vi.fn(() => [{ view }]),
-      onLayoutReady: vi.fn((callback: () => void) => callback())
-    }
-  };
-  const manager = makeManager(app);
-  const img = document.createElement('img') as HTMLImageElement;
-  img.setAttribute('src', src);
-  contentEl.appendChild(img);
-
-  return { app, editor, img, lines, manager, view };
-}
-
 describe('ImageStateManager pipe syntax integration', () => {
+  it('applies the global default alignment to a native Excalidraw SVG render', () => {
+    const manager = makeManager();
+    const view = document.createElement('div');
+    view.className = 'markdown-source-view';
+    const host = view.appendChild(document.createElement('div'));
+    host.className = 'internal-embed image-embed';
+    const rendered = host.appendChild(document.createElement('div'));
+    rendered.className = 'excalidraw-svg excalidraw-embedded-img';
+    rendered.setAttribute('fileSource', 'Drawings/Flow.excalidraw.md');
+    const svg = rendered.appendChild(document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'svg'
+    ));
+    svg.classList.add('excalidraw-svg');
+    document.body.appendChild(view);
+
+    (manager as any).processExcalidrawEmbeds(view);
+
+    expect((manager as any).alignment.applyLayoutTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'excalidraw-source',
+        owner: host,
+        visual: rendered,
+        sizing: 'external-renderer'
+      }),
+      { alignment: 'center', wrap: false, source: 'image-default' }
+    );
+    view.remove();
+  });
+
+  it('applies the same default alignment to Excalidraw SVGIMG/PNG renders', () => {
+    const manager = makeManager();
+    const view = document.createElement('div');
+    view.className = 'markdown-preview-view';
+    const host = view.appendChild(document.createElement('div'));
+    host.className = 'internal-embed image-embed';
+    const image = host.appendChild(document.createElement('img'));
+    image.className = 'excalidraw-svg excalidraw-embedded-img';
+    image.setAttribute('fileSource', 'Drawings/Flow.excalidraw.md');
+    document.body.appendChild(view);
+
+    (manager as any).processReadingModeImage(image);
+
+    expect((manager as any).alignment.applyLayoutTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'excalidraw-source',
+        owner: host,
+        visual: image,
+        sizing: 'external-renderer'
+      }),
+      { alignment: 'center', wrap: false, source: 'image-default' }
+    );
+    expect((manager as any).caption.renderImage).toHaveBeenCalledWith(
+      image,
+      { document }
+    );
+    view.remove();
+  });
+
+  it('routes Reading Mode external Excalidraw media through the same source layout', () => {
+    const manager = makeManager();
+    const view = document.body.appendChild(document.createElement('div'));
+    view.className = 'markdown-preview-view';
+    const host = view.appendChild(document.createElement('div'));
+    host.className = 'internal-embed image-embed';
+    const marker = host.appendChild(document.createElement('div'));
+    marker.className = 'excalidraw-embedded-img';
+    marker.setAttribute('fileSource', 'Drawing.excalidraw.md');
+    const svg = marker.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'svg'));
+    svg.classList.add('excalidraw-svg');
+    const descriptor = getImageSourceDescriptors(
+      '![test|right|200](Drawing.excalidraw.md)'
+    )[0];
+
+    manager.processReadingModeExternalMedia(marker, {
+      descriptor,
+      linkText: descriptor.source
+    });
+
+    expect((manager as any).alignment.applyLayoutTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'excalidraw-source',
+        owner: host,
+        visual: marker,
+        captionAnchor: svg
+      }),
+      { alignment: 'right', wrap: false, source: 'pipe' }
+    );
+    expect((manager as any).caption.renderExternalMedia).toHaveBeenCalledWith(marker, {
+      descriptor,
+      linkText: descriptor.source,
+      document
+    });
+    view.remove();
+  });
+
+  it('does not apply the global default to a prose-adjacent Excalidraw render', () => {
+    const manager = makeManager();
+    const view = document.createElement('div');
+    view.className = 'markdown-preview-view';
+    const paragraph = view.appendChild(document.createElement('p'));
+    paragraph.append('before ');
+    const host = paragraph.appendChild(document.createElement('span'));
+    host.className = 'internal-embed image-embed';
+    const image = host.appendChild(document.createElement('img'));
+    image.className = 'excalidraw-embedded-img';
+    image.setAttribute('fileSource', 'Drawings/Flow.excalidraw.md');
+    paragraph.append(' after');
+    document.body.appendChild(view);
+
+    (manager as any).processExcalidrawEmbeds(view);
+
+    expect((manager as any).alignment.applyLayoutTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'excalidraw-source', owner: host }),
+      { alignment: null, wrap: false, source: 'none' }
+    );
+    view.remove();
+  });
+
+  it('binds a real 1.13.4 line-hosted Excalidraw embed through its outer owner', () => {
+    const source = '![test|200](Drawing.excalidraw.md)';
+    const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-source-view';
+    const cmContent = contentEl.appendChild(document.createElement('div'));
+    cmContent.className = 'cm-content';
+    const line = cmContent.appendChild(document.createElement('div'));
+    line.className = 'cm-line';
+    const host = line.appendChild(document.createElement('div'));
+    host.className = 'internal-embed image-embed';
+    const rendered = host.appendChild(document.createElement('div'));
+    rendered.className = 'excalidraw-embedded-img';
+    rendered.setAttribute('fileSource', 'Drawing.excalidraw.md');
+    const svg = rendered.appendChild(document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'svg'
+    ));
+    svg.classList.add('excalidraw-svg');
+    document.body.appendChild(contentEl);
+
+    const view = {
+      contentEl,
+      editor: {
+        getValue: () => source,
+        cm: { state: { field: vi.fn(() => true) } }
+      },
+      file: { path: 'Note.md' },
+      getMode: () => 'source'
+    } as any;
+    const leaf = { view };
+    const manager = makeManager({
+      workspace: {
+        getLeavesOfType: () => [leaf],
+        getActiveViewOfType: () => view
+      },
+      metadataCache: {
+        getFirstLinkpathDest: () => ({ path: 'Drawing.excalidraw.md' })
+      }
+    });
+    const registerTarget = vi.fn();
+    (manager as any).layoutCoordinators.set(view, { registerTarget });
+
+    (manager as any).processExcalidrawEmbeds(contentEl);
+
+    expect((manager as any).alignment.applyLayoutTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: host, placement: host, visual: rendered }),
+      { alignment: 'center', wrap: false, source: 'image-default' }
+    );
+    expect(registerTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: host, placement: host, visual: rendered }),
+      expect.any(String),
+      expect.objectContaining({ alignment: 'center', wrap: false })
+    );
+    expect(rendered.getAttribute('data-image-assistant-source-key')).toBeNull();
+    expect(rendered.getAttribute('data-image-assistant-layout-key')).toBeNull();
+    expect(rendered.getAttribute('style')).toBeNull();
+    expect(svg.getAttribute('style')).toBeNull();
+    contentEl.remove();
+  });
+
+  it('lets an inline source descriptor override a structurally isolated embed', () => {
+    const source = 'Text ![[Drawing.excalidraw.md]] after';
+    const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-source-view';
+    const host = contentEl.appendChild(document.createElement('div'));
+    host.className = 'internal-embed image-embed';
+    const rendered = host.appendChild(document.createElement('div'));
+    rendered.className = 'excalidraw-embedded-img';
+    rendered.setAttribute('fileSource', 'Drawing.excalidraw.md');
+    const svg = rendered.appendChild(document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'svg'
+    ));
+    svg.classList.add('excalidraw-svg');
+    document.body.appendChild(contentEl);
+
+    const view = {
+      contentEl,
+      editor: { getValue: () => source },
+      file: { path: 'Note.md' },
+      getMode: () => 'source'
+    } as any;
+    const leaf = { view };
+    const manager = makeManager({
+      workspace: {
+        getLeavesOfType: () => [leaf],
+        getActiveViewOfType: () => view
+      },
+      metadataCache: {
+        getFirstLinkpathDest: () => ({ path: 'Drawing.excalidraw.md' })
+      }
+    });
+
+    (manager as any).processExcalidrawEmbeds(contentEl);
+
+    expect((manager as any).alignment.applyLayoutTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: host, visual: rendered }),
+      { alignment: null, wrap: false, source: 'none' }
+    );
+    contentEl.remove();
+  });
+
+  it('does not copy one explicit alignment to an unaligned repeated Excalidraw source', () => {
+    const source = [
+      '![[Drawing.excalidraw.md|right]]',
+      '![[Drawing.excalidraw.md]]'
+    ].join('\n');
+    const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-source-view';
+    for (const alignmentClass of ['excalidraw-svg-right', '']) {
+      const host = contentEl.appendChild(document.createElement('div'));
+      host.className = 'internal-embed image-embed';
+      const rendered = host.appendChild(document.createElement('div'));
+      rendered.className = `excalidraw-embedded-img ${alignmentClass}`.trim();
+      rendered.setAttribute('fileSource', 'Drawing.excalidraw.md');
+      const svg = rendered.appendChild(document.createElementNS(
+        'http://www.w3.org/2000/svg',
+        'svg'
+      ));
+      svg.classList.add('excalidraw-svg');
+    }
+    document.body.appendChild(contentEl);
+
+    const view = {
+      contentEl,
+      editor: { getValue: () => source },
+      file: { path: 'Note.md' },
+      getMode: () => 'source'
+    } as any;
+    const manager = makeManager({
+      workspace: {
+        getLeavesOfType: () => [{ view }],
+        getActiveViewOfType: () => view
+      },
+      metadataCache: {
+        getFirstLinkpathDest: () => ({ path: 'Drawing.excalidraw.md' })
+      }
+    });
+
+    (manager as any).processExcalidrawEmbeds(contentEl);
+
+    const layouts = (manager as any).alignment.applyLayoutTarget.mock.calls
+      .map((call: any[]) => call[1]);
+    expect(layouts).toEqual([
+      { alignment: 'right', wrap: false, source: 'pipe' },
+      { alignment: 'center', wrap: false, source: 'image-default' }
+    ]);
+    contentEl.remove();
+  });
+
   it('injects delegates immediately but starts its DOM observer explicitly and once', () => {
     const manager = new ImageStateManager({} as any, {} as any);
     const setupObserver = vi.spyOn(manager as any, 'setupObserver').mockImplementation(() => undefined);
     const alignment = {} as any;
     const caption = {} as any;
 
-    manager.initialize(alignment, null, caption);
+    manager.initialize(alignment, caption);
     expect(setupObserver).not.toHaveBeenCalled();
 
     manager.start();
@@ -88,11 +323,11 @@ describe('ImageStateManager pipe syntax integration', () => {
     const img = document.createElement('img');
 
     expect(() => manager.processReadingModeImage(img)).not.toThrow();
-    expect((manager as any).alignment.applyAlignmentToImage).not.toHaveBeenCalled();
+    expect((manager as any).alignment.applyLayout).not.toHaveBeenCalled();
     expect((manager as any).caption.renderImage).not.toHaveBeenCalled();
   });
 
-  it('clears deferred processing timers on unload', () => {
+  it('does not leave deferred image-processing timers behind', () => {
     vi.useFakeTimers();
     try {
       const manager = makeManager();
@@ -102,7 +337,7 @@ describe('ImageStateManager pipe syntax integration', () => {
       const img = document.createElement('img');
 
       manager.processImage(img);
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      expect(vi.getTimerCount()).toBe(0);
 
       manager.onunload();
       expect(vi.getTimerCount()).toBe(0);
@@ -163,13 +398,43 @@ describe('ImageStateManager pipe syntax integration', () => {
     expect(editing).toHaveBeenCalledWith(secondImage, { status: 'absent' });
   });
 
-  it('clears stale layout in Source Mode when Live Preview is not explicitly enabled', () => {
+  it('reconciles images already rendered in Reading Mode when the manager starts', () => {
     const contentEl = document.createElement('div');
     const image = contentEl.appendChild(document.createElement('img'));
-    image.style.width = '500px';
-    image.style.height = 'auto';
-    image.setAttribute('data-image-assistant-dimension-owner', 'true');
-    image.setAttribute('data-image-assistant-dimension-mode', 'width');
+    const view = {
+      contentEl,
+      getMode: () => 'preview',
+      editor: { getValue: vi.fn(() => '') }
+    };
+    const workspace = {
+      layoutReady: true,
+      getLeavesOfType: vi.fn(() => [{ view }]),
+      getActiveViewOfType: vi.fn(() => view),
+      on: vi.fn(() => ({}))
+    };
+    const plugin = {
+      settings: { alignment: { enabled: true, default: 'center' } },
+      registerEvent: vi.fn()
+    } as any;
+    const manager = new ImageStateManager({ workspace } as any, plugin);
+    manager.initialize(
+      { cleanup: vi.fn() } as any,
+      { removeImage: vi.fn() } as any
+    );
+    const reading = vi.spyOn(manager, 'processReadingModeImage')
+      .mockImplementation(() => undefined);
+
+    manager.start();
+    manager.start();
+
+    expect(reading).toHaveBeenCalledOnce();
+    expect(reading).toHaveBeenCalledWith(image);
+    manager.onunload();
+  });
+
+  it('delegates Source Mode cleanup without invoking image processing', () => {
+    const contentEl = document.createElement('div');
+    const image = contentEl.appendChild(document.createElement('img'));
     const view = {
       contentEl,
       getMode: () => 'source',
@@ -192,9 +457,6 @@ describe('ImageStateManager pipe syntax integration', () => {
 
     expect(processImage).not.toHaveBeenCalled();
     expect((manager as any).alignment.clearImage).toHaveBeenCalledWith(image);
-    expect(image.style.width).toBe('');
-    expect(image.style.height).toBe('');
-    expect(image.hasAttribute('data-image-assistant-dimension-owner')).toBe(false);
   });
 
   it('clears alignment delegates when alignment is disabled', () => {
@@ -210,11 +472,11 @@ describe('ImageStateManager pipe syntax integration', () => {
       wrap: false,
       source: 'none'
     });
-    expect(img.style.width).toBe('320px');
-    expect(img.style.height).toBe('200px');
+    expect(img.style.width).toBe('');
+    expect(img.style.height).toBe('');
   });
 
-  it('maps reading-mode pipe syntax into alignment, size, and caption delegates', () => {
+  it('maps reading-mode pipe syntax into alignment and caption delegates', () => {
     const manager = makeManager();
     const img = document.createElement('img') as HTMLImageElement;
     img.setAttribute('alt', 'Caption|left-wrap|320x200');
@@ -226,8 +488,8 @@ describe('ImageStateManager pipe syntax integration', () => {
       wrap: true,
       source: 'pipe'
     });
-    expect(img.style.width).toBe('320px');
-    expect(img.style.height).toBe('200px');
+    expect(img.style.width).toBe('');
+    expect(img.style.height).toBe('');
     expect((manager as any).caption.renderImage).toHaveBeenCalledWith(img, { captionText: 'Caption' });
   });
 
@@ -243,12 +505,12 @@ describe('ImageStateManager pipe syntax integration', () => {
       wrap: false,
       source: 'image-default'
     });
-    expect(img.style.width).toBe('640px');
-    expect(img.style.height).toBe('auto');
+    expect(img.style.width).toBe('');
+    expect(img.style.height).toBe('');
     expect((manager as any).caption.renderImage).toHaveBeenCalledWith(img, { captionText: 'Caption' });
   });
 
-  it('supports display-mode Reading Mode attributes in arbitrary order', () => {
+  it('does not reinterpret non-tail legacy tokens as size or alignment', () => {
     const manager = makeManager();
     const img = document.createElement('img') as HTMLImageElement;
     img.setAttribute('alt', 'right|300|Caption');
@@ -256,13 +518,15 @@ describe('ImageStateManager pipe syntax integration', () => {
     manager.processReadingModeImage(img);
 
     expect((manager as any).alignment.applyLayout).toHaveBeenCalledWith(img, {
-      alignment: 'right',
+      alignment: 'center',
       wrap: false,
-      source: 'pipe'
+      source: 'image-default'
     });
-    expect(img.style.width).toBe('300px');
-    expect(img.style.height).toBe('auto');
-    expect((manager as any).caption.renderImage).toHaveBeenCalledWith(img, { captionText: 'Caption' });
+    expect(img.style.width).toBe('');
+    expect(img.style.height).toBe('');
+    expect((manager as any).caption.renderImage).toHaveBeenCalledWith(img, {
+      captionText: 'right|300|Caption'
+    });
   });
 
   it('prefers the exact source link over a reduced Reading Mode alt attribute', () => {
@@ -272,7 +536,7 @@ describe('ImageStateManager pipe syntax integration', () => {
 
     manager.processReadingModeImage(
       img,
-      { linkText: '![[https://cdn.example.com/photo.webp|right|300|Exact caption]]' }
+      { linkText: '![[https://cdn.example.com/photo.webp|Exact caption|right|300]]' }
     );
 
     expect((manager as any).alignment.applyLayout).toHaveBeenCalledWith(img, {
@@ -280,10 +544,10 @@ describe('ImageStateManager pipe syntax integration', () => {
       wrap: false,
       source: 'pipe'
     });
-    expect(img.style.width).toBe('300px');
-    expect(img.style.height).toBe('auto');
+    expect(img.style.width).toBe('');
+    expect(img.style.height).toBe('');
     expect((manager as any).caption.renderImage).toHaveBeenCalledWith(img, {
-      linkText: '![[https://cdn.example.com/photo.webp|right|300|Exact caption]]'
+      linkText: '![[https://cdn.example.com/photo.webp|Exact caption|right|300]]'
     });
   });
 
@@ -392,26 +656,132 @@ describe('ImageStateManager pipe syntax integration', () => {
     expect((manager as any).alignment.clearImage).not.toHaveBeenCalled();
   });
 
+  it('deduplicates a replacement Live Preview widget added by nested mutations', () => {
+    const source = '![Right|right|233](https://example.com/diagram.png)';
+    const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-source-view';
+    const cmContent = contentEl.appendChild(document.createElement('div'));
+    cmContent.className = 'cm-content';
+    const oldImage = cmContent.appendChild(document.createElement('img'));
+    oldImage.src = 'https://example.com/diagram.png';
+    const replacement = document.createElement('img');
+    replacement.src = 'https://example.com/diagram.png';
+    cmContent.replaceChild(replacement, oldImage);
+    document.body.appendChild(contentEl);
+
+    const editor = {
+      getValue: vi.fn(() => source),
+      getLine: vi.fn(() => source),
+      lineCount: vi.fn(() => 1),
+      cm: {
+        state: {
+          field: vi.fn(() => true),
+          doc: { toString: () => source }
+        },
+        dispatch: vi.fn(),
+        posAtDOM: vi.fn(() => 0),
+        requestMeasure: vi.fn((request: any) => request.write(request.read()))
+      }
+    };
+    const file = { path: 'notes/current.md' };
+    const view = { contentEl, editor, file, getMode: () => 'source' };
+    const app = {
+      workspace: {
+        getLeavesOfType: vi.fn(() => [{ view }]),
+        getActiveViewOfType: vi.fn(() => view)
+      }
+    };
+    const manager = makeManager(app);
+
+    // CodeMirror can report the same replacement in both an outer and nested
+    // child-list record. The new node must enter one coalesced measurement;
+    // the detached old node's processing state is irrelevant.
+    (manager as any).processingImages.add(oldImage);
+    (manager as any).collectMutatedMedia(view, [{
+      type: 'childList',
+      target: cmContent,
+      addedNodes: [replacement],
+      removedNodes: [oldImage]
+    }, {
+      type: 'childList',
+      target: replacement,
+      addedNodes: [replacement],
+      removedNodes: []
+    }] as unknown as MutationRecord[]);
+
+    expect((manager as any).alignment.applyLayout).toHaveBeenCalledTimes(1);
+    expect((manager as any).alignment.applyLayout).toHaveBeenCalledWith(replacement, {
+      alignment: 'right',
+      wrap: false,
+      source: 'pipe'
+    });
+    expect(editor.cm.requestMeasure).toHaveBeenCalledOnce();
+
+    manager.onunload();
+    contentEl.remove();
+  });
+
+  it('detaches a removed external-renderer subtree without requiring an IMG', () => {
+    const contentEl = document.createElement('div');
+    const removed = document.createElement('div');
+    removed.className = 'excalidraw-embedded-img';
+    removed.setAttribute('fileSource', 'Drawing.excalidraw.md');
+    removed.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'svg'));
+    const view = { contentEl, getMode: () => 'source' } as any;
+    const manager = makeManager();
+    const detachSubtree = vi.fn();
+    (manager as any).layoutCoordinators.set(view, { detachSubtree });
+    vi.spyOn(manager as any, 'isLivePreview').mockReturnValue(true);
+
+    (manager as any).collectMutatedMedia(view, [{
+      type: 'childList',
+      target: contentEl,
+      addedNodes: [],
+      removedNodes: [removed]
+    }] as unknown as MutationRecord[]);
+
+    expect(detachSubtree).toHaveBeenCalledOnce();
+    expect(detachSubtree).toHaveBeenCalledWith(removed);
+  });
+
   it('processes a network image that was rendered before its Live Preview observer starts', async () => {
     const source = '![GFL current droop|center|800](https://example.com/gfl?id=1)';
     const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-source-view';
     document.body.appendChild(contentEl);
-    const img = contentEl.appendChild(document.createElement('img'));
+    const contentContainer = contentEl.appendChild(document.createElement('div'));
+    contentContainer.className = 'cm-contentContainer';
+    const cmContent = contentContainer.appendChild(document.createElement('div'));
+    cmContent.className = 'cm-content';
+    const imageEmbed = cmContent.appendChild(document.createElement('div'));
+    imageEmbed.className = 'image-embed';
+    const imageWrapper = imageEmbed.appendChild(document.createElement('div'));
+    imageWrapper.className = 'image-wrapper';
+    const img = imageWrapper.appendChild(document.createElement('img'));
     img.src = 'https://example.com/gfl?id=1';
     const descriptor = getImageSourceDescriptors(source)[0];
     const sourceKey = getImageSourceKey(descriptor);
     const layoutKey = getImageLayoutKey(descriptor);
-    const caption = contentEl.appendChild(document.createElement('span'));
+    const caption = cmContent.appendChild(document.createElement('span'));
     caption.className = 'image-assistant-caption image-assistant-live-preview-caption';
     caption.setAttribute('data-image-assistant-caption-renderer', 'codemirror');
     caption.setAttribute('data-image-assistant-source-key', sourceKey);
     caption.setAttribute('data-image-assistant-layout-key', layoutKey);
     caption.setAttribute('data-image-assistant-caption-width', 'auto');
     caption.setAttribute('data-image-assistant-caption-wrap', 'false');
-    vi.spyOn(img, 'getBoundingClientRect').mockReturnValue({
-      left: 300, width: 800, right: 1100, top: 0, bottom: 100,
-      height: 100, x: 300, y: 0, toJSON: () => ({})
+    vi.spyOn(contentContainer, 'getBoundingClientRect').mockReturnValue({
+      left: 100, width: 1000, right: 1100, top: 0, bottom: 500,
+      height: 500, x: 100, y: 0, toJSON: () => ({})
     } as DOMRect);
+    vi.spyOn(img, 'getBoundingClientRect').mockImplementation(() => {
+      const offset = Number.parseFloat(
+        imageEmbed.style.getPropertyValue('--image-assistant-layout-offset')
+      ) || 0;
+      return {
+        left: 100 + offset, width: 800, right: 900 + offset, top: 0, bottom: 100,
+        height: 100, x: 100 + offset, y: 0, toJSON: () => ({})
+      } as DOMRect;
+    });
     vi.spyOn(caption, 'getBoundingClientRect').mockImplementation(() => {
       const offset = Number.parseFloat(
         caption.style.getPropertyValue('--image-assistant-caption-offset')
@@ -452,24 +822,212 @@ describe('ImageStateManager pipe syntax integration', () => {
     } as any;
     const manager = new ImageStateManager({ workspace } as any, plugin);
     const alignment = new ImageAlignment({} as any, plugin);
-    manager.initialize(alignment, null, { removeImage: vi.fn() } as any);
+    manager.initialize(alignment, { removeImage: vi.fn() } as any);
 
     manager.start();
     await Promise.resolve();
     const coordinator = [...(manager as any).layoutCoordinators.values()][0];
     (coordinator as any).flush();
 
-    expect(img.style.width).toBe('800px');
+    expect(img.style.width).toBe('');
     expect(sourceKeyDuringMeasureRead).toBeNull();
     expect(editor.cm.requestMeasure).toHaveBeenCalledOnce();
-    expect(img.getAttribute('data-image-assistant-align')).toBe('center');
+    expect(imageEmbed.getAttribute('data-image-assistant-align')).toBe('center');
     expect(img.getAttribute('data-image-assistant-source-key')).toContain('https://example.com/gfl?id=1');
+    expect(imageEmbed.getAttribute('data-image-assistant-layout-positioned')).toBe('true');
+    expect(imageEmbed.style.getPropertyValue('--image-assistant-layout-offset')).toBe('100px');
     expect(caption.getAttribute('data-image-assistant-caption-positioned')).toBe('true');
     expect(caption.style.getPropertyValue('--image-assistant-caption-rendered-width')).toBe('800px');
-    expect(caption.style.getPropertyValue('--image-assistant-caption-offset')).toBe('200px');
+    expect(caption.style.getPropertyValue('--image-assistant-caption-offset')).toBe('100px');
 
     manager.onunload();
     contentEl.remove();
+  });
+
+  it.each([
+    ['nested non-media block wrapper', 'cm-embed-block', false],
+    ['stable 1.13.4 line widget', 'cm-line', true]
+  ] as const)('registers geometry only for a %s', (_label, wrapperClass, expected) => {
+    const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-source-view';
+    const cmContent = contentEl.appendChild(document.createElement('div'));
+    cmContent.className = 'cm-content';
+    const widget = cmContent.appendChild(document.createElement('div'));
+    widget.className = wrapperClass;
+    const embed = widget.appendChild(document.createElement('div'));
+    embed.className = 'image-embed';
+    const image = embed.appendChild(document.createElement('img'));
+    const view = {
+      contentEl,
+      file: { path: 'notes/stability.md' },
+      getMode: () => 'source',
+      editor: { getValue: vi.fn(() => '') }
+    };
+    const app = {
+      workspace: {
+        getLeavesOfType: vi.fn(() => [{ view }]),
+        getActiveViewOfType: vi.fn(() => view)
+      }
+    };
+    const manager = makeManager(app);
+    const registerTarget = vi.fn();
+    (manager as any).layoutCoordinators.set(view, { registerTarget });
+
+    (manager as any).applyImageResolution(image, {
+      status: 'resolved',
+      state: {
+        align: 'right',
+        wrap: false,
+        pipeAlignment: 'right',
+        standalone: true,
+        sourceKey: 'source:stable',
+        layoutKey: 'layout:stable',
+        layoutScope: 'root'
+      }
+    });
+
+    expect(registerTarget).toHaveBeenCalledTimes(expected ? 1 : 0);
+  });
+
+  it('registers a direct media-bearing cm-embed-block owner', () => {
+    const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-source-view';
+    const cmContent = contentEl.appendChild(document.createElement('div'));
+    cmContent.className = 'cm-content';
+    const embed = cmContent.appendChild(document.createElement('div'));
+    embed.className = 'cm-embed-block image-embed';
+    const image = embed.appendChild(document.createElement('img'));
+    const view = {
+      contentEl,
+      file: { path: 'notes/direct-block.md' },
+      getMode: () => 'source',
+      editor: { getValue: vi.fn(() => '') }
+    };
+    const manager = makeManager({
+      workspace: {
+        getLeavesOfType: vi.fn(() => [{ view }]),
+        getActiveViewOfType: vi.fn(() => view)
+      }
+    });
+    const registerTarget = vi.fn();
+    (manager as any).layoutCoordinators.set(view, { registerTarget });
+
+    (manager as any).applyImageResolution(image, {
+      status: 'resolved',
+      state: {
+        align: 'right',
+        wrap: false,
+        pipeAlignment: 'right',
+        standalone: true,
+        sourceKey: 'source:direct-block',
+        layoutKey: 'layout:direct-block',
+        layoutScope: 'root'
+      }
+    });
+
+    expect(registerTarget).toHaveBeenCalledOnce();
+    expect(registerTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: embed, placement: embed }),
+      'layout:direct-block',
+      expect.objectContaining({ alignment: 'right' })
+    );
+  });
+
+  it.each([
+    ['an unbound render', '', false, false],
+    ['an image reveal tooltip', 'cm-image-reveal-tooltip', true, false],
+    ['a hover popover', 'hover-popover', true, false]
+  ] as const)('does not register geometry for %s', (
+    _label,
+    transientClass,
+    hasSourceKey,
+    expected
+  ) => {
+    const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-source-view';
+    const cmContent = contentEl.appendChild(document.createElement('div'));
+    cmContent.className = 'cm-content';
+    const line = cmContent.appendChild(document.createElement('div'));
+    line.className = 'cm-line';
+    const transient = transientClass
+      ? line.appendChild(document.createElement('div'))
+      : line;
+    if (transientClass) transient.className = transientClass;
+    const embed = transient.appendChild(document.createElement('span'));
+    embed.className = 'image-embed';
+    const image = embed.appendChild(document.createElement('img'));
+    const view = {
+      contentEl,
+      file: { path: 'notes/transient.md' },
+      getMode: () => 'source',
+      editor: { getValue: vi.fn(() => '') }
+    };
+    const manager = makeManager({
+      workspace: {
+        getLeavesOfType: vi.fn(() => [{ view }]),
+        getActiveViewOfType: vi.fn(() => view)
+      }
+    });
+    const registerTarget = vi.fn();
+    (manager as any).layoutCoordinators.set(view, { registerTarget });
+
+    (manager as any).applyImageResolution(image, {
+      status: 'resolved',
+      state: {
+        align: 'right',
+        wrap: false,
+        pipeAlignment: 'right',
+        standalone: true,
+        ...(hasSourceKey ? { sourceKey: 'source:transient' } : {}),
+        layoutKey: 'layout:transient',
+        layoutScope: 'root'
+      }
+    });
+
+    expect(registerTarget).toHaveBeenCalledTimes(expected ? 1 : 0);
+  });
+
+  it('rejects a nested image-embed even when its source binding is unique', () => {
+    const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-source-view';
+    const cmContent = contentEl.appendChild(document.createElement('div'));
+    cmContent.className = 'cm-content';
+    const line = cmContent.appendChild(document.createElement('div'));
+    line.className = 'cm-line';
+    const outer = line.appendChild(document.createElement('span'));
+    outer.className = 'image-embed';
+    const inner = outer.appendChild(document.createElement('span'));
+    inner.className = 'image-embed';
+    const image = inner.appendChild(document.createElement('img'));
+    const view = {
+      contentEl,
+      file: { path: 'notes/nested.md' },
+      getMode: () => 'source',
+      editor: { getValue: vi.fn(() => '') }
+    };
+    const manager = makeManager({
+      workspace: {
+        getLeavesOfType: vi.fn(() => [{ view }]),
+        getActiveViewOfType: vi.fn(() => view)
+      }
+    });
+    const registerTarget = vi.fn();
+    (manager as any).layoutCoordinators.set(view, { registerTarget });
+
+    (manager as any).applyImageResolution(image, {
+      status: 'resolved',
+      state: {
+        align: 'right',
+        wrap: false,
+        pipeAlignment: 'right',
+        standalone: true,
+        sourceKey: 'source:nested',
+        layoutKey: 'layout:nested',
+        layoutScope: 'root'
+      }
+    });
+
+    expect(registerTarget).not.toHaveBeenCalled();
   });
 
   it('queues images already present when a new Live Preview leaf is discovered', async () => {
@@ -507,7 +1065,7 @@ describe('ImageStateManager pipe syntax integration', () => {
       registerEvent: vi.fn()
     } as any;
     const manager = new ImageStateManager({ workspace } as any, plugin);
-    manager.initialize({ cleanup: vi.fn() } as any, null, { removeImage: vi.fn() } as any);
+    manager.initialize({ cleanup: vi.fn() } as any, { removeImage: vi.fn() } as any);
     const applyImageResolution = vi.spyOn(manager as any, 'applyImageResolution')
       .mockImplementation(() => undefined);
 
@@ -518,6 +1076,97 @@ describe('ImageStateManager pipe syntax integration', () => {
     expect(applyImageResolution).toHaveBeenCalledWith(secondImage, { status: 'absent' });
     expect((manager as any).observers.size).toBe(2);
 
+    manager.onunload();
+  });
+
+  it('creates Live Preview ownership on an effect-only same-leaf mode transition', () => {
+    const contentEl = document.createElement('div');
+    const editorDom = contentEl.appendChild(document.createElement('div'));
+    let mode: 'preview' | 'source' = 'preview';
+    const view = {
+      contentEl,
+      file: { path: 'notes/mode-transition.md' },
+      getMode: () => mode,
+      editor: {
+        getValue: vi.fn(() => ''),
+        cm: {
+          state: { field: vi.fn(() => true), doc: { toString: () => '' } },
+          dispatch: vi.fn(),
+          requestMeasure: vi.fn()
+        }
+      }
+    };
+    const workspace = {
+      layoutReady: true,
+      getLeavesOfType: vi.fn(() => [{ view }]),
+      getActiveViewOfType: vi.fn(() => view),
+      on: vi.fn(() => ({}))
+    };
+    const plugin = {
+      settings: { alignment: { enabled: true, default: 'center' } },
+      registerEvent: vi.fn()
+    } as any;
+    const manager = new ImageStateManager({ workspace } as any, plugin);
+    manager.initialize(
+      { cleanup: vi.fn() } as any,
+      { removeImage: vi.fn() } as any
+    );
+
+    manager.start();
+    expect((manager as any).layoutCoordinators.size).toBe(0);
+
+    mode = 'source';
+    manager.handleLivePreviewEditorUpdate(editorDom, {
+      reconcileSource: false,
+      geometryChanged: false,
+      modeChanged: true
+    });
+
+    expect((manager as any).layoutCoordinators.has(view)).toBe(true);
+    expect((manager as any).observers.has(view)).toBe(true);
+    manager.onunload();
+  });
+
+  it('does not rescan workspace leaves for ordinary updates with an existing coordinator', () => {
+    const contentEl = document.createElement('div');
+    const editorDom = contentEl.appendChild(document.createElement('div'));
+    const view = {
+      contentEl,
+      file: { path: 'notes/steady-live-preview.md' },
+      getMode: () => 'source',
+      editor: {
+        getValue: vi.fn(() => ''),
+        cm: {
+          state: { field: vi.fn(() => true), doc: { toString: () => '' } },
+          dispatch: vi.fn(),
+          requestMeasure: vi.fn()
+        }
+      }
+    };
+    const workspace = {
+      layoutReady: true,
+      getLeavesOfType: vi.fn(() => [{ view }]),
+      getActiveViewOfType: vi.fn(() => view),
+      on: vi.fn(() => ({}))
+    };
+    const plugin = {
+      settings: { alignment: { enabled: true, default: 'center' } },
+      registerEvent: vi.fn()
+    } as any;
+    const manager = new ImageStateManager({ workspace } as any, plugin);
+    manager.initialize(
+      { cleanup: vi.fn() } as any,
+      { removeImage: vi.fn() } as any
+    );
+    manager.start();
+    workspace.getLeavesOfType.mockClear();
+
+    manager.handleLivePreviewEditorUpdate(editorDom, {
+      reconcileSource: false,
+      geometryChanged: false
+    });
+
+    expect(workspace.getLeavesOfType).not.toHaveBeenCalled();
     manager.onunload();
   });
 
@@ -561,7 +1210,7 @@ describe('ImageStateManager pipe syntax integration', () => {
         registerEvent: vi.fn()
       } as any;
       const manager = new ImageStateManager({ workspace } as any, plugin);
-      manager.initialize({ cleanup: vi.fn() } as any, null, { removeImage: vi.fn() } as any);
+      manager.initialize({ cleanup: vi.fn() } as any, { removeImage: vi.fn() } as any);
       const processImage = vi.spyOn(manager, 'processImage').mockImplementation(() => undefined);
 
       manager.start();
@@ -571,7 +1220,14 @@ describe('ImageStateManager pipe syntax integration', () => {
       expect(instances).toHaveLength(1);
       expect(instances[0].observe).toHaveBeenCalledWith(contentEl);
       const coordinator = [...(manager as any).layoutCoordinators.values()][0];
-      coordinator.registerImage(image, 'source-key', { standalone: true, scope: 'root' });
+      const target = resolveRenderedMediaLayoutTarget(image);
+      expect(target).not.toBeNull();
+      coordinator.registerTarget(target!, 'source-key', {
+        standalone: true,
+        scope: 'root',
+        alignment: 'left',
+        wrap: false
+      });
       expect(instances[0].observe).toHaveBeenCalledWith(image);
       instances[0].callback([
         { target: image } as unknown as ResizeObserverEntry
@@ -584,6 +1240,63 @@ describe('ImageStateManager pipe syntax integration', () => {
     } finally {
       if (original) Object.defineProperty(window, 'ResizeObserver', original);
       else delete (window as unknown as { ResizeObserver?: unknown }).ResizeObserver;
+    }
+  });
+
+  it('observes only renderer identity and intrinsic-size attributes', () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'MutationObserver');
+    const observeCalls: MutationObserverInit[] = [];
+    class TestMutationObserver {
+      readonly observe = vi.fn((_target: Node, options?: MutationObserverInit) => {
+        if (options) observeCalls.push(options);
+      });
+      readonly disconnect = vi.fn();
+      readonly takeRecords = vi.fn(() => [] as MutationRecord[]);
+      constructor(_callback: MutationCallback) {}
+    }
+    Object.defineProperty(window, 'MutationObserver', {
+      configurable: true,
+      value: TestMutationObserver
+    });
+
+    try {
+      const contentEl = document.createElement('div');
+      const view = {
+        contentEl,
+        file: { path: 'notes/observer-contract.md' },
+        getMode: () => 'source',
+        editor: {
+          getValue: vi.fn(() => ''),
+          cm: { state: { field: vi.fn(() => true), doc: { toString: () => '' } } }
+        }
+      };
+      const workspace = {
+        layoutReady: true,
+        getLeavesOfType: vi.fn(() => [{ view }]),
+        getActiveViewOfType: vi.fn(() => view),
+        on: vi.fn(() => ({}))
+      };
+      const plugin = {
+        settings: { alignment: { enabled: true, default: 'center' } },
+        registerEvent: vi.fn()
+      } as any;
+      const manager = new ImageStateManager({ workspace } as any, plugin);
+      manager.initialize({ cleanup: vi.fn() } as any, { removeImage: vi.fn() } as any);
+
+      manager.start();
+
+      const mediaObserver = observeCalls.find(options => options.attributes === true);
+      expect(mediaObserver).toBeDefined();
+      expect(mediaObserver?.attributeFilter).toEqual([
+        'src', 'width', 'height', 'filesource', 'fileSource'
+      ]);
+      expect(mediaObserver?.attributeFilter).not.toContain('alt');
+      expect(mediaObserver?.attributeFilter).not.toContain('class');
+      expect(mediaObserver?.attributeFilter).not.toContain('style');
+      manager.onunload();
+    } finally {
+      if (original) Object.defineProperty(window, 'MutationObserver', original);
+      else delete (window as unknown as { MutationObserver?: unknown }).MutationObserver;
     }
   });
 
@@ -616,7 +1329,7 @@ describe('ImageStateManager pipe syntax integration', () => {
     } as any;
     const manager = new ImageStateManager({ workspace } as any, plugin);
     const alignment = { cleanup: vi.fn() } as any;
-    manager.initialize(alignment, null, { removeImage: vi.fn() } as any);
+    manager.initialize(alignment, { removeImage: vi.fn() } as any);
     const applyImageResolution = vi.spyOn(manager as any, 'applyImageResolution')
       .mockImplementation(() => undefined);
 
@@ -633,171 +1346,4 @@ describe('ImageStateManager pipe syntax integration', () => {
     expect(alignment.cleanup).toHaveBeenCalledWith(secondContent);
   });
 
-  it('removes the size attribute when width and height are cleared', async () => {
-    const { editor, img, lines, manager } = makeUpdateFixture('![[img.png|Caption|left|320x200]]');
-
-    await manager.updateState(img, { width: null, height: null });
-
-    expect(editor.replaceRange).toHaveBeenCalledWith(
-      '![[img.png|Caption|left]]',
-      { line: 0, ch: 0 },
-      { line: 0, ch: '![[img.png|Caption|left|320x200]]'.length }
-    );
-    expect(lines[0]).toBe('![[img.png|Caption|left]]');
-  });
-
-  it('does not write an empty size attribute when clearing dimensions on a link without size', async () => {
-    const { editor, img, lines, manager } = makeUpdateFixture('![[img.png|Caption]]');
-
-    await manager.updateState(img, { width: null, height: null });
-
-    expect(editor.replaceRange).not.toHaveBeenCalled();
-    expect(lines[0]).toBe('![[img.png|Caption]]');
-  });
-
-  it('preserves the remaining height when only width is cleared', async () => {
-    const { editor, img, lines, manager } = makeUpdateFixture('![Caption|320x200](img.png)');
-
-    await manager.updateState(img, { width: null });
-
-    expect(editor.replaceRange).toHaveBeenCalledWith(
-      '![Caption|x200](img.png)',
-      { line: 0, ch: 0 },
-      { line: 0, ch: '![Caption|320x200](img.png)'.length }
-    );
-    expect(lines[0]).toBe('![Caption|x200](img.png)');
-  });
-
-  it.each([
-    {
-      name: 'Wiki attributes in arbitrary order with escaped caption pipes',
-      input: '![[img.png|right-wrap|Caption\\|with pipe| 320x200 ]]',
-      changes: { width: 500 },
-      expected: '![[img.png|right-wrap|Caption\\|with pipe| 500x200 ]]'
-    },
-    {
-      name: 'Markdown display-order attributes and an angle-bracketed destination',
-      input: '![right|320|Caption](<img.png> "A title")',
-      changes: { width: 500 },
-      expected: '![right|500|Caption](<img.png> "A title")'
-    },
-    {
-      name: 'Markdown height-only sizes while preserving title and alignment',
-      input: '![Caption\\|tail|left|x200](img.png \'single title\')',
-      changes: { width: 500 },
-      expected: '![Caption\\|tail|left|500x200](img.png \'single title\')'
-    },
-    {
-      name: 'a size-free Markdown link without changing its caption or order',
-      input: '![Caption|center](img.png)',
-      changes: { height: 240 },
-      expected: '![Caption|center|x240](img.png)'
-    }
-  ])('writes only the size segment for $name', async ({ input, changes, expected }) => {
-    const { editor, img, lines, manager } = makeUpdateFixture(input);
-
-    const result = await manager.updateState(img, changes);
-
-    expect(result.status).toBe('saved');
-    expect(editor.replaceRange).toHaveBeenCalledWith(
-      expected,
-      { line: 0, ch: 0 },
-      { line: 0, ch: input.length }
-    );
-    expect(lines[0]).toBe(expected);
-  });
-
-  it.each([
-    '![300|right](img.png)',
-    '![Caption|320|640](img.png)',
-    '![[img.png|Caption|320|640]]'
-  ])('rejects ambiguous size syntax without editing %s', async (input) => {
-    const { editor, img, lines, manager } = makeUpdateFixture(input);
-
-    const result = await manager.updateState(img, { width: 500 });
-
-    expect(result.status).toBe('failed');
-    expect(result.complete).toBe(false);
-    expect(result.error).toContain('ambiguous size fields');
-    expect(editor.replaceRange).not.toHaveBeenCalled();
-    expect(lines[0]).toBe(input);
-  });
-
-  it('conditionally rolls a source-preserving size write back when saving fails', async () => {
-    const input = '![right|320|Caption](img.png "A title")';
-    const { editor, img, lines, manager, view } = makeUpdateFixture(input);
-    view.save
-      .mockRejectedValueOnce(new Error('first save failed'))
-      .mockResolvedValueOnce(undefined);
-
-    const result = await manager.updateState(img, { width: 500 });
-
-    expect(result.status).toBe('rolledBack');
-    expect(result.complete).toBe(false);
-    expect(editor.replaceRange).toHaveBeenCalledTimes(2);
-    expect(lines[0]).toBe(input);
-    expect(view.save).toHaveBeenCalledTimes(2);
-  });
-
-  it('updates the exact matched range when same-basename links share one line', async () => {
-    const originalLine = '![[other/pic.png|Other|100]] and ![[assets/pic.png|Target|200]]';
-    const { editor, img, lines, manager } = makeUpdateFixture(originalLine, 'app://local/assets/pic.png');
-    const target = '![[assets/pic.png|Target|200]]';
-    const targetIndex = originalLine.indexOf(target);
-
-    await manager.updateState(img, { width: 320 });
-
-    expect(editor.replaceRange).toHaveBeenCalledWith(
-      '![[assets/pic.png|Target|320]]',
-      { line: 0, ch: targetIndex },
-      { line: 0, ch: targetIndex + target.length }
-    );
-    expect(lines[0]).toBe('![[other/pic.png|Other|100]] and ![[assets/pic.png|Target|320]]');
-  });
-
-  it('does not write a stale image into a different active view', async () => {
-    const { app, editor, img, manager } = makeUpdateFixture('![[img.png|Caption|200]]');
-    const otherView = document.createElement('div');
-    ((manager as any).app.workspace.getActiveViewOfType as ReturnType<typeof vi.fn>)
-      .mockReturnValue({ editor, contentEl: otherView });
-    app.workspace.getLeavesOfType.mockReturnValue([
-      { view: { editor, contentEl: otherView } as any }
-    ]);
-
-    await manager.updateState(img, { width: 320 });
-
-    expect(editor.replaceRange).not.toHaveBeenCalled();
-  });
-
-  it('updates the current exact source link after an earlier user edit', async () => {
-    const { editor, img, lines, manager } = makeUpdateFixture('![[img.png|Caption|200]]');
-    lines[0] = '![[img.png|User edit|640]]';
-
-    const result = await manager.updateState(img, { width: 320 });
-
-    expect(result.status).toBe('saved');
-    expect(editor.replaceRange).toHaveBeenCalledOnce();
-    expect(lines[0]).toBe('![[img.png|User edit|320]]');
-  });
-
-  it('keeps writing to the owning view after an active-view change and abandons after unload', async () => {
-    const { app, editor, img, manager } = makeUpdateFixture('![[img.png|Caption|200]]');
-    const originalView = app.workspace.getActiveViewOfType();
-    app.workspace.getActiveViewOfType.mockReturnValue({
-      editor,
-      file: originalView.file,
-      contentEl: document.createElement('div'),
-      getMode: () => 'source'
-    } as any);
-    const firstResult = await manager.updateState(img, { width: 320 });
-    expect(firstResult.complete).toBe(true);
-    expect(editor.replaceRange).toHaveBeenCalledOnce();
-
-    editor.replaceRange.mockClear();
-    app.workspace.getActiveViewOfType.mockReturnValue(originalView);
-    manager.onunload();
-    const secondResult = await manager.updateState(img, { width: 360 });
-    expect(secondResult.status).toBe('stale');
-    expect(editor.replaceRange).not.toHaveBeenCalled();
-  });
 });

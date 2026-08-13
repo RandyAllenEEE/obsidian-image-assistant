@@ -2,16 +2,15 @@
 import { App, editorLivePreviewField, MarkdownView } from 'obsidian';
 import ImageConverterPlugin from '../main';
 import { ImageAlignment } from './ImageAlignment';
-import { ImageResizer } from './ImageResizer';
 import { ImageCaption } from './ImageCaption';
 import { pipeSyntaxParser, AlignType, PipeSyntaxData } from '../utils/PipeSyntaxParser';
 import type { ReadingImageContext } from './caption/types';
 import { isElementNode, isHtmlImageElement } from './caption/CaptionDomUtils';
+import { ImageViewContextResolver } from './contextMenu/utils/ImageViewContextResolver';
 import {
-    ImageViewContextResolver,
-    type ImageViewContext
-} from './contextMenu/utils/ImageViewContextResolver';
-import { resolveImageLayout } from './ImageLayoutResolver';
+    resolveImageLayout,
+    type ResolvedImageLayout
+} from './ImageLayoutResolver';
 import {
     IMAGE_LAYOUT_KEY_ATTRIBUTE,
     IMAGE_SOURCE_KEY_ATTRIBUTE,
@@ -19,23 +18,26 @@ import {
 } from '../utils/RefinedImageUtils';
 import {
     getImageLayoutKey,
-    getImageSourceKey
+    getImageSourceKey,
+    type ImageSourceDescriptor
 } from '../utils/MarkdownSourceContext';
 import { collectUsableMarkdownViews, getMarkdownViewMode } from './MarkdownViewRegistry';
 import {
     LivePreviewImageLayoutCoordinator,
     type LivePreviewLayoutScope
 } from './caption/LivePreviewImageLayoutCoordinator';
-import {
-    ImageDimensionRenderer,
-    resolveImageDimensions
-} from './ImageDimensions';
-import {
-    EditorRangeMutationTransaction,
-    type EditorRangeMutationResult
-} from '../utils/EditorRangeMutationTransaction';
-import { t } from '../lang/helpers';
 import { resolveEditorView } from '../utils/EditorViewResolver';
+import {
+    collectExcalidrawRenderedEmbeds,
+    findExcalidrawRenderedEmbed,
+    getExcalidrawRenderedAlignment,
+    type ExcalidrawRenderedEmbed
+} from '../drawing/excalidraw/ExcalidrawRenderedEmbed';
+import {
+    isStandaloneRenderedMediaTarget,
+    resolveRenderedMediaLayoutTarget,
+    type RenderedMediaLayoutTarget
+} from './RenderedMediaLayoutTarget';
 
 export interface ImageState {
     align: 'left' | 'center' | 'right' | 'left-wrap' | 'right-wrap' | 'none';
@@ -51,20 +53,6 @@ export interface ImageState {
     caption?: string;
 }
 
-export type ImageStateMutationStatus =
-    | 'saved'
-    | 'unchanged'
-    | 'stale'
-    | 'rolledBack'
-    | 'uncertain'
-    | 'failed';
-
-export interface ImageStateMutationResult {
-    readonly status: ImageStateMutationStatus;
-    readonly complete: boolean;
-    readonly error?: string;
-}
-
 type ImageStateResolution =
     | { status: 'resolved'; state: ImageState }
     | { status: 'pending' }
@@ -73,6 +61,14 @@ type ImageStateResolution =
 interface MeasuredImageState {
     readonly image: HTMLImageElement;
     readonly resolution: ImageStateResolution;
+}
+
+interface ExcalidrawSourceLayout {
+    readonly standalone: boolean;
+    readonly alignment?: AlignType;
+    /** Present only when the rendered marker maps to one unambiguous source link. */
+    readonly descriptor?: ImageSourceDescriptor;
+    readonly view: MarkdownView;
 }
 
 type WorkspaceWithLayoutState = App['workspace'] & {
@@ -92,13 +88,8 @@ export class ImageStateManager {
     private started = false;
     private readingLinkTexts = new WeakMap<HTMLImageElement, string>();
     private readingContexts = new WeakMap<HTMLImageElement, ReadingImageContext>();
-    private pendingResolutionAttempts = new WeakMap<HTMLImageElement, number>();
-    private readonly dimensions = new ImageDimensionRenderer();
-    private readonly editorTransaction = new EditorRangeMutationTransaction();
-
     // Delegates
     public alignment: ImageAlignment;
-    public resizer: ImageResizer | null;
     public caption: ImageCaption;
 
     constructor(
@@ -111,10 +102,9 @@ export class ImageStateManager {
         // Dependencies are injected via initialize() to avoid circular references during plugin load.
     }
 
-    public initialize(alignment: ImageAlignment, resizer: ImageResizer | null, caption: ImageCaption) {
+    public initialize(alignment: ImageAlignment, caption: ImageCaption) {
         this.unloaded = false;
         this.alignment = alignment;
-        this.resizer = resizer;
         this.caption = caption;
         this.initialized = true;
     }
@@ -123,6 +113,13 @@ export class ImageStateManager {
         if (!this.initialized || this.started || this.unloaded) return;
         this.started = true;
         this.setupObserver();
+        // Community plugins may start after Obsidian has already rendered the
+        // active Markdown leaf. Reconcile that existing DOM immediately instead
+        // of waiting for a future file-open, postprocessor, or leaf change.
+        // Live Preview already queues its first snapshot in syncObservers(); this
+        // startup pass deliberately covers Reading Mode only to avoid duplicate
+        // editor measurements.
+        this.reconcileExistingReadingViews();
     }
 
     private processingImages = new Set<HTMLImageElement>();
@@ -162,12 +159,25 @@ export class ImageStateManager {
 
     public handleLivePreviewEditorUpdate(
         editorDom: HTMLElement,
-        update: { reconcileSource: boolean; geometryChanged: boolean }
+        update: {
+            reconcileSource: boolean;
+            geometryChanged: boolean;
+            modeChanged?: boolean;
+        }
     ): void {
         if (this.unloaded) return;
-        const entry = [...this.layoutCoordinators.entries()].find(([view]) =>
+        let entry = [...this.layoutCoordinators.entries()].find(([view]) =>
             view.contentEl.contains(editorDom)
         );
+        // A Reading <-> Live Preview transition keeps the same workspace leaf.
+        // Reconcile ownership on that uncommon boundary (or when no coordinator
+        // exists), while keeping ordinary CodeMirror updates on the fast path.
+        if (update.modeChanged || !entry) {
+            this.syncObservers();
+            entry = [...this.layoutCoordinators.entries()].find(([view]) =>
+                view.contentEl.contains(editorDom)
+            );
+        }
         if (!entry) return;
         const [view, coordinator] = entry;
         if (update.geometryChanged) coordinator.schedule(3);
@@ -191,37 +201,36 @@ export class ImageStateManager {
         const currentViews = new Set(views);
 
         for (const [view, observer] of this.observers) {
-            if (!currentViews.has(view) || !this.isLivePreview(view)) {
+            if (!currentViews.has(view)) {
                 observer.disconnect();
                 this.observers.delete(view);
                 this.layoutCoordinators.get(view)?.destroy();
                 this.layoutCoordinators.delete(view);
                 this.pendingImages.delete(view);
                 this.scheduledViews.delete(view);
-                if (getMarkdownViewMode(view) !== 'preview') {
-                    this.alignment?.cleanup(view.contentEl);
-                    this.dimensions.cleanup(view.contentEl);
-                    view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
-                        .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
-                    view.contentEl.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
-                        .forEach(element => element.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE));
-                }
+                this.alignment?.cleanup(view.contentEl);
+                view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
+                    .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
+                view.contentEl.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
+                    .forEach(element => element.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE));
             }
         }
 
         for (const view of views) {
-            if (!this.isLivePreview(view)) {
+            const livePreview = this.isLivePreview(view);
+            if (!livePreview) {
+                this.layoutCoordinators.get(view)?.destroy();
+                this.layoutCoordinators.delete(view);
+                this.pendingImages.delete(view);
+                this.scheduledViews.delete(view);
                 if (getMarkdownViewMode(view) !== 'preview') {
                     this.alignment?.cleanup(view.contentEl);
-                    this.dimensions.cleanup(view.contentEl);
                     view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
                         .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
                     view.contentEl.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
                         .forEach(element => element.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE));
                 }
-                continue;
-            }
-            if (!this.layoutCoordinators.has(view)) {
+            } else if (!this.layoutCoordinators.has(view)) {
                 this.layoutCoordinators.set(
                     view,
                     new LivePreviewImageLayoutCoordinator(view.contentEl)
@@ -230,32 +239,151 @@ export class ImageStateManager {
             if (!this.observers.has(view)) {
                 const Observer = view.contentEl.ownerDocument.defaultView?.MutationObserver
                     ?? MutationObserver;
-                const observer = new Observer(mutations => this.collectMutatedImages(view, mutations));
+                const observer = new Observer(mutations => this.collectMutatedMedia(view, mutations));
                 observer.observe(view.contentEl, {
                     childList: true,
                     subtree: true,
                     attributes: true,
-                    attributeFilter: ['src', 'alt']
+                    attributeFilter: [
+                        'src', 'width', 'height',
+                        'filesource', 'fileSource'
+                    ]
                 });
                 this.observers.set(view, observer);
-
-                // The editor can finish rendering before the manager starts or a
-                // newly opened leaf is observed. Process that first DOM snapshot
-                // through the same batched path used for later mutations.
+            }
+            if (livePreview) {
                 this.queueImages(
                     view,
                     Array.from(view.contentEl.querySelectorAll('img')).filter(isHtmlImageElement)
                 );
             }
+            this.processExcalidrawEmbeds(view.contentEl);
         }
     }
 
-    private collectMutatedImages(view: MarkdownView, mutations: MutationRecord[]): void {
-        if (!this.isLivePreview(view)) return;
+    private processExcalidrawEmbeds(root: ParentNode): void {
+        for (const embed of collectExcalidrawRenderedEmbeds(root)) {
+            const target = resolveRenderedMediaLayoutTarget(embed.element);
+            if (!target || target.kind !== 'excalidraw-source') continue;
+            const sourceLayout = this.resolveExcalidrawSourceLayout(embed);
+            const standalone = sourceLayout?.standalone
+                ?? isStandaloneRenderedMediaTarget(target);
+            const layout = resolveImageLayout(
+                getExcalidrawRenderedAlignment(embed.element)
+                    ?? sourceLayout?.alignment,
+                this.plugin.settings.alignment,
+                standalone
+            );
+            this.alignment.applyLayoutTarget(target, layout);
+            this.registerLivePreviewExcalidrawTarget(target, sourceLayout, layout);
+        }
+    }
+
+    /**
+     * CodeMirror can place a block embed directly under `.cm-content`, where
+     * DOM siblings are unrelated source lines. Reuse the canonical Markdown
+     * descriptors to determine whether the source link owns its line; only
+     * fall back to DOM structure when a source descriptor cannot be resolved.
+     */
+    private resolveExcalidrawSourceLayout(
+        embed: ExcalidrawRenderedEmbed
+    ): ExcalidrawSourceLayout | null {
+        const owner = this.viewContextResolver.resolveElementOwner(embed.element);
+        if (!owner) return null;
+
+        const renderedPath = normalizeRenderedSourcePath(embed.fileSource);
+        if (!renderedPath) return null;
+        const matches = this.viewContextResolver.prepareEditor(owner.editor)
+            .descriptors
+            .filter(descriptor => this.matchesRenderedSourcePath(
+                descriptor.path,
+                renderedPath,
+                owner.file.path
+            ));
+        if (matches.length === 0) return null;
+
+        const firstAlignment = matches[0]?.pipeData?.align ?? undefined;
+        const hasUniformAlignment = matches.every(descriptor =>
+            (descriptor.pipeData?.align ?? undefined) === firstAlignment
+        );
+        return {
+            standalone: matches.every(descriptor => descriptor.standalone),
+            ...(hasUniformAlignment && firstAlignment
+                ? { alignment: firstAlignment }
+                : {}),
+            ...(matches.length === 1 ? { descriptor: matches[0] } : {}),
+            view: owner.view
+        };
+    }
+
+    /**
+     * CodeMirror captions are separate widgets, so bind them to the actual
+     * Excalidraw SVG/IMG surface only when one source link owns that marker.
+     * Ambiguous repeated embeds intentionally fall back to normal widget flow
+     * rather than guessing and attaching a caption to the wrong drawing.
+     */
+    private registerLivePreviewExcalidrawTarget(
+        target: NonNullable<ReturnType<typeof resolveRenderedMediaLayoutTarget>>,
+        sourceLayout: ExcalidrawSourceLayout | null,
+        layout: ResolvedImageLayout
+    ): void {
+        const descriptor = sourceLayout?.descriptor;
+        if (!descriptor || !this.isLivePreview(sourceLayout.view)) return;
+        const coordinator = this.layoutCoordinators.get(sourceLayout.view);
+        if (!coordinator) return;
+
+        const layoutKey = getImageLayoutKey(descriptor);
+        const sourceKey = getImageSourceKey(descriptor);
+        if (!isStableLivePreviewTarget(target, {
+            viewRoot: sourceLayout.view.contentEl,
+            sourceKey,
+            layoutKey
+        })) return;
+        // External renderer surfaces (SVG/IMG) remain wholly owned by
+        // Excalidraw. Source identity belongs on our semantic HTML host; the
+        // coordinator owns the layout key on the safe placement boundary.
+        if (target.owner.getAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE) !== sourceKey) {
+            target.owner.setAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE, sourceKey);
+        }
+        coordinator.registerTarget(target, layoutKey, {
+            standalone: descriptor.standalone,
+            scope: descriptor.layoutScope,
+            alignment: layout.alignment,
+            wrap: layout.wrap
+        });
+    }
+
+    private matchesRenderedSourcePath(
+        descriptorPath: string,
+        renderedPath: string,
+        sourcePath: string
+    ): boolean {
+        const normalizedDescriptor = normalizeRenderedSourcePath(descriptorPath);
+        if (areEquivalentRenderedPaths(normalizedDescriptor, renderedPath)) return true;
+
+        try {
+            const resolved = this.app.metadataCache?.getFirstLinkpathDest?.(
+                descriptorPath,
+                sourcePath
+            );
+            return !!resolved && areEquivalentRenderedPaths(
+                normalizeRenderedSourcePath(resolved.path),
+                renderedPath
+            );
+        } catch {
+            return false;
+        }
+    }
+
+    private collectMutatedMedia(view: MarkdownView, mutations: MutationRecord[]): void {
+        const livePreview = this.isLivePreview(view);
         const images = new Set<HTMLImageElement>();
 
         const addImage = (img: HTMLImageElement): void => {
-            if (!this.processingImages.has(img) && !img.hasClass('is-resizing')) images.add(img);
+            if (!isCodeMirrorWidgetBuffer(img)
+                && !this.processingImages.has(img)) {
+                images.add(img);
+            }
         };
 
         for (const mutation of mutations) {
@@ -264,38 +392,46 @@ export class ImageStateManager {
                 continue;
             }
             if (mutation.type === 'attributes' && isHtmlImageElement(mutation.target)) {
-                addImage(mutation.target);
+                if (livePreview) addImage(mutation.target);
+                if (findExcalidrawRenderedEmbed(mutation.target)) {
+                    this.processExcalidrawEmbeds(mutation.target);
+                }
+                continue;
+            }
+            if (mutation.type === 'attributes' && isElementNode(mutation.target)) {
+                this.processExcalidrawEmbeds(mutation.target);
                 continue;
             }
             if (mutation.type !== 'childList') continue;
 
             mutation.addedNodes.forEach(node => {
                 if (isHtmlImageElement(node)) {
-                    addImage(node);
+                    if (livePreview) addImage(node);
+                    if (findExcalidrawRenderedEmbed(node)) this.processExcalidrawEmbeds(node);
                 } else if (isElementNode(node)
                     && !node.hasAttribute('data-image-assistant-caption-renderer')) {
-                    node.querySelectorAll('img').forEach(img => {
-                        if (isHtmlImageElement(img)) addImage(img);
-                    });
+                    if (livePreview) {
+                        node.querySelectorAll('img').forEach(img => {
+                            if (isHtmlImageElement(img)) addImage(img);
+                        });
+                    }
+                    this.processExcalidrawEmbeds(node);
                 }
             });
             mutation.removedNodes.forEach(node => {
-                if (isHtmlImageElement(node)) {
-                    this.layoutCoordinators.get(view)?.detachImage(node);
-                } else if (isElementNode(node)) {
-                    node.querySelectorAll('img').forEach(image => {
-                        if (isHtmlImageElement(image)) {
-                            this.layoutCoordinators.get(view)?.detachImage(image);
-                        }
-                    });
+                if (isElementNode(node)) {
+                    this.layoutCoordinators.get(view)?.detachSubtree(node);
                 }
             });
         }
 
-        this.queueImages(view, images);
+        if (livePreview) this.queueImages(view, images);
     }
 
-    private queueImages(view: MarkdownView, candidates: Iterable<HTMLImageElement>): void {
+    private queueImages(
+        view: MarkdownView,
+        candidates: Iterable<HTMLImageElement>
+    ): void {
         if (!this.isLivePreview(view) || this.unloaded) return;
 
         let images = this.pendingImages.get(view);
@@ -304,11 +440,10 @@ export class ImageStateManager {
             this.pendingImages.set(view, images);
         }
         for (const image of candidates) {
-            if (view.contentEl.contains(image)
-                && !this.processingImages.has(image)
-                && !image.hasClass('is-resizing')) {
-                images.add(image);
-            }
+            const connected = view.contentEl.contains(image)
+                && !isCodeMirrorWidgetBuffer(image)
+                && !findExcalidrawRenderedEmbed(image);
+            if (connected && !this.processingImages.has(image)) images.add(image);
         }
 
         if (images.size === 0) {
@@ -358,6 +493,20 @@ export class ImageStateManager {
         this.performRefreshAllImages(paths);
     }
 
+    private reconcileExistingReadingViews(): void {
+        const workspace = this.app?.workspace as WorkspaceWithLayoutState | undefined;
+        if (workspace?.layoutReady === false) return;
+
+        for (const view of collectUsableMarkdownViews(this.app)) {
+            if (getMarkdownViewMode(view) !== 'preview') continue;
+            const images = view.contentEl?.findAll?.('img')
+                ?? Array.from(view.contentEl?.querySelectorAll?.('img') ?? []);
+            for (const image of images) {
+                if (isHtmlImageElement(image)) this.processReadingModeImage(image);
+            }
+        }
+    }
+
     private performRefreshAllImages(paths?: ReadonlySet<string>): void {
         // Extra safety check for layout readiness
         const workspace = this.app.workspace as WorkspaceWithLayoutState;
@@ -374,19 +523,27 @@ export class ImageStateManager {
                 ?? Array.from(markdownView.contentEl?.querySelectorAll?.('img') ?? []);
             images.forEach((img) => {
                 if (isHtmlImageElement(img)) {
+                    if (findExcalidrawRenderedEmbed(img)) {
+                        if (mode === 'preview') {
+                            this.processReadingModeImage(img);
+                        } else {
+                            this.processExcalidrawEmbeds(img);
+                        }
+                        return;
+                    }
                     if (mode === 'preview') {
                         this.processReadingModeImage(img);
                     } else if (this.isLivePreview(markdownView)) {
                         this.queueImages(markdownView, [img]);
                     } else {
                         this.alignment.clearImage(img);
-                        this.dimensions.clearImage(img);
                         img.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
                         img.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE);
                         this.caption.removeImage?.(img);
                     }
                 }
             });
+            this.processExcalidrawEmbeds(markdownView.contentEl);
         }
     }
 
@@ -395,21 +552,20 @@ export class ImageStateManager {
      */
     public processImage(img: HTMLImageElement, sourceIndex?: ImageSourceIndex) {
         if (!this.initialized) return;
+        if (findExcalidrawRenderedEmbed(img)) {
+            this.processExcalidrawEmbeds(img);
+            return;
+        }
         if (this.processingImages.has(img)) return;
-
-        // 1. Check for conflicts
-        if (img.hasClass('is-resizing')) return;
 
         try {
             this.processingImages.add(img);
             const resolution = this.resolveImageState(img, sourceIndex);
             this.applyImageResolution(img, resolution);
         } finally {
-            // Short timeout to allow DOM updates to settle before re-enabling observer
-            // This prevents immediate re-trigger by the very changes we just made
-            this.schedule(() => {
-                this.processingImages.delete(img);
-            }, 0);
+            // Plugin-owned layout attributes and styles are deliberately not
+            // observed, so the guard only needs to cover this synchronous pass.
+            this.processingImages.delete(img);
         }
     }
 
@@ -422,8 +578,14 @@ export class ImageStateManager {
         context: ReadingImageContext = {}
     ) {
         if (!this.initialized) return;
-        // 1. Check for conflicts
-        if (img.hasClass('is-resizing')) return;
+        if (findExcalidrawRenderedEmbed(img)) {
+            this.processExcalidrawEmbeds(img);
+            this.caption.renderImage(img, {
+                ...context,
+                document: img.ownerDocument
+            });
+            return;
+        }
 
         const hasLinkText = Object.prototype.hasOwnProperty.call(context, 'linkText');
         const hasDescriptor = Object.prototype.hasOwnProperty.call(context, 'descriptor');
@@ -458,10 +620,9 @@ export class ImageStateManager {
         const parsed = descriptor?.pipeData ?? (linkText
             ? pipeSyntaxParser.parsePipeSyntax(linkText, { attributeMode: 'display' })
             : null)
-            ?? pipeSyntaxParser.parsePipeAttributes(img.getAttribute('alt') || '', true, 'display');
+            ?? pipeSyntaxParser.parsePipeAttributes(img.getAttribute('alt') || '', 'display');
         if (!parsed) {
             this.alignment.clearImage(img);
-            this.dimensions.clearImage(img);
             this.caption.removeImage?.(img);
             return;
         }
@@ -474,11 +635,41 @@ export class ImageStateManager {
             standalone
         );
         this.alignment.applyLayout(img, layout);
-        this.dimensions.apply(img, resolveImageDimensions(state.size));
 
         this.caption.renderImage(img, linkText
             ? { linkText, ...(descriptor ? { descriptor } : {}) }
             : { captionText: state.caption ?? '', ...(descriptor ? { descriptor } : {}) });
+    }
+
+    /**
+     * Reading Mode Excalidraw embeds are not always IMG elements. Route them
+     * through the same source descriptor and image-layout resolver as native
+     * media before rendering their caption.
+     */
+    public processReadingModeExternalMedia(
+        media: Element,
+        context: ReadingImageContext = {}
+    ): void {
+        if (!this.initialized) return;
+        const target = resolveRenderedMediaLayoutTarget(media);
+        if (!target || target.kind !== 'excalidraw-source') return;
+
+        const parsed = context.descriptor?.pipeData
+            ?? (context.linkText
+                ? pipeSyntaxParser.parsePipeSyntax(context.linkText, { attributeMode: 'display' })
+                : null);
+        const standalone = context.descriptor?.standalone
+            ?? isStandaloneRenderedMediaTarget(target);
+        const layout = resolveImageLayout(
+            parsed?.align,
+            this.plugin.settings.alignment,
+            standalone
+        );
+        this.alignment.applyLayoutTarget(target, layout);
+        this.caption.renderExternalMedia(media, {
+            ...context,
+            document: media.ownerDocument
+        });
     }
 
     /**
@@ -548,152 +739,6 @@ export class ImageStateManager {
         } };
     }
 
-    /**
-     * The Central Writer. Updates the markdown file with new state.
-     */
-    public async updateState(
-        img: HTMLImageElement,
-        changes: Partial<ImageState>,
-        expectedContext?: Pick<ImageViewContext, 'view' | 'file' | 'editor'> & {
-            readonly sourceKey?: string | null;
-        }
-    ): Promise<ImageStateMutationResult> {
-        const context = this.viewContextResolver.resolve(img);
-        if (!context || !this.matchesExpectedContext(context, expectedContext)) {
-            return mutationResult('stale');
-        }
-        const { match: linkMatch } = context;
-        const linkText = linkMatch.linkText;
-        const hasSizeChanges = changes.width !== undefined || changes.height !== undefined;
-        const hasNonSizeChanges = changes.align !== undefined
-            || changes.wrap !== undefined
-            || changes.caption !== undefined;
-
-        // Resize and size-only property edits must preserve the user's exact
-        // PipeSyntax order, escaping, title, and extension-owned attributes.
-        // Rebuilding the complete link is only safe when another property is
-        // deliberately being edited as part of the same transaction.
-        if (hasSizeChanges && !hasNonSizeChanges) {
-            const sizePatch = pipeSyntaxParser.updateSizePreservingSyntax(linkText, {
-                ...(changes.width === undefined ? {} : { width: changes.width }),
-                ...(changes.height === undefined ? {} : { height: changes.height })
-            });
-            if (sizePatch.status === 'ambiguous') {
-                return mutationResult(
-                    'failed',
-                    t('MSG_RESIZE_PIPE_AMBIGUOUS')
-                );
-            }
-            if (sizePatch.status === 'invalid') {
-                return mutationResult(
-                    'failed',
-                    t('MSG_RESIZE_PIPE_INVALID')
-                );
-            }
-            return this.writeUpdatedLinkText(context, img, expectedContext, sizePatch.linkText);
-        }
-
-        const parsed = pipeSyntaxParser.parsePipeSyntax(linkText);
-        if (!parsed) return mutationResult('failed', 'Image link could not be parsed');
-
-        // Merge Changes
-        // 1. Align & Wrap
-        if (changes.align !== undefined || changes.wrap !== undefined) {
-            let newAlignStr = changes.align ?? 'none';
-
-            // If align is 'none', no alignment attribute needed
-            if (newAlignStr === 'none') {
-                parsed.align = null;
-            } else {
-                // For combined values like 'left-wrap', use directly
-                // For simple values like 'left', check if wrap should be appended
-                if (!newAlignStr.includes('wrap') && changes.wrap === true) {
-                    newAlignStr = `${newAlignStr}-wrap` as typeof newAlignStr;
-                }
-                parsed.align = newAlignStr as AlignType;
-            }
-        }
-
-        // 2. Size
-        if (changes.width !== undefined || changes.height !== undefined) {
-            const width = changes.width !== undefined
-                ? (changes.width === null ? undefined : changes.width)
-                : parsed.size?.width;
-            const height = changes.height !== undefined
-                ? (changes.height === null ? undefined : changes.height)
-                : parsed.size?.height;
-
-            if (width || height) {
-                parsed.size = {
-                    width,
-                    height,
-                    format: width && height ? 'WxH' : width ? 'W' : 'xH'
-                };
-            } else {
-                parsed.size = undefined;
-            }
-        }
-
-        // 3. Caption
-        if (changes.caption !== undefined) {
-            // Escape pipes to prevent breaking the pipe syntax
-            parsed.alt = changes.caption.replace(/\|/g, '\\|');
-        }
-
-        // Rebuild and write deliberate multi-property edits.
-        const newLinkText = pipeSyntaxParser.buildPipeSyntax(parsed);
-
-        return this.writeUpdatedLinkText(context, img, expectedContext, newLinkText);
-    }
-
-    private async writeUpdatedLinkText(
-        context: ImageViewContext,
-        img: HTMLImageElement,
-        expectedContext: (Pick<ImageViewContext, 'view' | 'file' | 'editor'> & {
-            readonly sourceKey?: string | null;
-        }) | undefined,
-        newLinkText: string
-    ): Promise<ImageStateMutationResult> {
-        const { view, editor, match: linkMatch } = context;
-        const linkText = linkMatch.linkText;
-        if (linkText === newLinkText) return mutationResult('unchanged');
-        if (this.unloaded
-            || !view.contentEl.contains(img)
-            || !this.matchesExpectedContext(context, expectedContext)) {
-            return mutationResult('stale');
-        }
-
-        const result = await this.editorTransaction.run(
-            {
-                view,
-                editor,
-                file: context.file
-            },
-            {
-                line: linkMatch.line,
-                start: linkMatch.start,
-                end: linkMatch.end,
-                expectedText: linkText,
-                replacement: newLinkText
-            }
-        );
-        return mapEditorMutationResult(result);
-    }
-
-    private matchesExpectedContext(
-        context: ImageViewContext,
-        expected?: Pick<ImageViewContext, 'view' | 'file' | 'editor'> & {
-            readonly sourceKey?: string | null;
-        }
-    ): boolean {
-        if (!expected) return true;
-        return expected.view === context.view
-            && expected.editor === context.editor
-            && expected.file.path === context.file.path
-            && (!expected.sourceKey
-                || expected.sourceKey === context.match.sourceKey);
-    }
-
     public onunload() {
         this.unloaded = true;
         this.initialized = false;
@@ -701,7 +746,6 @@ export class ImageStateManager {
         for (const [view, observer] of this.observers) {
             observer.disconnect();
             this.alignment?.cleanup(view.contentEl);
-            this.dimensions.cleanup(view.contentEl);
             view.contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
                 .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
             view.contentEl.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
@@ -711,7 +755,6 @@ export class ImageStateManager {
             const contentEl = (leaf.view as MarkdownView)?.contentEl;
             if (!contentEl) continue;
             this.alignment?.cleanup(contentEl);
-            this.dimensions.cleanup(contentEl);
             contentEl.querySelectorAll(`[${IMAGE_SOURCE_KEY_ATTRIBUTE}]`)
                 .forEach(element => element.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE));
             contentEl.querySelectorAll(`[${IMAGE_LAYOUT_KEY_ATTRIBUTE}]`)
@@ -727,7 +770,6 @@ export class ImageStateManager {
         this.processingImages.clear();
         this.readingLinkTexts = new WeakMap<HTMLImageElement, string>();
         this.readingContexts = new WeakMap<HTMLImageElement, ReadingImageContext>();
-        this.pendingResolutionAttempts = new WeakMap<HTMLImageElement, number>();
     }
 
     private toPipeAlignment(align: ImageState['align']): AlignType {
@@ -735,15 +777,8 @@ export class ImageStateManager {
     }
 
     private isStandaloneDomImage(img: HTMLImageElement): boolean {
-        const host = img.closest('.image-wrapper, .image-embed, .external-embed') ?? img;
-        const parent = host.parentElement;
-        if (!parent) return true;
-        return Array.from(parent.childNodes).every(node =>
-            node === host
-            || node.nodeType === 3 && !node.textContent?.trim()
-            || isElementNode(node)
-                && node.getAttribute('data-image-assistant-caption-renderer') === 'dom'
-        );
+        const target = resolveRenderedMediaLayoutTarget(img);
+        return target ? isStandaloneRenderedMediaTarget(target) : true;
     }
 
     private unregisterLivePreviewLayout(img: HTMLImageElement): void {
@@ -785,13 +820,12 @@ export class ImageStateManager {
         if (!measurements || !this.isLivePreview(view) || this.unloaded) return;
         for (const { image, resolution } of measurements) {
             if (!view.contentEl.contains(image)
-                || this.processingImages.has(image)
-                || image.hasClass('is-resizing')) continue;
+                || this.processingImages.has(image)) continue;
             try {
                 this.processingImages.add(image);
                 this.applyImageResolution(image, resolution);
             } finally {
-                this.schedule(() => this.processingImages.delete(image), 0);
+                this.processingImages.delete(image);
             }
         }
     }
@@ -801,22 +835,11 @@ export class ImageStateManager {
         resolution: ImageStateResolution
     ): void {
         if (resolution.status === 'pending') {
-            const owner = this.viewContextResolver.resolveOwner(img);
-            if (owner) {
-                this.layoutCoordinators.get(owner.view)?.schedule(3);
-                const attempts = this.pendingResolutionAttempts.get(img) ?? 0;
-                if (attempts < 3) {
-                    this.pendingResolutionAttempts.set(img, attempts + 1);
-                    this.schedule(() => this.queueImages(owner.view, [img]), 16);
-                }
-            }
             return;
         }
-        this.pendingResolutionAttempts.delete(img);
         if (resolution.status === 'absent') {
             this.unregisterLivePreviewLayout(img);
             this.alignment.clearImage(img);
-            this.dimensions.clearImage(img);
             img.removeAttribute(IMAGE_SOURCE_KEY_ATTRIBUTE);
             img.removeAttribute(IMAGE_LAYOUT_KEY_ATTRIBUTE);
             this.caption.removeImage?.(img);
@@ -838,14 +861,20 @@ export class ImageStateManager {
             state.standalone ?? true
         );
         this.alignment.applyLayout(img, layout);
-        this.dimensions.apply(img, resolveImageDimensions(state.size));
 
         if (state.layoutKey) {
             const owner = this.viewContextResolver.resolveOwner(img);
-            if (owner) {
-                this.layoutCoordinators.get(owner.view)?.registerImage(img, state.layoutKey, {
+            const target = resolveRenderedMediaLayoutTarget(img);
+            if (owner && target && isStableLivePreviewTarget(target, {
+                viewRoot: owner.view.contentEl,
+                sourceKey: state.sourceKey ?? '',
+                layoutKey: state.layoutKey
+            })) {
+                this.layoutCoordinators.get(owner.view)?.registerTarget(target, state.layoutKey, {
                     standalone: state.standalone ?? true,
-                    scope: state.layoutScope ?? 'root'
+                    scope: state.layoutScope ?? 'root',
+                    alignment: layout.alignment,
+                    wrap: layout.wrap
                 });
             }
         }
@@ -864,25 +893,77 @@ export class ImageStateManager {
     }
 }
 
-function mapEditorMutationResult(
-    result: EditorRangeMutationResult
-): ImageStateMutationResult {
-    if (result.saved) return mutationResult('saved');
-    if (result.stale) return mutationResult('stale', result.error);
-    if (result.uncertain) return mutationResult('uncertain', result.error);
-    if (result.rolledBack && result.rollbackSaved) {
-        return mutationResult('rolledBack', result.error);
+function normalizeRenderedSourcePath(value: string): string {
+    let decoded = value.trim();
+    try {
+        decoded = decodeURIComponent(decoded);
+    } catch {
+        // Keep the original path when an upstream renderer preserves `%` text.
     }
-    return mutationResult('failed', result.error);
+    return decoded
+        .replace(/\\/g, '/')
+        .replace(/^\.\/+/, '')
+        .replace(/^\/+/, '')
+        .toLowerCase();
 }
 
-function mutationResult(
-    status: ImageStateMutationStatus,
-    error?: string
-): ImageStateMutationResult {
-    return Object.freeze({
-        status,
-        complete: status === 'saved' || status === 'unchanged',
-        ...(error ? { error } : {})
-    });
+function areEquivalentRenderedPaths(left: string, right: string): boolean {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    const leftBasename = left.slice(left.lastIndexOf('/') + 1);
+    const rightBasename = right.slice(right.lastIndexOf('/') + 1);
+    return (!left.includes('/') || !right.includes('/'))
+        && leftBasename === rightBasename;
+}
+
+/** CodeMirror's zero-width cursor buffer is not a rendered Markdown image. */
+function isCodeMirrorWidgetBuffer(image: HTMLImageElement): boolean {
+    return image.classList.contains('cm-widgetBuffer');
+}
+
+interface LivePreviewTargetBinding {
+    readonly viewRoot: HTMLElement;
+    readonly sourceKey: string;
+    readonly layoutKey: string;
+}
+
+/**
+ * Accepts Obsidian 1.13.4's real stable widget shapes, including
+ * `.cm-content > .cm-line > .image-embed`. A `.cm-line` ancestor is not by
+ * itself evidence of a transient source reveal. Stability instead comes from
+ * an unambiguous Markdown binding and one outer media owner in the current
+ * Live Preview view.
+ */
+function isStableLivePreviewTarget(
+    target: RenderedMediaLayoutTarget,
+    binding: LivePreviewTargetBinding
+): boolean {
+    if (!binding.sourceKey.trim() || !binding.layoutKey.trim()) return false;
+
+    const { owner, placement, visual } = target;
+    if (placement !== owner
+        || !binding.viewRoot.contains(owner)
+        || !binding.viewRoot.contains(placement)
+        || !binding.viewRoot.contains(visual)
+        || !owner.matches('.image-embed')
+        || owner.matches('.cm-line, .cm-content')
+        || owner.closest('.cm-image-reveal-tooltip, .popover, .hover-popover')) {
+        return false;
+    }
+
+    const content = owner.closest<HTMLElement>('.cm-content');
+    if (!content || !binding.viewRoot.contains(content)) return false;
+
+    const parent = owner.parentElement;
+    const isDirectContentChild = parent === content;
+    const isDirectLineChild = parent?.matches('.cm-line') === true
+        && parent.parentElement === content;
+    if (!isDirectContentChild && !isDirectLineChild) return false;
+
+    // Never bind an inner embed. Moving it can escape an outer paint
+    // containment boundary (as Excalidraw does) or duplicate native layout.
+    if (visual.closest('.image-embed') !== owner
+        || owner.parentElement?.closest('.image-embed')) return false;
+
+    return true;
 }

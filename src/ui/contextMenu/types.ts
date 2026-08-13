@@ -39,7 +39,9 @@ export interface ImageDataReferenceContext {
 }
 
 export interface ImageContextMenuContext {
-	readonly image: HTMLImageElement;
+	readonly image: HTMLImageElement | null;
+	/** The connected DOM target that owns this menu; normally the image itself. */
+	readonly mediaElement?: Element;
 	readonly ownerDocument: Document;
 	readonly ownerWindow: Window | null;
 	readonly renderedSrc: string;

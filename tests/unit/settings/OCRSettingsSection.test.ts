@@ -3,6 +3,22 @@ import { renderOCRSettingsSection } from "../../../src/settings/OCRSettingsSecti
 import { DEFAULT_SETTINGS } from "../../../src/settings/defaults";
 
 describe("OCRSettingsSection", () => {
+    it("hides providers and secrets when OCR is disabled", () => {
+        const settings = structuredClone(DEFAULT_SETTINGS);
+        settings.ocrSettings.enabled = false;
+        const plugin = {
+            app: {},
+            settings,
+            saveSettings: vi.fn(async () => undefined)
+        } as any;
+        const container = document.createElement("div");
+
+        renderOCRSettingsSection(container, plugin, { ocrSectionCollapsed: false } as any, vi.fn());
+
+        expect(container.textContent).not.toContain("LaTeX provider");
+        expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
+    });
+
     it("exposes Pix2Tex and Texify Basic Auth through Secret Storage controls", async () => {
         const settings = structuredClone(DEFAULT_SETTINGS);
         settings.ocrSettings.pix2tex.passwordSecretId = "pix-password";

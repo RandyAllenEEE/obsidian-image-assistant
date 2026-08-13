@@ -1,4 +1,4 @@
-import { App, Component, Menu, Notice, TAbstractFile } from "obsidian";
+import { App, Component, Menu, Notice, TAbstractFile, TFile } from "obsidian";
 import type ImageConverterPlugin from "../../../main";
 import { t } from "../../../lang/helpers";
 import { ProcessSingleImageModal } from "../../modals/ProcessSingleImageModal";
@@ -9,6 +9,7 @@ import { addSubmenuOrFallback } from "../shared/MenuSubmenuAdapter";
 import { IMAGE_ASSISTANT_MENU_SECTION } from "../shared/MenuSections";
 import { FileContextMenuPolicy } from "./FileContextMenuPolicy";
 import type { FileContextMenuContext } from "./types";
+import { canOpenDrawingFile, inspectDrawingFile } from "../../../drawing/DrawingFileSemantics";
 
 export class FileContextMenu extends Component {
     private readonly policy: FileContextMenuPolicy;
@@ -20,21 +21,44 @@ export class FileContextMenu extends Component {
         private readonly ownership: MenuSessionRegistry
     ) {
         super();
-        this.policy = new FileContextMenuPolicy(app, plugin.supportedImageFormats);
+        this.policy = new FileContextMenuPolicy(
+            app,
+            plugin.supportedImageFormats,
+            file => inspectDrawingFile(plugin, file) !== null
+        );
     }
 
     append(menu: Menu, target: TAbstractFile): boolean {
         if (this.ownership.has(menu)) return false;
         const context = this.policy.resolve(target);
-        if (!this.isReferenceInventoryReady()) return false;
-        if (!context || !this.ownership.claim(menu)) return false;
+        if (!context) return false;
+        const diagram = context.kind === "drawing";
+        if (diagram && !canOpenDrawingFile(this.plugin, context.file)) {
+            return false;
+        }
+        if (!diagram && !this.isReferenceInventoryReady()) return false;
+        if (!this.ownership.claim(menu)) return false;
 
-        if (context.kind === "image") {
+        if (diagram) {
+            this.appendDrawingItem(menu, context.file);
+        } else if (context.kind === "image") {
             this.appendImageItems(menu, context);
         } else {
             this.appendBatchSubmenu(menu, context);
         }
         return true;
+    }
+
+    private appendDrawingItem(menu: Menu, file: TFile): void {
+        menu.addItem(item => {
+            item
+                .setTitle(t("MENU_EDIT_DRAWING"))
+                .setIcon("shapes")
+                .setSection(IMAGE_ASSISTANT_MENU_SECTION)
+                .onClick(() => {
+                    void this.plugin.drawingModule.openFile(file);
+                });
+        });
     }
 
     private appendImageItems(
@@ -69,7 +93,7 @@ export class FileContextMenu extends Component {
 
     private appendBatchSubmenu(
         menu: Menu,
-        context: Exclude<FileContextMenuContext, { kind: "image" }>
+        context: Extract<FileContextMenuContext, { kind: "note" | "folder" | "vault" }>
     ): void {
         const modes: ReadonlyArray<{ mode: BatchMode; title: string; icon: string }> = [
             { mode: "local_process", title: t("BATCH_MODE_LOCAL"), icon: "cog" },

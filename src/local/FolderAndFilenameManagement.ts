@@ -23,6 +23,8 @@ export interface ImageNamePlan {
     readonly newFilename: string;
 }
 
+export interface VaultAssetNamePlan extends ImageNamePlan { }
+
 export class FolderAndFilenameManagement {
     private static readonly binaryWriteLock = new AsyncLock();
     private static readonly renameLock = new AsyncLock();
@@ -270,6 +272,55 @@ export class FolderAndFilenameManagement {
                 }
             }
         }
+    }
+
+    /**
+     * Plans a non-converted Vault asset while reusing the configured image
+     * destination and filename templates. Compound suffixes are kept intact.
+     */
+    async determineAssetDestination(
+        file: File,
+        activeFile: TFile,
+        selectedFilenameSetting: LocalFilenameSettings,
+        selectedFolderSetting: LocalDestinationSettings,
+        compoundSuffix: string
+    ): Promise<VaultAssetNamePlan> {
+        this.validateTemplates(
+            file,
+            activeFile,
+            selectedFilenameSetting,
+            selectedFolderSetting
+        );
+        const namingSession = this.variableProcessor.createSession({
+            file,
+            activeFile,
+            quality: this.settings.localProcessing.conversion.quality
+        });
+        const destinationPath = await this.getDestinationDirectory(
+            selectedFolderSetting,
+            file,
+            activeFile,
+            namingSession
+        );
+        const rawStem = this.shouldSkipRename(file.name, selectedFilenameSetting)
+            ? this.getFilenameStem(file.name)
+            : await this.generateNewFilename(
+                selectedFilenameSetting,
+                file,
+                activeFile,
+                undefined,
+                namingSession,
+                destinationPath
+            );
+        const sanitizedStem = this.sanitizeFilename(
+            stripCompoundSuffix(rawStem, compoundSuffix)
+        );
+        const availableBytes = Math.max(1, 240 - utf8Length(compoundSuffix));
+        const stem = truncateUtf8(sanitizedStem, availableBytes).replace(/[ .]+$/g, "");
+        if (!stem) throw new Error("Filename template resolved to an empty filename.");
+        const newFilename = `${stem}${compoundSuffix}`;
+        assertSafeVaultFilename(newFilename);
+        return { destinationPath, newFilename };
     }
 
     public getDefaultAttachmentFolderPath(activeFile: TFile): string {
@@ -814,6 +865,19 @@ export class FolderAndFilenameManagement {
         throw new Error(`Failed to create unique binary '${filename}' after ${maxAttempts} attempts.`);
     }
 
+}
+
+function stripCompoundSuffix(value: string, suffix: string): string {
+    const normalizedSuffix = suffix.startsWith(".") ? suffix : `.${suffix}`;
+    const withoutFinalExtension = normalizedSuffix.slice(0, normalizedSuffix.lastIndexOf("."));
+    for (const candidate of [normalizedSuffix, withoutFinalExtension]
+        .filter(candidate => candidate.length > 1)
+        .sort((a, b) => b.length - a.length)) {
+        if (value.toLowerCase().endsWith(candidate.toLowerCase())) {
+            return value.slice(0, -candidate.length);
+        }
+    }
+    return value;
 }
 
 export type BinaryWriteDisposition = "created" | "reused" | "overwritten" | "skipped";

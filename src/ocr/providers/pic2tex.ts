@@ -1,6 +1,10 @@
 import TexWrapper from "./tex-wrapper";
 import { OCRSettings } from "../OCRSettings";
-import { createBasicAuthorization, fetchWithTimeout } from "../../utils/NetworkRequestUtils";
+import {
+	createBasicAuthorization,
+	fetchWithTimeout,
+	readResponseTextWithLimit
+} from "../../utils/NetworkRequestUtils";
 import { createOcrImagePayload } from "./ImagePayload";
 import { App } from "obsidian";
 
@@ -33,12 +37,11 @@ export default class Pic2Tex extends TexWrapper {
 		}
 		const response = await fetchWithTimeout(this.settings.pix2tex.url, options);
 
+		const responseText = (await readResponseTextWithLimit(response)).trim();
 		if (!response.ok) {
-			const detail = (await response.text()).trim();
+			const detail = responseText;
 			throw new Error(`Pic2Tex request failed with status ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
 		}
-
-		const responseText = (await response.text()).trim();
 		if (!responseText) throw new Error("Pic2Tex returned an empty response");
 
 		let parsed: unknown;

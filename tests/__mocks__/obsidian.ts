@@ -605,6 +605,22 @@ export class Menu {
 }
 
 export class View { getViewType(): string { return 'markdown'; } }
+export class FileView extends View {
+  file: TFile | null = null;
+  navigation = true;
+  contentEl = document.createElement('div');
+  containerEl = document.createElement('div');
+  constructor(public leaf: WorkspaceLeaf) {
+    super();
+    this.containerEl.appendChild(this.contentEl);
+  }
+  getDisplayText(): string { return this.file?.basename ?? ''; }
+  getIcon(): string { return 'file'; }
+  canAcceptExtension(_extension: string): boolean { return false; }
+  async onLoadFile(file: TFile): Promise<void> { this.file = file; }
+  async onUnloadFile(_file: TFile): Promise<void> { this.file = null; }
+  async onClose(): Promise<void> {}
+}
 export class MarkdownView extends View { editor: any = { getValue: () => '', setValue: (_: string) => {} }; }
 export class Editor {}
 export interface EditorPosition { line: number; ch: number; }
@@ -631,6 +647,7 @@ export function setTooltip(el: HTMLElement, text: string): void {
 }
 
 export const requestUrl = vi.fn();
+export const loadPdfJs = vi.fn();
 
 export function getBlobArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
   return blob.arrayBuffer();

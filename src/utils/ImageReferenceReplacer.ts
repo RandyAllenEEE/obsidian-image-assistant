@@ -101,7 +101,6 @@ export class ImageReferenceReplacer {
         if (!pipe) return originalLink;
         const size = pipeSyntaxParser.parsePipeAttributes(
             pipe.slice(1),
-            false,
             "display"
         ).size;
         if (!size) return originalLink;

@@ -108,12 +108,12 @@ describe('VaultReferenceManager', () => {
                 }
             ];
 
-            const updated = await (manager as any).processUpdates(
+            const updated = await (manager as any).processUpdatesDetailed(
                 locations,
                 (location: ReferenceLocation) => ImageLinkPathReplacer.replacePath(location.original, 'assets/really-long-name.png')
             );
 
-            expect(updated).toBe(2);
+            expect(updated.replaced).toBe(2);
             expect(content).toBe('![[assets/really-long-name.png]] and ![[assets/really-long-name.png|300]]');
         });
 

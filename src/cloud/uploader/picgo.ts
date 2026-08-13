@@ -218,7 +218,7 @@ export default class PicGoUploader implements Uploader {
     const message = this.getResponseMessage(data);
 
     if (response.status < 200 || response.status >= 300) {
-      console.error(response, data);
+      this.logUploadFailure(response.status, "http-status");
       return {
         success: false,
         msg: message,
@@ -226,7 +226,7 @@ export default class PicGoUploader implements Uploader {
       };
     }
     if (data.success === false) {
-      console.error(response, data);
+      this.logUploadFailure(response.status, "service-response");
       return {
         success: false,
         msg: message,
@@ -260,6 +260,14 @@ export default class PicGoUploader implements Uploader {
       msg: "success",
       result,
     };
+  }
+
+  /**
+   * Keep diagnostics useful without exposing the uploader response body, URLs,
+   * or any server-provided metadata in Obsidian's developer console.
+   */
+  private logUploadFailure(status: number, reason: "http-status" | "service-response"): void {
+    console.error(`[Image Assistant] Cloud upload failed (${reason}, HTTP ${status}).`);
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

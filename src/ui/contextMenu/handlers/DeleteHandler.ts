@@ -14,6 +14,10 @@ import type { ImageContextMenuContext } from "../types";
 import { EditorRangeMutationTransaction } from "../../../utils/EditorRangeMutationTransaction";
 import { ReferenceWorkflowProgressModal } from "../../modals/ReferenceWorkflowProgressModal";
 import { describeLocalFileDeletion } from "../../../utils/LocalFileDeletionService";
+import {
+    getExcalidrawAssetFamily,
+    inspectDrawingFile
+} from "../../../drawing/DrawingFileSemantics";
 
 /** Handles exact-occurrence deletion and coordinates optional vault-wide cleanup. */
 export class DeleteHandler {
@@ -120,9 +124,19 @@ export class DeleteHandler {
         decision: ReferenceWorkflowDecision
     ): Promise<void> {
         if (decision.action === "cancel") return;
-        if (decision.scope === "none") return;
+        if (decision.scope === "none" && !decision.deleteSource) return;
         if (!clickedReference && decision.scope === "clicked") return;
         if (!inventory && decision.scope !== "clicked") return;
+
+        const localSource = source.kind === "local" ? source.file : null;
+        const drawing = localSource
+            ? inspectDrawingFile(this.plugin, localSource)
+            : null;
+        const derivativeCandidates = drawing?.providerId === "excalidraw"
+            && drawing.role === "source"
+            ? getExcalidrawAssetFamily(this.app, drawing)
+                .filter(file => file.path !== localSource?.path)
+            : [];
 
         const progress = new ReferenceWorkflowProgressModal(this.app);
         try {
@@ -178,6 +192,18 @@ export class DeleteHandler {
                     result.changed.toString(),
                     result.found.toString()
                 ]));
+            if (decision.deleteSource && result.sourceDeleted
+                && derivativeCandidates.length > 0) {
+                const retained = await this.cleanupExcalidrawDerivatives(
+                    derivativeCandidates,
+                    progress.signal
+                );
+                if (retained > 0) {
+                    new Notice(t("NOTICE_EXCALIDRAW_DERIVATIVES_RETAINED", [
+                        retained.toString()
+                    ]));
+                }
+            }
             this.refreshImageViews(result.changedFiles);
         } catch (error) {
             progress.finish();
@@ -185,6 +211,33 @@ export class DeleteHandler {
             console.error("[Image Assistant] Failed to execute image deletion workflow:", error);
             new Notice(t("MSG_FAIL_DELETE"));
         }
+    }
+
+    /**
+     * Derivatives are deleted only after their source was safely removed and
+     * only when the normal reference/revision checks independently pass.
+     * A referenced or concurrently modified preview is deliberately retained.
+     */
+    private async cleanupExcalidrawDerivatives(
+        files: readonly TFile[],
+        signal?: AbortSignal
+    ): Promise<number> {
+        let retained = 0;
+        for (const original of files) {
+            const current = this.app.vault.getAbstractFileByPath(original.path);
+            if (!(current instanceof TFile)) continue;
+            try {
+                const result = await this.coordinator.deleteSource(
+                    { kind: "local", file: current },
+                    undefined,
+                    signal
+                );
+                if (!result.sourceDeleted) retained += 1;
+            } catch {
+                retained += 1;
+            }
+        }
+        return retained;
     }
 
     private resolveSource(

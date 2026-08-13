@@ -6,10 +6,10 @@ import { SettingsUIState } from "./types";
 import { renderLocalProcessingSection } from "./sections/LocalProcessingSection";
 import { renderCloudSettingsSection } from "./sections/CloudSettingsSection";
 import { renderAlignmentSettingsSection } from "./sections/AlignmentSettingsSection";
-import { renderInteractiveResizeSettingsSection } from "./sections/InteractiveResizeSettingsSection";
 import { renderCaptionSettingsSection } from "./sections/CaptionSettingsSection";
 import { renderCleanerSettingsSection } from "./sections/CleanerSettingsSection";
 import { renderOtherSettingsSection } from "./sections/OtherSettingsSection";
+import { renderDrawingSettingsSection } from "./sections/DrawingSettingsSection";
 
 export class ImageConverterSettingTab extends PluginSettingTab {
     activeTab: "folder" | "filename" | "conversion" | "linkformat" | "resize" = "folder";
@@ -19,8 +19,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         super(app, plugin);
         this.settingsUIState = {
             pasteHandlingSectionCollapsed: false,
+            drawingSectionCollapsed: false,
+            nextAiSectionCollapsed: false,
             imageAlignmentSectionCollapsed: true,
-            imageDragResizeSectionCollapsed: false,
             imageCaptionSectionCollapsed: true,
             cleanerSectionCollapsed: false,
             ocrSectionCollapsed: true,
@@ -45,11 +46,11 @@ export class ImageConverterSettingTab extends PluginSettingTab {
             setActiveTab: (tab) => { this.activeTab = tab; }
         });
 
+        // --- Drawing ---
+        renderDrawingSettingsSection(containerEl, this.plugin, this.settingsUIState, () => this.display());
+
         // --- Image Alignment ---
         renderAlignmentSettingsSection(containerEl, this.plugin, this.settingsUIState, () => this.display());
-
-        // --- Interactive Resize ---
-        renderInteractiveResizeSettingsSection(containerEl, this.plugin, this.settingsUIState, () => this.display());
 
         // --- Image Captions ---
         renderCaptionSettingsSection(containerEl, this.plugin, this.settingsUIState, () => this.display());
@@ -96,8 +97,9 @@ export class ImageConverterSettingTab extends PluginSettingTab {
         // Reset UI state
         this.settingsUIState = {
             pasteHandlingSectionCollapsed: false,
+            drawingSectionCollapsed: false,
+            nextAiSectionCollapsed: false,
             imageAlignmentSectionCollapsed: false,
-            imageDragResizeSectionCollapsed: false,
             imageCaptionSectionCollapsed: false,
             cleanerSectionCollapsed: false,
             ocrSectionCollapsed: true,

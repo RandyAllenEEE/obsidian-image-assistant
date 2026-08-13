@@ -130,6 +130,7 @@ export class ImageContextMenuResolver {
 
         return Object.freeze({
             image,
+            mediaElement: image,
             ownerDocument,
             ownerWindow: ownerDocument.defaultView,
             renderedSrc,

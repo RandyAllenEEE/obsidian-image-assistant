@@ -15,13 +15,3 @@ export function toBatchOutputFormat(convertTo: string): BatchOutputFormat {
             return 'ORIGINAL';
     }
 }
-
-export function getOutputExtension(sourceExtension: string, outputFormat: BatchOutputFormat): string {
-    if (outputFormat === 'ORIGINAL') {
-        return sourceExtension;
-    }
-    if (outputFormat === 'JPEG') {
-        return 'jpg';
-    }
-    return outputFormat.toLowerCase();
-}

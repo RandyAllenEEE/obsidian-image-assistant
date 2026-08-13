@@ -1,5 +1,38 @@
 # Changelog
 
+## 6.0.0 - 2026-08-10
+
+### Drawing Engines
+
+- Added the built-in Draw.io workspace with configurable standard embed endpoints, revision-aware `.drawio.svg` persistence, export, legacy `.drawio` migration, and the optional HTTP-based Next AI Draw.io assistant.
+- Added a lightweight bridge to a separately installed Obsidian Excalidraw plugin through its public automation API, including native source embeds and managed auto-export previews without bundling Excalidraw or React.
+- Centralized drawing-file semantics so editable drawing sources and verified generated previews retain safe reference actions while destructive image mutations remain blocked.
+- Added Draw.io themes and current-page exports, transactional AI drawing tools, streamed reasoning and tool status, attachments, visual validation modes, diagram history, recent chats, and prompt templates while retaining a fixed OpenAI-compatible model configuration.
+- Kept Draw.io and Excalidraw View ownership isolated: Image Assistant does not register either editor's extensions, replace their default Views, or bundle their application runtimes.
+
+### Native Image Layout and Resize
+
+- Raised the minimum supported Obsidian version to 1.13.4 and replaced Image Assistant's custom interactive resize layer with Obsidian's native Live Preview resize control.
+- Removed plugin-owned drag handles, mouse-wheel resize listeners, Reading Mode-only visual resizing, cursor relocation, body-level edit wrapper state, and their settings. Legacy settings are ignored safely during migration.
+- Kept physical image conversion/resizing and insertion-time embed-size presets while making all newly generated display sizes use only the official final-token `W` or `WxH` grammar.
+- Unified rendered-image layout ownership across local images, network images, Draw.io SVG, and Excalidraw source/preview renders so alignment and Captions do not compete with native image geometry.
+- Rebuilt Live Preview placement around one bounded geometry coordinator for each rendered media target and Caption, eliminating selection-driven layout changes, duplicate placement authorities, and observer feedback loops.
+- Verified local, URL, and Excalidraw rendering against the real Obsidian 1.13.4 DOM through 30 repeated source-reveal transitions with stable geometry and no source mutation.
+
+### Settings, Safety, and Lifecycle
+
+- Added explicit Cleaner and OCR master switches. Commands remain registered for shortcut stability but perform no file, clipboard, Secret Storage, or network work while their module is disabled.
+- Added a provider-based Drawing setting (`Disabled`, `Draw.io`, or `Excalidraw`) so future engines can be added without coupling image processing to an editor implementation.
+- Added explicit disclosures for data sent to cloud upload, OCR, Draw.io embed, Next AI, and OpenAI-compatible endpoints; credentials remain stored by reference in Obsidian Secret Storage where supported.
+- Removed obsolete custom resize code, historical debug logs, unused source modules, unused test dependencies, and the post-release workflow that could rewrite committed release metadata from an older published tag.
+- Hardened release preparation so tags can only be created from a clean `main` that exactly matches `origin/main`.
+
+### Compatibility
+
+- Existing canonical image dimensions, links, attachment names, Caption settings, and reference-index data require no migration. Legacy `xH`, `Wx`, and non-final size-like text remains untouched and is no longer interpreted or generated.
+- The plugin remains desktop-only; Draw.io and Excalidraw integrations do not register or replace either editor's file extensions or default Views.
+- Next AI and remote OCR/cloud features require user-configured services and may transmit the content described in the settings and README; local image processing does not silently enable those services.
+
 ## 5.1.1 - 2026-07-22
 
 ### Reference Index and Responsiveness
@@ -39,7 +72,7 @@
 - Bound paste, drop, OCR, LaTeX, resize, and image-property updates to the originating editor, file, view, document, and tracked source range instead of the active pane.
 - Added CodeMirror-mapped async ranges so edits before a loading placeholder or uploaded URL no longer detach the eventual replacement; user edits inside a managed range are preserved.
 - Made editor mutations transactional with stale-range validation, owner-view saves, conditional rollback, rollback persistence, and explicit uncertain outcomes.
-- Unified single-sided dimensions as `|W` and `|xH`, clearing stale opposite dimensions and preserving the image's intrinsic aspect ratio.
+- Unified single-axis dimension handling while preserving the image's intrinsic aspect ratio.
 - Made insertion-size units explicit and conditional in settings, with `px/%` field labels and immediate unit refresh so a fixed width such as 500 cannot be mistaken for 500%.
 - Made interactive resize commit once at drag or wheel completion while preserving captions, titles, alignment, wrapping, empty pipes, and existing PipeSyntax ordering.
 - Stabilized Live Preview image and Caption binding across side-panel movement, view changes, duplicate URLs, tabs, lists, callouts, `ad-*` Admonitions, Minimal theme logical margins, and popouts.

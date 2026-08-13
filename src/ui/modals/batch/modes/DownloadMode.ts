@@ -31,12 +31,6 @@ export interface DownloadTaskSource {
     verification: "verified" | "unverified";
 }
 
-export interface CanvasDownloadCandidate {
-    readonly url: string;
-    readonly file: TFile;
-    readonly verification: "unverified";
-}
-
 interface DownloadTaskOutputEntry {
     result: DownloadResult;
     targetFolder: string;

@@ -50,6 +50,117 @@ describe('CaptionRenderCoordinator', () => {
     expect(binding?.resolveImage(image)?.source).toContain('Local caption');
   });
 
+  it('matches an Excalidraw IMG source render through its stable fileSource marker', () => {
+    const file = fakeTFile({
+      path: 'Drawings/Flow.excalidraw.md',
+      name: 'Flow.excalidraw.md',
+      extension: 'md'
+    });
+    const metadataCache = fakeMetadataCache();
+    metadataCache.getFirstLinkpathDest = vi.fn(() => file) as any;
+    const coordinator = new CaptionRenderCoordinator(fakeApp({ metadataCache }) as any);
+    const binding = coordinator.createSectionBinding(
+      '![[Flow.excalidraw.md|Drawing caption]]',
+      'notes/current.md'
+    );
+    const view = document.createElement('div');
+    view.className = 'markdown-preview-view';
+    const owner = view.appendChild(document.createElement('span'));
+    owner.className = 'internal-embed image-embed';
+    const image = owner.appendChild(document.createElement('img'));
+    image.src = 'blob:https://obsidian.local/excalidraw-preview';
+    image.className = 'excalidraw-embedded-img';
+    image.setAttribute('fileSource', file.path);
+
+    expect(binding?.resolveImage(image)?.source).toContain('Drawing caption');
+  });
+
+  it('binds a pure inline-SVG Excalidraw render as external media', () => {
+    const file = fakeTFile({
+      path: 'Drawings/Flow.excalidraw.md',
+      name: 'Flow.excalidraw.md',
+      extension: 'md'
+    });
+    const metadataCache = fakeMetadataCache();
+    metadataCache.getFirstLinkpathDest = vi.fn(() => file) as any;
+    const coordinator = new CaptionRenderCoordinator(fakeApp({ metadataCache }) as any);
+    const binding = coordinator.createSectionBinding(
+      '![[Flow.excalidraw.md|Inline drawing caption]]',
+      'notes/current.md'
+    );
+    const container = document.createElement('div');
+    container.className = 'markdown-preview-view';
+    const owner = container.appendChild(document.createElement('span'));
+    owner.className = 'internal-embed image-embed';
+    const marker = owner.appendChild(document.createElement('div'));
+    marker.className = 'excalidraw-embedded-img';
+    marker.setAttribute('fileSource', file.path);
+    const svg = marker.appendChild(document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'svg'
+    ));
+    svg.classList.add('excalidraw-svg');
+    const onExternalMedia = vi.fn();
+    const child = new CaptionSectionRenderChild(
+      container,
+      binding,
+      vi.fn(),
+      undefined,
+      onExternalMedia
+    );
+
+    child.onload();
+
+    expect(onExternalMedia).toHaveBeenCalledWith(marker, expect.objectContaining({
+      linkText: expect.stringContaining('Inline drawing caption')
+    }));
+    child.onunload();
+  });
+
+  it('processes an HTML Excalidraw marker when fileSource is assigned later', async () => {
+    const file = fakeTFile({
+      path: 'Drawings/Flow.excalidraw.md',
+      name: 'Flow.excalidraw.md',
+      extension: 'md'
+    });
+    const metadataCache = fakeMetadataCache();
+    metadataCache.getFirstLinkpathDest = vi.fn(() => file) as any;
+    const coordinator = new CaptionRenderCoordinator(fakeApp({ metadataCache }) as any);
+    const binding = coordinator.createSectionBinding(
+      '![[Flow.excalidraw.md|Delayed drawing caption]]',
+      'notes/current.md'
+    );
+    const container = document.createElement('div');
+    container.className = 'markdown-preview-view';
+    const owner = container.appendChild(document.createElement('span'));
+    owner.className = 'internal-embed image-embed';
+    const marker = owner.appendChild(document.createElement('div'));
+    marker.className = 'excalidraw-embedded-img';
+    marker.appendChild(document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'svg'
+    )).classList.add('excalidraw-svg');
+    const onExternalMedia = vi.fn();
+    const child = new CaptionSectionRenderChild(
+      container,
+      binding,
+      vi.fn(),
+      undefined,
+      onExternalMedia
+    );
+    child.onload();
+
+    marker.setAttribute('fileSource', file.path);
+
+    await vi.waitFor(() => expect(onExternalMedia).toHaveBeenCalledWith(
+      marker,
+      expect.objectContaining({
+        linkText: expect.stringContaining('Delayed drawing caption')
+      })
+    ));
+    child.onunload();
+  });
+
   it('processes delayed Admonition images once their DOM output exists', async () => {
     const coordinator = new CaptionRenderCoordinator(fakeApp() as any);
     const binding = coordinator.createSectionBinding(

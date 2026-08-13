@@ -14,6 +14,7 @@ import { ImageReferenceDecisionModal } from "../../ui/modals/ImageReferenceDecis
 import { UploadErrorDialog } from "../../ui/modals/UploadModals";
 import { UploaderManager } from "../uploader/index";
 import { describeLocalFileDeletion } from "../../utils/LocalFileDeletionService";
+import { isProtectedDrawingFile } from "../../drawing/DrawingFileSemantics";
 
 export interface SingleUploadResult {
     readonly success: boolean;
@@ -44,6 +45,10 @@ export class SingleUploadHandler {
         const uploadResult = await this.uploadWithRetry(file);
         if (!uploadResult?.success || !uploadResult.cloudUrl) return;
         new Notice(t("REFERENCE_WORKFLOW_UPLOAD_COMPLETE", [uploadResult.cloudUrl]));
+        if (isProtectedDrawingFile(this.plugin, file)) {
+            new Notice(t("NOTICE_DRAWING_UPLOAD_COPY_ONLY"));
+            return;
+        }
 
         if (clickedContext) {
             try {

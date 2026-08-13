@@ -48,7 +48,7 @@ describe('LivePreviewCaptionExtension', () => {
 
   it('renders mixed Wiki and Markdown captions in source order', () => {
     const { parent, view } = createFixture(
-      '![[image one.png|right|300|Wiki caption]] ![left-wrap|640x360|Markdown caption](https://example.com/a.webp "Title")'
+      '![[image one.png|Wiki caption|right|300]] ![Markdown caption|left-wrap|640x360](https://example.com/a.webp "Title")'
     );
     views.push(view);
 
@@ -59,8 +59,10 @@ describe('LivePreviewCaptionExtension', () => {
     expect(captions.every(node => node.getAttribute('data-image-assistant-caption-renderer') === 'codemirror')).toBe(true);
     expect((captions[0] as HTMLElement).style.getPropertyValue('--img-width')).toBe('300px');
     expect((captions[1] as HTMLElement).style.getPropertyValue('--img-width')).toBe('640px');
-    expect(captions[0].getAttribute('data-image-assistant-caption-align')).toBe('right');
-    expect(captions[1].getAttribute('data-image-assistant-caption-align')).toBe('left');
+    expect(captions.map(node => node.getAttribute('data-image-assistant-caption-placement')))
+      .toEqual(['right', 'left']);
+    expect(captions.map(node => node.getAttribute('data-image-assistant-caption-text-align')))
+      .toEqual(['center', 'center']);
     expect(captions[1].getAttribute('data-image-assistant-caption-wrap')).toBe('false');
     expect(captions.every(node => !!node.getAttribute('data-image-assistant-source-key'))).toBe(true);
     expect(captions.every(node => !!node.getAttribute('data-image-assistant-layout-key'))).toBe(true);
@@ -156,9 +158,9 @@ describe('LivePreviewCaptionExtension', () => {
 
   it('restores block captions with stable height estimates after Reading Mode', () => {
     const source = [
-      '![[short.png|120|Short caption]]',
+      '![[short.png|Short caption|120]]',
       ...Array.from({ length: 200 }, (_, index) =>
-        `![[image-${index}.png|120|${'Long caption text '.repeat(12)}${index}]]`)
+        `![[image-${index}.png|${'Long caption text '.repeat(12)}${index}|120]]`)
     ].join('\n');
     const { extension, view } = createFixture(source);
     views.push(view);
@@ -200,6 +202,55 @@ describe('LivePreviewCaptionExtension', () => {
     expect(frames.length).toBeGreaterThan(0);
     [...frames].forEach(callback => callback(0));
     expect(handleLivePreviewEditorUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('reconciles an effect-only Reading to Live Preview transition', () => {
+    const { plugin, view } = createFixture('![[photo.png|Caption]]');
+    views.push(view);
+    const handleLivePreviewEditorUpdate = vi.fn();
+    plugin.imageStateManager = { handleLivePreviewEditorUpdate };
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+      frames.push(callback);
+      return frames.length;
+    });
+
+    view.dispatch({ effects: setLivePreviewCaptionModeEffect.of(false) });
+
+    expect(handleLivePreviewEditorUpdate).not.toHaveBeenCalled();
+    expect(frames.length).toBeGreaterThan(0);
+    [...frames].forEach(callback => callback(0));
+    expect(handleLivePreviewEditorUpdate).toHaveBeenCalledWith(
+      view.dom,
+      {
+        reconcileSource: true,
+        geometryChanged: true,
+        modeChanged: true
+      }
+    );
+  });
+
+  it('does not force a whole-view image reconciliation for selection-only updates', () => {
+    const source = [
+      'Outside',
+      '![Caption|right|233](https://example.com/diagram.png)',
+      'After'
+    ].join('\n');
+    const { plugin, view } = createFixture(source);
+    views.push(view);
+    const handleLivePreviewEditorUpdate = vi.fn();
+    plugin.imageStateManager = { handleLivePreviewEditorUpdate };
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+      frames.push(callback);
+      return frames.length;
+    });
+
+    view.dispatch({ selection: { anchor: source.indexOf('![') + 2 } });
+    view.dispatch({ selection: { anchor: source.lastIndexOf('After') + 1 } });
+
+    expect(frames).toHaveLength(0);
+    expect(handleLivePreviewEditorUpdate).not.toHaveBeenCalled();
   });
 
   it('stays empty when the Obsidian Live Preview field is absent', () => {
@@ -257,9 +308,9 @@ describe('LivePreviewCaptionExtension', () => {
     expect(captions[0].title).toBe('A long standalone caption');
   });
 
-  it('follows explicit and default image alignment before caption fallback', () => {
+  it('keeps caption text alignment independent from explicit and default figure placement', () => {
     const { parent, plugin, view } = createFixture([
-      '![[explicit.png|left|Explicit caption]]',
+      '![[explicit.png|Explicit caption|left]]',
       '![[default.png|Default caption]]'
     ].join('\n'));
     views.push(view);
@@ -268,20 +319,25 @@ describe('LivePreviewCaptionExtension', () => {
     view.dispatch({ effects: refreshLivePreviewCaptionsEffect.of(undefined) });
 
     const captions = [...parent.querySelectorAll<HTMLElement>('.image-assistant-live-preview-caption')];
-    expect(captions.map(node => node.getAttribute('data-image-assistant-caption-align')))
+    expect(captions.map(node => node.getAttribute('data-image-assistant-caption-placement')))
       .toEqual(['left', 'right']);
+    expect(captions.map(node => node.getAttribute('data-image-assistant-caption-text-align')))
+      .toEqual(['center', 'center']);
 
     plugin.settings.alignment.enabled = false;
     view.dispatch({ effects: refreshLivePreviewCaptionsEffect.of(undefined) });
     expect([...parent.querySelectorAll<HTMLElement>('.image-assistant-live-preview-caption')]
-      .map(node => node.getAttribute('data-image-assistant-caption-align')))
+      .map(node => node.getAttribute('data-image-assistant-caption-placement')))
+      .toEqual([null, null]);
+    expect([...parent.querySelectorAll<HTMLElement>('.image-assistant-live-preview-caption')]
+      .map(node => node.getAttribute('data-image-assistant-caption-text-align')))
       .toEqual(['center', 'center']);
   });
 
   it('only keeps Live Preview wrap when a standalone image has a reliable width', () => {
     const { parent, view } = createFixture([
-      '![[sized.png|left-wrap|320|Sized caption]]',
-      '![[natural.png|right-wrap|Natural caption]]'
+      '![[sized.png|Sized caption|left-wrap|320]]',
+      '![[natural.png|Natural caption|right-wrap]]'
     ].join('\n'));
     views.push(view);
 

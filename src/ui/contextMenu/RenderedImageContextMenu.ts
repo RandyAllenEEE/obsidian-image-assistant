@@ -30,6 +30,7 @@ import type {
 import { ImageContextMenuResolver } from "./utils/ImageContextMenuResolver";
 import { ImageMatchFinder } from "./utils/ImageMatchFinder";
 import { ImageViewContextResolver } from "./utils/ImageViewContextResolver";
+import { ExcalidrawRenderedContextResolver } from "./utils/ExcalidrawRenderedContextResolver";
 import { MenuSessionRegistry } from "./shared/MenuSessionRegistry";
 import { isHttpUrl } from "../../utils/NetworkPolicy";
 import { CanvasEditCapabilityService } from "../../utils/CanvasEditCapability";
@@ -40,6 +41,9 @@ import {
     ImageContextActionModal,
     type ImageContextActionDefinition
 } from "../modals/ImageContextActionModal";
+import { canOpenDrawingFile, inspectDrawingFile } from "../../drawing/DrawingFileSemantics";
+import { findExcalidrawRenderedEmbed } from "../../drawing/excalidraw/ExcalidrawRenderedEmbed";
+import { resolveRenderedMediaLayoutTarget } from "../RenderedMediaLayoutTarget";
 
 interface PendingImageMenu extends PendingImageMenuSeed {
     expiryTimer: number | null;
@@ -51,6 +55,7 @@ export class RenderedImageContextMenu extends Component {
     private readonly pendingByDocument = new Map<Document, PendingImageMenu>();
     private readonly menuScopes = new Set<Component>();
     private readonly imageResolver: ImageContextMenuResolver;
+    private readonly excalidrawResolver: ExcalidrawRenderedContextResolver;
     private readonly policy: ImageContextMenuPolicy;
     private readonly editCapabilities: CanvasEditCapabilityService;
     private readonly deleteHandler: DeleteHandler;
@@ -73,8 +78,10 @@ export class RenderedImageContextMenu extends Component {
         this.editCapabilities = new CanvasEditCapabilityService(plugin);
         this.policy = new ImageContextMenuPolicy(
             extension => this.editCapabilities.peek(extension),
-            () => plugin.settings.cleanerSettings.enableDeleteContextMenu,
-            () => this.isReferenceInventoryReady()
+            () => plugin.settings.cleanerSettings.enabled
+                && plugin.settings.cleanerSettings.enableDeleteContextMenu,
+            () => this.isReferenceInventoryReady(),
+            file => inspectDrawingFile(plugin, file)
         );
         void this.editCapabilities.primeAvifCapability();
         const imageMatchFinder = new ImageMatchFinder();
@@ -83,6 +90,11 @@ export class RenderedImageContextMenu extends Component {
             app,
             viewResolver,
             imageMatchFinder
+        );
+        this.excalidrawResolver = new ExcalidrawRenderedContextResolver(
+            app,
+            plugin,
+            viewResolver
         );
         this.clipboardHandler = new ClipboardHandler();
         this.processingHandler = new ProcessingHandler(
@@ -162,7 +174,7 @@ export class RenderedImageContextMenu extends Component {
         return this.consumePending(
             menu,
             { kind: "url", url },
-            pending => pending.context.image.isConnected
+            pending => getContextTarget(pending.context).isConnected
                 && isUrlMenuCandidate(pending.context)
         );
     }
@@ -176,14 +188,15 @@ export class RenderedImageContextMenu extends Component {
         event: PointerEvent | MouseEvent
     ): boolean {
         if (this.ownership.has(menu)) return false;
-        const image = this.resolveImageFromEvent(event);
-        if (!image) return false;
-        const pending = this.pendingByDocument.get(image.ownerDocument);
+        const target = this.resolveMenuTargetFromEvent(event);
+        if (!target) return false;
+        const element = target.element;
+        const pending = this.pendingByDocument.get(element.ownerDocument);
         if (!pending
             || pending.generation !== this.contextMenuGeneration
             || Date.now() - pending.createdAt >= 1500
-            || pending.context.image !== image
-            || !image.isConnected) {
+            || getContextTarget(pending.context) !== element
+            || !element.isConnected) {
             return false;
         }
         const hint = this.getImageMenuHint(pending.context);
@@ -198,34 +211,60 @@ export class RenderedImageContextMenu extends Component {
     };
 
     handleContextMenuEvent = (event: MouseEvent): void => {
-        const image = this.resolveImageFromEvent(event);
-        const pending = image
-            ? this.pendingByDocument.get(image.ownerDocument)
+        const target = this.resolveMenuTargetFromEvent(event);
+        const element = target?.element ?? null;
+        const pending = element
+            ? this.pendingByDocument.get(element.ownerDocument)
             : null;
-        if (image
+        if (element
             && pending
             && pending.generation === this.contextMenuGeneration
-            && pending.context.image === image) {
+            && getContextTarget(pending.context) === element) {
             this.refreshPending(pending);
+            this.scheduleExcalidrawContextMenuFallback(event, target);
             return;
         }
 
         const generation = ++this.contextMenuGeneration;
         this.clearAllPending();
         this.seedPendingFromEvent(event, generation);
+        this.scheduleExcalidrawContextMenuFallback(event, target);
     };
+
+    private scheduleExcalidrawContextMenuFallback(
+        event: MouseEvent,
+        target: ResolvedMenuTarget | null
+    ): void {
+        if (target?.kind !== "excalidraw") return;
+        const pending = this.pendingByDocument.get(target.element.ownerDocument);
+        if (!pending || getContextTarget(pending.context) !== target.element) return;
+
+        // Claim only the verified rendered drawing's browser menu. The timer is
+        // independent of event bubbling: if Obsidian or Excalidraw creates a
+        // Menu.forEvent menu synchronously, that bridge consumes the pending
+        // context first; otherwise Image Assistant supplies the fallback.
+        event.preventDefault();
+        ownerWindow(target.element.ownerDocument).setTimeout(() => {
+            this.showExcalidrawContextMenuFallback(event);
+        }, 0);
+    }
 
     private seedPendingFromEvent(
         event: Event,
         generation: number
     ): void {
-        const image = this.resolveImageFromEvent(event);
-        if (!image || !this.isSupportedImageTarget(image)) return;
-        if (this.plugin.supportedImageFormats.isExcalidrawImage(image)) return;
+        const target = this.resolveMenuTargetFromEvent(event);
+        if (!target || !this.isSupportedMediaTarget(target.element)) return;
 
         let context: ImageContextMenuContext;
         try {
-            context = this.imageResolver.resolve(image);
+            if (target.kind === "excalidraw") {
+                const resolved = this.excalidrawResolver.resolve(target.element);
+                if (!resolved) return;
+                context = resolved;
+            } else {
+                context = this.imageResolver.resolve(target.element);
+            }
         } catch (error) {
             console.warn("[Image Assistant] Image context resolution deferred:", error);
             return;
@@ -236,7 +275,10 @@ export class RenderedImageContextMenu extends Component {
     private refreshPending(pending: PendingImageMenu): void {
         let context: ImageContextMenuContext;
         try {
-            context = this.imageResolver.resolve(pending.context.image);
+            const target = getContextTarget(pending.context);
+            context = pending.context.image
+                ? this.imageResolver.resolve(pending.context.image)
+                : this.excalidrawResolver.resolve(target) ?? pending.context;
         } catch {
             return;
         }
@@ -272,7 +314,11 @@ export class RenderedImageContextMenu extends Component {
         if (this.ownership.has(menu)) return false;
         const primaryItems = this.policy.getPrimaryItems(context);
         const moreItems = this.policy.getMoreItems(context);
-        if (primaryItems.length === 0 && moreItems.length === 0) return false;
+        const moreActions = moreItems.map(id =>
+            this.createActionDefinition(id, context));
+        const drawingAction = this.createDrawingActionDefinition(context);
+        if (drawingAction) moreActions.unshift(drawingAction);
+        if (primaryItems.length === 0 && moreActions.length === 0) return false;
         const menuSession = this.ownership.claim(menu);
         if (!menuSession) return false;
 
@@ -287,23 +333,21 @@ export class RenderedImageContextMenu extends Component {
         for (const item of primaryItems) {
             this.addMenuItem(menu, item, context);
         }
-        if (moreItems.length > 0) {
-            const actions = moreItems.map(id =>
-                this.createActionDefinition(id, context));
+        if (moreActions.length > 0) {
             addSubmenuOrFallback(
                 menu,
                 {
                     title: t("MENU_MORE_IMAGE_ACTIONS"),
                     icon: "ellipsis"
                 },
-                actions.map(action => ({
+                moreActions.map(action => ({
                     title: t(action.title),
                     icon: action.icon,
                     onClick: () => {
                         void action.run();
                     }
                 })),
-                () => new ImageContextActionModal(this.app, actions).open(),
+                () => new ImageContextActionModal(this.app, moreActions).open(),
                 IMAGE_ASSISTANT_MENU_SECTION
             );
         }
@@ -333,6 +377,20 @@ export class RenderedImageContextMenu extends Component {
         return {
             ...definition,
             run: () => this.executeMenuItem(id, context)
+        };
+    }
+
+    private createDrawingActionDefinition(
+        context: ImageContextMenuContext
+    ): ImageContextActionDefinition | null {
+        const file = context.localFile;
+        if (!file || !canOpenDrawingFile(this.plugin, file)) return null;
+        return {
+            title: "MENU_EDIT_DRAWING",
+            icon: "shapes",
+            run: async () => {
+                await this.plugin.drawingModule.openFile(file);
+            }
         };
     }
 
@@ -407,11 +465,15 @@ export class RenderedImageContextMenu extends Component {
     ): boolean {
         let refreshedContext: ImageContextMenuContext;
         try {
-            refreshedContext = this.imageResolver.resolveForOfficialMenu(
-                pending.context.image,
-                hint,
-                pending.context
-            );
+            refreshedContext = pending.context.image
+                ? this.imageResolver.resolveForOfficialMenu(
+                    pending.context.image,
+                    hint,
+                    pending.context
+                )
+                : this.excalidrawResolver.resolve(
+                    getContextTarget(pending.context)
+                ) ?? pending.context;
         } catch {
             this.clearPending(pending.context.ownerDocument);
             return false;
@@ -491,6 +553,33 @@ export class RenderedImageContextMenu extends Component {
         this.documentScopes.set(ownerDocument, scope);
     }
 
+    private showExcalidrawContextMenuFallback(event: MouseEvent): void {
+        const target = this.resolveMenuTargetFromEvent(event);
+        if (target?.kind !== "excalidraw") return;
+        const pending = this.pendingByDocument.get(target.element.ownerDocument);
+        if (!pending
+            || pending.generation !== this.contextMenuGeneration
+            || Date.now() - pending.createdAt >= 1500
+            || getContextTarget(pending.context) !== target.element
+            || !target.element.isConnected) {
+            return;
+        }
+
+        let context: ImageContextMenuContext;
+        try {
+            context = this.excalidrawResolver.resolve(target.element) ?? pending.context;
+        } catch {
+            this.clearPending(target.element.ownerDocument);
+            return;
+        }
+        this.clearPending(target.element.ownerDocument);
+
+        const menu = new Menu();
+        if (!this.createContextMenuItems(menu, context)) return;
+        event.preventDefault();
+        menu.showAtMouseEvent(event);
+    }
+
     private unregisterDocument(ownerDocument: Document): void {
         this.clearPending(ownerDocument);
         const scope = this.documentScopes.get(ownerDocument);
@@ -516,16 +605,8 @@ export class RenderedImageContextMenu extends Component {
     }
 
     private resolveImageFromTarget(target: Element): HTMLImageElement | null {
-        if (isImageElement(target)) return target;
-        const directImage = target.closest("img");
-        if (isImageElement(directImage)) return directImage;
-        const wrapper = target.closest(
-            ".image-wrapper, .image-embed, .external-embed, "
-            + ".cm-embed-block, .image-resize-container, "
-            + "[data-image-assistant-layout-owner='true']"
-        );
-        const image = wrapper?.querySelector("img") ?? null;
-        if (isImageElement(image)) return image;
+        const media = resolveRenderedMediaLayoutTarget(target);
+        if (media?.kind === "obsidian-image" && media.image) return media.image;
 
         const caption = target.closest(
             "[data-image-assistant-caption-node], "
@@ -554,9 +635,9 @@ export class RenderedImageContextMenu extends Component {
         return candidates.length === 1 ? candidates[0] : null;
     }
 
-    private isSupportedImageTarget(image: HTMLImageElement): boolean {
-        if (image.closest(".map-view-main")) return false;
-        return !!image.closest(".markdown-preview-view, .markdown-source-view");
+    private isSupportedMediaTarget(element: Element): boolean {
+        if (element.closest(".map-view-main, .excalidraw-wrapper")) return false;
+        return !!element.closest(".markdown-preview-view, .markdown-source-view");
     }
 
     onunload(): void {
@@ -568,20 +649,38 @@ export class RenderedImageContextMenu extends Component {
         super.onunload();
     }
 
-    private resolveImageFromEvent(event: Event): HTMLImageElement | null {
+    private resolveMenuTargetFromEvent(event: Event): ResolvedMenuTarget | null {
         const eventPath = typeof event.composedPath === "function"
             ? event.composedPath()
             : [];
         for (const target of eventPath) {
             if (!isElementLike(target)) continue;
-            const image = this.resolveImageFromTarget(target);
-            if (image) return image;
+            const resolved = this.resolveMenuTargetFromElement(target);
+            if (resolved) return resolved;
         }
         return isElementLike(event.target)
-            ? this.resolveImageFromTarget(event.target)
+            ? this.resolveMenuTargetFromElement(event.target)
             : null;
     }
+
+    private resolveMenuTargetFromElement(target: Element): ResolvedMenuTarget | null {
+        const excalidraw = findExcalidrawRenderedEmbed(target);
+        if (excalidraw) return {
+            kind: "excalidraw",
+            element: excalidraw.element
+        };
+        if (isImageElement(target)) return { kind: "image", element: target };
+        const image = this.resolveImageFromTarget(target);
+        return image ? { kind: "image", element: image } : null;
+    }
 }
+
+type ResolvedMenuTarget =
+    | { readonly kind: "image"; readonly element: HTMLImageElement }
+    | {
+        readonly kind: "excalidraw";
+        readonly element: HTMLElement;
+    };
 
 const REFERENCE_INVENTORY_REQUIRED_ITEMS = new Set<ImageContextMenuItemId>([
     "properties",
@@ -622,6 +721,12 @@ function isUrlMenuCandidate(context: ImageContextMenuContext): boolean {
         || context.sourceKind === "blob"
         || context.sourceKind === "unresolved"
         || isHttpUrl(context.renderedSrc);
+}
+
+function getContextTarget(context: ImageContextMenuContext): Element {
+    const target = context.mediaElement ?? context.image;
+    if (!target) throw new Error("Image context has no rendered target.");
+    return target;
 }
 
 function getMenuItemDefinition(id: ImageContextMenuItemId): {

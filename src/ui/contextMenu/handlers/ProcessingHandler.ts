@@ -6,6 +6,7 @@ import { Crop } from '../../Crop';
 import { ImageAnnotationModal } from '../../ImageAnnotation';
 import { CanvasEditCapabilityService } from '../../../utils/CanvasEditCapability';
 import type { ImageContextMenuContext } from '../types';
+import { isProtectedDrawingFile } from '../../../drawing/DrawingFileSemantics';
 
 /**
  * Handles image processing operations (convert, crop, annotate)
@@ -33,6 +34,10 @@ export class ProcessingHandler {
                 new Notice(t("MSG_RESOLVE_PATH_FAIL"));
                 return;
             }
+            if (isProtectedDrawingFile(this.plugin, file)) {
+                new Notice(t("NOTICE_DRAWING_PROTECTED"));
+                return;
+            }
 
             // Process the found file
             new ProcessSingleImageModal(this.app, this.plugin, file).open();
@@ -51,6 +56,10 @@ export class ProcessingHandler {
         const file = context.localFile;
         if (!file) {
             new Notice(t("MSG_RESOLVE_PATH_FAIL"));
+            return;
+        }
+        if (isProtectedDrawingFile(this.plugin, file)) {
+            new Notice(t("NOTICE_DRAWING_PROTECTED"));
             return;
         }
         const capability = await this.editCapabilities.get(
@@ -74,6 +83,10 @@ export class ProcessingHandler {
             const file = context.localFile;
             if (!file) {
                 new Notice(t("MSG_RESOLVE_PATH_FAIL"));
+                return;
+            }
+            if (isProtectedDrawingFile(this.plugin, file)) {
+                new Notice(t("NOTICE_DRAWING_PROTECTED"));
                 return;
             }
             const capability = await this.editCapabilities.get(

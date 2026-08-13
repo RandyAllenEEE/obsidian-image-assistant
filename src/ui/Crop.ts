@@ -13,6 +13,7 @@ import {
 	type ImageFileRevision
 } from '../utils/ImageFileRevision';
 import { ImageEditCommitService } from '../utils/ImageEditCommitService';
+import { isProtectedDrawingFile } from '../drawing/DrawingFileSemantics';
 import {
 	CanvasEditCapabilityService,
 	type CanvasEditCapability
@@ -84,7 +85,10 @@ export class Crop extends Modal {
 	) {
 		super(app);
 		this.imageFile = imageFile;
-		this.commitService = new ImageEditCommitService(app);
+		this.commitService = new ImageEditCommitService(
+			app,
+			file => plugin ? isProtectedDrawingFile(plugin, file) : false
+		);
 		this.containerEl.addClass('crop-tool-modal');
 	}
 

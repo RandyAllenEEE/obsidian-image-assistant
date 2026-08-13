@@ -2,7 +2,7 @@ import {
     getCaptionLinkDescriptors,
     isMarkdownSourceContextIncluded,
     MarkdownSourceContextIndex,
-    type CaptionLinkDescriptor,
+    type ImageSourceDescriptor,
     type MarkdownSourceLineState
 } from '../../utils/MarkdownSourceContext';
 
@@ -16,7 +16,7 @@ export interface CaptionSourceChange {
 
 export interface CaptionSourceScan {
     source: string;
-    descriptors: CaptionLinkDescriptor[];
+    descriptors: ImageSourceDescriptor[];
     lines: readonly MarkdownSourceLineState[];
     scannedLineCount: number;
     fullScan: boolean;
@@ -166,7 +166,7 @@ function hasStructuralMarkdown(line: string): boolean {
         || /^\s*(?:>\s*)+\[![^\]]+\][+-]?/.test(line);
 }
 
-function shiftDescriptor(descriptor: CaptionLinkDescriptor, delta: number): CaptionLinkDescriptor {
+function shiftDescriptor(descriptor: ImageSourceDescriptor, delta: number): ImageSourceDescriptor {
     return {
         ...descriptor,
         index: descriptor.index + delta,
@@ -176,7 +176,7 @@ function shiftDescriptor(descriptor: CaptionLinkDescriptor, delta: number): Capt
     };
 }
 
-function assignOrdinals(descriptors: CaptionLinkDescriptor[]): void {
+function assignOrdinals(descriptors: ImageSourceDescriptor[]): void {
     const counts = new Map<string, number>();
     for (const descriptor of descriptors) {
         const ordinal = counts.get(descriptor.normalizedTarget) ?? 0;

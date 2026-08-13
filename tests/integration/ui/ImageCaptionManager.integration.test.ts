@@ -61,6 +61,39 @@ describe('ImageCaption integration', () => {
     expect(document.body.classList.contains('image-captions-enabled')).toBe(true);
   });
 
+  it('renders a Reading caption beside pure inline-SVG Excalidraw media without changing it', () => {
+    const contentEl = document.createElement('div');
+    contentEl.className = 'markdown-preview-view';
+    const owner = contentEl.appendChild(document.createElement('span'));
+    owner.className = 'internal-embed image-embed';
+    const marker = owner.appendChild(document.createElement('div'));
+    marker.className = 'excalidraw-embedded-img';
+    marker.setAttribute('fileSource', 'Drawings/Flow.excalidraw.md');
+    const svg = marker.appendChild(document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'svg'
+    ));
+    svg.classList.add('excalidraw-svg');
+    svg.setAttribute('viewBox', '0 0 800 600');
+    svg.setAttribute('width', '800');
+    svg.setAttribute('height', '600');
+    document.body.appendChild(contentEl);
+    const markerBefore = marker.outerHTML;
+    const before = svg.outerHTML;
+    const manager = new ImageCaption(makePlugin(contentEl));
+
+    const caption = manager.renderExternalMedia(marker, {
+      linkText: '![[Flow.excalidraw.md|Architecture overview|center]]'
+    });
+
+    expect(caption?.parentElement).toBe(owner);
+    expect(caption?.textContent).toBe('Architecture overview');
+    expect(marker.outerHTML).toBe(markerBefore);
+    expect(svg.outerHTML).toBe(before);
+    expect(marker.style.width).toBe('');
+    expect(marker.style.maxWidth).toBe('');
+  });
+
   it('updateStyles reflects caption configuration in the shared style element', () => {
     const contentEl = makeViewWithImages('Styled');
     const manager = new ImageCaption(makePlugin(contentEl, {

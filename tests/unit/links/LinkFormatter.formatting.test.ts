@@ -105,7 +105,7 @@ describe('LinkFormatter.formatLink', () => {
     expect(out).toBe('![[/img/pic.png|50]]');
   });
 
-  it('5.10 Width-only resize in markdown uses alt text equal to |W', async () => {
+  it('5.10 Width-only resize in markdown uses the canonical W alt token', async () => {
     const { formatter, files } = makeFormatterWithFiles(['img/pic.png']);
     const preset: NonDestructiveResizePreset = {
       name: 'Width 40',
@@ -116,7 +116,7 @@ describe('LinkFormatter.formatLink', () => {
     };
     setMockImageSize(100, 100);
     const out = await formatter.formatLink(files[0].path, 'markdown', 'absolute', null, preset);
-    expect(out).toBe('![|40](/img/pic.png)');
+    expect(out).toBe('![40](/img/pic.png)');
   });
 
   it('5.11 No resize => empty alt for markdown', async () => {
@@ -147,7 +147,7 @@ describe('LinkFormatter.formatLink', () => {
     expect(out).toBe('![[/img/pic.png|40x30]]');
   });
 
-  it('implements the Original Height option exposed by the settings UI', async () => {
+  it('represents Original Height with its proportional canonical width', async () => {
     const { formatter, files } = makeFormatterWithFiles(['img/pic.png']);
     setMockImageSize(120, 80);
     const preset: NonDestructiveResizePreset = {
@@ -158,7 +158,7 @@ describe('LinkFormatter.formatLink', () => {
 
     const out = await formatter.formatLink(files[0].path, 'markdown', 'absolute', null, preset);
 
-    expect(out).toBe('![|x80](/img/pic.png)');
+    expect(out).toBe('![120](/img/pic.png)');
   });
 
   it('measures the explicitly supplied owner view without consulting the active leaf', () => {

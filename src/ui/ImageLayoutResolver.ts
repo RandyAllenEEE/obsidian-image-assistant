@@ -17,7 +17,13 @@ export interface ResolvedImageLayout {
 }
 
 export interface ResolvedCaptionLayout {
-    alignment: CaptionAlignment;
+    /**
+     * Position of the media figure in the surrounding document flow. This is
+     * deliberately independent from how caption text itself is aligned.
+     */
+    placement: HorizontalImageAlignment | null;
+    /** Alignment of text inside the caption's visual-width box. */
+    textAlignment: CaptionAlignment;
     wrap: boolean;
     source: CaptionLayoutSource;
 }
@@ -40,6 +46,12 @@ export function resolveImageLayout(
         };
     }
 
+    // A Vault-wide default must never promote prose-adjacent or multi-image
+    // media into a block. Only an explicit pipe alignment may do that.
+    if (!standalone) {
+        return { alignment: null, wrap: false, source: 'none' };
+    }
+
     return {
         alignment: settings.default,
         wrap: false,
@@ -50,20 +62,22 @@ export function resolveImageLayout(
 export function resolveCaptionLayout(
     pipeAlignment: AlignType | undefined,
     imageSettings: ImageAlignmentPolicy,
-    fallback: CaptionAlignment,
+    textAlignment: CaptionAlignment,
     standalone: boolean
 ): ResolvedCaptionLayout {
     const imageLayout = resolveImageLayout(pipeAlignment, imageSettings, standalone);
     if (!imageLayout.alignment) {
         return {
-            alignment: fallback,
+            placement: null,
+            textAlignment,
             wrap: false,
             source: 'caption-fallback'
         };
     }
 
     return {
-        alignment: imageLayout.alignment,
+        placement: imageLayout.alignment,
+        textAlignment,
         wrap: imageLayout.wrap,
         source: imageLayout.source === 'pipe' ? 'pipe' : 'image-default'
     };

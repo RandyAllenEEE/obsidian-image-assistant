@@ -273,7 +273,9 @@ async function main() {
             await new Promise(resolve => setTimeout(resolve, 500));
             const setting = globalThis.app.setting;
             const activeTabId = setting?.activeTab?.id ?? setting?.activeTab?.plugin?.manifest?.id ?? null;
-            const open = !!document.querySelector('.modal.mod-settings, .settings-modal');
+            const open = !!setting?.containerEl?.isConnected
+                || !!(setting?.win && !setting.win.closed)
+                || !!document.querySelector('.modal.mod-settings, .settings-modal');
             setting?.close?.();
             return { executed, open, activeTabId };
         })()`);

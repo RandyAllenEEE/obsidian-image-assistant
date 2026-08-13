@@ -11,7 +11,6 @@ vi.mock('child_process');
 vi.mock('fs/promises');
 vi.mock('os');
 vi.mock('path');
-vi.mock('sortablejs');
 vi.mock('piexifjs');
 vi.mock('../../../src/main');
 

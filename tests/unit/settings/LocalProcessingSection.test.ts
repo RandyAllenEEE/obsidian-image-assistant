@@ -75,11 +75,11 @@ describe("LocalProcessingSection", () => {
         expect(refreshDisplay).toHaveBeenCalledOnce();
     });
 
-    it("labels embed sizing as an insertion-time default, separate from interactive resize", () => {
+    it("labels embed sizing as an insertion-time default owned separately from native resize", () => {
         const container = render(makePlugin(), "resize");
 
         expect(container.textContent).toContain("Initial size for new images");
-        expect(container.textContent).toContain("does not control drag or scroll resizing");
+        expect(container.textContent).toContain("Interactive resizing is handled by Obsidian");
     });
 
     it("renders and updates folder and filename settings", async () => {

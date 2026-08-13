@@ -46,9 +46,6 @@ export interface ImageSourceDescriptor extends ContextualImageLink {
     pipeData: PipeSyntaxData | null;
 }
 
-/** @deprecated Use ImageSourceDescriptor for shared image features. */
-export type CaptionLinkDescriptor = ImageSourceDescriptor;
-
 interface SourceRange {
     from: number;
     to: number;
@@ -315,7 +312,7 @@ function getDescriptorLayoutScope(
 export function getCaptionLinkDescriptors(
     text: string,
     options: MarkdownSourceScanOptions = {}
-): CaptionLinkDescriptor[] {
+): ImageSourceDescriptor[] {
     return getImageSourceDescriptors(text, options);
 }
 
@@ -559,8 +556,8 @@ function normalizeDescriptorPath(path: string): string {
 
 function isStandaloneDescriptor(
     text: string,
-    descriptor: CaptionLinkDescriptor,
-    descriptors: CaptionLinkDescriptor[],
+    descriptor: ImageSourceDescriptor,
+    descriptors: ImageSourceDescriptor[],
     contextIndex: MarkdownSourceContextIndex
 ): boolean {
     const lineDescriptors = descriptors.filter(candidate =>

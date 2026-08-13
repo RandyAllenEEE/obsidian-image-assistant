@@ -38,6 +38,7 @@ import {
 	type ImageFileRevision
 } from "../utils/ImageFileRevision";
 import { ImageEditCommitService } from "../utils/ImageEditCommitService";
+import { isProtectedDrawingFile } from "../drawing/DrawingFileSemantics";
 import {
 	CanvasEditCapabilityService,
 	type CanvasEditCapability
@@ -156,7 +157,10 @@ export class ImageAnnotationModal extends Modal {
 		private readonly suppliedEditCapability?: CanvasEditCapability
 	) {
 		super(app);
-		this.commitService = new ImageEditCommitService(app);
+		this.commitService = new ImageEditCommitService(
+			app,
+			candidate => isProtectedDrawingFile(plugin, candidate)
+		);
 		this.setupModal();
 	}
 
@@ -670,7 +674,6 @@ export class ImageAnnotationModal extends Modal {
 
 	private createAndAddText(color: string, x: number, y: number) {
 		if (this.isTextEditingBlocked) {
-			console.debug('Text creation blocked');
 			return;
 		}
 
@@ -1689,7 +1692,6 @@ export class ImageAnnotationModal extends Modal {
 		// Enhanced double click handler
 		this.canvas.on('mouse:dblclick', (opt) => {
 			if (!this.isTextMode || this.isDrawingMode || this.isTextEditingBlocked) {
-				console.debug('Blocked text creation - not in text mode or text editing blocked');
 				return;
 			}
 
@@ -1718,7 +1720,6 @@ export class ImageAnnotationModal extends Modal {
 		this.stateCheckInterval = setInterval(() => {
 			const activeObject = this.canvas?.getActiveObject();
 			if (activeObject instanceof IText && !activeObject.isEditing && this.isTextEditingBlocked) {
-				console.debug('Resetting blocked text editing state');
 				this.isTextEditingBlocked = false;
 			}
 		}, 5000);
@@ -2547,7 +2548,6 @@ export class ImageAnnotationModal extends Modal {
 
 	private saveState() {
 		if (!this.canvas || this.isUndoRedoAction) {
-			// console.log('Skipping state save - isUndoRedoAction:', this.isUndoRedoAction);
 			return;
 		}
 
@@ -2561,7 +2561,6 @@ export class ImageAnnotationModal extends Modal {
 
 		// Don't save if it's the same as the last state
 		if (this.undoStack[this.undoStack.length - 1] === newState) {
-			// console.log('Skipping duplicate state');
 			return;
 		}
 
@@ -2572,7 +2571,6 @@ export class ImageAnnotationModal extends Modal {
 
 	private async undo() {
 		if (!this.canvas || this.undoStack.length <= 1) { // Changed from 0 to 1 because of initial empty state
-			// console.log('Cannot undo: no more states');
 			return;
 		}
 
@@ -2617,7 +2615,6 @@ export class ImageAnnotationModal extends Modal {
 
 	private async redo() {
 		if (!this.canvas || this.redoStack.length === 0) {
-			// console.log('Cannot redo: no more states');
 			return;
 		}
 

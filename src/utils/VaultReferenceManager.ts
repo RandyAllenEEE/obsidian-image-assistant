@@ -33,8 +33,6 @@ export interface ReferenceUpdateResult {
     uncertainFiles: string[];
 }
 
-export type ReferenceMutationResult = ReferenceUpdateResult;
-
 export interface ReferenceFileUpdateResult {
     filePath: string;
     found: number;
@@ -621,20 +619,6 @@ export class VaultReferenceManager {
                 uncertainFiles: [file.path]
             };
         }
-    }
-
-    /**
-     * Core logic to apply updates to a list of locations.
-     *
-     * Strategy: process from END to START so replacements don't shift earlier offsets.
-     * Because replacements run from END to START, earlier offsets remain valid
-     * even when later replacements change content length.
-     */
-    private async processUpdates(
-        locations: ReferenceLocation[],
-        replacementGenerator: (location: ReferenceLocation) => string
-    ): Promise<number> {
-        return (await this.processUpdatesDetailed(locations, replacementGenerator)).replaced;
     }
 
     private async processUpdatesDetailed(

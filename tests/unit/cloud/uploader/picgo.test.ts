@@ -131,34 +131,52 @@ describe('PicGoUploader', () => {
 
     describe('handleResponse 方法 - 错误响应处理', () => {
         it('Given HTTP 状态码非 200, When handleResponse, Then 返回失败结果', async () => {
-            const mockResponse = {
-                status: 500,
-                json: {
-                    success: false,
-                    msg: 'Server error',
-                },
-            };
+            const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+            try {
+                const mockResponse = {
+                    status: 500,
+                    json: {
+                        success: false,
+                        msg: 'Server error',
+                    },
+                };
 
-            const result = await (uploader as any).handleResponse(mockResponse);
+                const result = await (uploader as any).handleResponse(mockResponse);
 
-            expect(result.success).toBe(false);
-            expect(result.msg).toBe('Server error');
-            expect(result.result).toEqual([]);
+                expect(result.success).toBe(false);
+                expect(result.msg).toBe('Server error');
+                expect(result.result).toEqual([]);
+                expect(error).toHaveBeenCalledWith(
+                    '[Image Assistant] Cloud upload failed (http-status, HTTP 500).'
+                );
+                expect(error.mock.calls.flat().join(' ')).not.toContain('Server error');
+            } finally {
+                error.mockRestore();
+            }
         });
 
         it('Given success 字段为 false, When handleResponse, Then 返回失败结果', async () => {
-            const mockResponse = {
-                status: 200,
-                json: {
-                    success: false,
-                    message: 'Upload failed: invalid file type',
-                },
-            };
+            const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+            try {
+                const mockResponse = {
+                    status: 200,
+                    json: {
+                        success: false,
+                        message: 'Upload failed: invalid file type',
+                    },
+                };
 
-            const result = await (uploader as any).handleResponse(mockResponse);
+                const result = await (uploader as any).handleResponse(mockResponse);
 
-            expect(result.success).toBe(false);
-            expect(result.msg).toBe('Upload failed: invalid file type');
+                expect(result.success).toBe(false);
+                expect(result.msg).toBe('Upload failed: invalid file type');
+                expect(error).toHaveBeenCalledWith(
+                    '[Image Assistant] Cloud upload failed (service-response, HTTP 200).'
+                );
+                expect(error.mock.calls.flat().join(' ')).not.toContain('invalid file type');
+            } finally {
+                error.mockRestore();
+            }
         });
 
         it('Given 响应同时包含 msg 和 message, When handleResponse, Then 优先使用 msg', async () => {

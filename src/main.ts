@@ -22,7 +22,6 @@ import { ImageCaption } from './ui/ImageCaption';
 import { createLivePreviewCaptionExtension } from './ui/caption/LivePreviewCaptionExtension';
 import { trackedEditorRangeField } from './utils/TrackedEditorRange';
 import { ImageResourceRefreshService } from './utils/ImageResourceRefreshService';
-import { ImageResizer } from "./ui/ImageResizer";
 import { t } from './lang/helpers';
 import { BatchImageProcessor } from "./local/BatchImageProcessor";
 import { UploadHistoryManager } from "./utils/UploadHistoryManager";
@@ -47,6 +46,7 @@ import { CaptionSectionRenderChild } from "./ui/caption/CaptionSectionRenderChil
 import {
     getLegacyBatchConcurrency,
     getLegacyUploadHistory,
+    getLegacyVisualValidationMode,
     mergeWithDefaults,
     normalizeSettings
 } from "./settings/SettingsMerge";
@@ -56,9 +56,10 @@ import {
     resolveEditorImageInsertionContext
 } from "./core/EditorImageInsertionContext";
 import { ImageReferenceIndexService } from "./utils/ImageReferenceIndexService";
+import { DrawingModuleController } from "./drawing/DrawingModuleController";
 
 export default class ImageConverterPlugin extends Plugin {
-    settings: ImageAssistantSettings;
+    declare settings: ImageAssistantSettings;
     private legacyUploadHistory: unknown[] = [];
     private resolveComponentsReady!: () => void;
     private rejectComponentsReady!: (error: unknown) => void;
@@ -86,14 +87,9 @@ export default class ImageConverterPlugin extends Plugin {
     imageCaption: ImageCaption | null = null;
     imageResourceRefreshService: ImageResourceRefreshService;
 
-    // drag-resize (Managed by StateManager but kept for reference if needed)
-    imageResizer: ImageResizer | null = null;
-
     // batch processing
     batchImageProcessor: BatchImageProcessor;
 
-    // captions
-    // captionManager: ImageCaptionManager; // Deprecated
     // upload history
     historyManager: UploadHistoryManager;
 
@@ -109,109 +105,16 @@ export default class ImageConverterPlugin extends Plugin {
     // Vault Reference Manager
     vaultReferenceManager: VaultReferenceManager;
     referenceIndexService: ImageReferenceIndexService;
+    drawingModule: DrawingModuleController;
     private settingsSaveQueue: Promise<void> = Promise.resolve();
     private runtimeUnloaded = false;
-
-    private getWorkspaceDocuments(): Set<Document> {
-        const documents = new Set<Document>([document]);
-        const workspaceDocument = this.app.workspace.containerEl?.ownerDocument;
-        if (workspaceDocument) documents.add(workspaceDocument);
-        this.app.workspace.iterateAllLeaves?.(leaf => {
-            const ownerDocument = leaf.view?.containerEl?.ownerDocument;
-            if (ownerDocument) documents.add(ownerDocument);
-        });
-        return documents;
-    }
-
-    applyEditModeWrapClass(targetDocument?: Document): void {
-        const documents = targetDocument ? new Set([targetDocument]) : this.getWorkspaceDocuments();
-        for (const ownerDocument of documents) {
-            ownerDocument.body?.toggleClass(
-                'image-assistant-wrap-in-edit-mode',
-                !!this.settings.alignment.enabled
-                    && !!this.settings.alignment.enableEditModeWrap
-            );
-        }
-    }
-
-    private cleanupEditModeWrapClass(targetDocument?: Document): void {
-        const documents = targetDocument ? new Set([targetDocument]) : this.getWorkspaceDocuments();
-        documents.forEach(ownerDocument => {
-            ownerDocument.body?.removeClass('image-assistant-wrap-in-edit-mode');
-        });
-    }
-
-    private attachImageResizerToMarkdownView(markdownView: MarkdownView, refreshLayout = false) {
-        if (!this.settings.interactiveResize.enabled || !this.imageResizer) return;
-
-        if (refreshLayout) {
-            this.imageResizer.onLayoutChange(markdownView);
-            return;
-        }
-
-        this.imageResizer.onActiveViewChange(markdownView);
-    }
-
-    private attachImageResizerToActiveView(refreshLayout = false) {
-        if (!this.imageResizer) return;
-        if (!this.settings.interactiveResize.enabled) {
-            this.imageResizer.detachView();
-            return;
-        }
-
-        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView) {
-            this.attachImageResizerToMarkdownView(activeView, refreshLayout);
-            return;
-        }
-
-        this.imageResizer.detachView();
-    }
-
-    private registerImageResizerWorkspaceEvents() {
-        if (!this.imageResizer) return;
-
-        this.registerEvent(
-            this.app.workspace.on('file-open', (file) => {
-                if (!file) {
-                    this.imageResizer?.detachView();
-                    return;
-                }
-
-                this.attachImageResizerToActiveView();
-            })
-        );
-
-        this.registerEvent(
-            this.app.workspace.on('active-leaf-change', (leaf) => {
-                const leafView = leaf?.view;
-                const markdownView = leafView instanceof MarkdownView
-                    ? leafView
-                    : this.app.workspace.getActiveViewOfType(MarkdownView);
-
-                if (markdownView) {
-                    this.attachImageResizerToMarkdownView(markdownView);
-                    return;
-                }
-
-                this.imageResizer?.detachView();
-            })
-        );
-
-        this.registerEvent(
-            this.app.workspace.on('layout-change', () => {
-                this.attachImageResizerToActiveView(true);
-            })
-        );
-    }
-
-
 
     async onload() {
         this.runtimeUnloaded = false;
         await this.loadSettings();
 
-
+        this.drawingModule = new DrawingModuleController(this);
+        this.drawingModule.register();
 
         this.addSettingTab(new ImageConverterSettingTab(this.app, this));
 
@@ -233,18 +136,6 @@ export default class ImageConverterPlugin extends Plugin {
         this.localImageHandler = new LocalImageHandler(this.app, this);
         this.batchOperationLauncher = new BatchOperationLauncher(this.app, this);
 
-        this.applyEditModeWrapClass();
-        this.registerEvent(
-            this.app.workspace.on('window-open' as any, (_workspaceWindow: unknown, win: Window) => {
-                if (win?.document) this.applyEditModeWrapClass(win.document);
-            })
-        );
-        this.registerEvent(
-            this.app.workspace.on('window-close' as any, (_workspaceWindow: unknown, win: Window) => {
-                if (win?.document) this.cleanupEditModeWrapClass(win.document);
-            })
-        );
-
         // ✅ 立即注册所有命令（在 onLayoutReady 之前）
         // 这确保命令可以在 Obsidian 设置界面中绑定快捷键
         this.registerAllCommands();
@@ -259,11 +150,8 @@ export default class ImageConverterPlugin extends Plugin {
             trackedEditorRangeField,
             createLivePreviewCaptionExtension(this)
         ]);
-        this.imageResizer = new ImageResizer(this);
-        this.addChild(this.imageResizer);
         this.imageStateManager.initialize(
             this.imageAlignment,
-            this.imageResizer,
             this.imageCaption
         );
 
@@ -280,22 +168,9 @@ export default class ImageConverterPlugin extends Plugin {
             );
         }
 
-        /* Deprecated Managers (Removed) */
-
         // Wait for layout to be ready before initializing view-dependent components
         this.app.workspace.onLayoutReady(() => this.initializeAfterLayoutReady());
         void this.componentsReady.catch(() => undefined);
-        // const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        // if (!activeView) return;
-
-        // this.registerDomEvent(activeView.contentEl, 'click', (evt: MouseEvent) => {
-        //     const target = evt.target as HTMLElement;
-        //     if (target.tagName === 'IMG') {
-        //         evt.preventDefault();
-        //         evt.stopPropagation();
-        //     }
-        // }, true);
-
 
         // Register MarkdownPostProcessor for Reading Mode Image Handling
         this.registerMarkdownPostProcessor((element, context) => {
@@ -314,7 +189,15 @@ export default class ImageConverterPlugin extends Plugin {
                 element,
                 binding,
                 (image, imageContext) => this.imageStateManager?.processReadingModeImage(image, imageContext),
-                image => this.imageCaption?.removeImage(image)
+                image => this.imageCaption?.removeImage(image),
+                (media, mediaContext) => {
+                    if (this.imageStateManager) {
+                        this.imageStateManager.processReadingModeExternalMedia(media, mediaContext);
+                    } else {
+                        this.imageCaption?.renderExternalMedia(media, mediaContext);
+                    }
+                },
+                media => this.imageCaption?.removeExternalMedia(media)
             ));
         });
     }
@@ -336,10 +219,6 @@ export default class ImageConverterPlugin extends Plugin {
         // cloud deletion; an unavailable history must not disable local features.
         await this.initializeUploadHistory();
         if (this.runtimeUnloaded) return;
-
-        if (this.settings.interactiveResize.enabled) {
-            this.attachImageResizerToActiveView();
-        }
 
         // Initialize components that depend on others
         this.folderAndFilenameManagement = new FolderAndFilenameManagement(
@@ -387,8 +266,6 @@ export default class ImageConverterPlugin extends Plugin {
                     const ownerDocument = leaf.view?.containerEl?.ownerDocument;
                     if (ownerDocument) this.imageCaption?.ensureDocument(ownerDocument);
                 });
-                this.registerImageResizerWorkspaceEvents();
-                this.attachImageResizerToActiveView();
             });
         void initialization.then(
             () => this.resolveComponentsReady(),
@@ -435,8 +312,10 @@ export default class ImageConverterPlugin extends Plugin {
         this.addCommand({
             id: 'clean-unused-files',
             name: t("CMD_CLEAN_UNUSED"),
-            callback: () => {
-                new UnusedFileCleanerModal(this.app, this).open();
+            checkCallback: checking => {
+                if (!this.settings.cleanerSettings.enabled) return false;
+                if (!checking) new UnusedFileCleanerModal(this.app, this).open();
+                return true;
             }
         });
 
@@ -455,24 +334,30 @@ export default class ImageConverterPlugin extends Plugin {
             this.addCommand({
                 id: 'ocr-latex-multiline',
                 name: t("CMD_OCR_LATEX_MULTI"),
-                callback: async () => {
-                    await this.handleOCRLatex(true);
+                checkCallback: checking => {
+                    if (!this.settings.ocrSettings.enabled) return false;
+                    if (!checking) void this.handleOCRLatex(true);
+                    return true;
                 }
             });
 
             this.addCommand({
                 id: 'ocr-latex-inline',
                 name: t("CMD_OCR_LATEX_INLINE"),
-                callback: async () => {
-                    await this.handleOCRLatex(false);
+                checkCallback: checking => {
+                    if (!this.settings.ocrSettings.enabled) return false;
+                    if (!checking) void this.handleOCRLatex(false);
+                    return true;
                 }
             });
 
             this.addCommand({
                 id: 'ocr-markdown',
                 name: t("CMD_OCR_MARKDOWN"),
-                callback: async () => {
-                    await this.handleOCRMarkdown();
+                checkCallback: checking => {
+                    if (!this.settings.ocrSettings.enabled) return false;
+                    if (!checking) void this.handleOCRMarkdown();
+                    return true;
                 }
             });
         }
@@ -480,18 +365,14 @@ export default class ImageConverterPlugin extends Plugin {
         this.addReloadCommand();
     }
 
-    async onunload() {
+    onunload(): void {
         this.runtimeUnloaded = true;
-        // Clean up alignment related components first
-        this.cleanupEditModeWrapClass();
-
-        // Clean up resizer next since other components might depend on it
-        if (this.imageResizer) {
-            const { imageResizer } = this;
-            this.imageResizer = null;
-            this.removeChild(imageResizer);
-        }
-
+        // Obsidian does not await plugin unload. The drawing controller nevertheless
+        // sequences flush/recovery before detaching only the exact Draw.io view instances
+        // it captured, so a replacement plugin or an external Excalidraw view is untouched.
+        void Promise.resolve(this.drawingModule?.disable()).catch(error => {
+            console.error("[Image Assistant Drawing] Failed to finish drawing teardown:", error);
+        });
         // Clean up UI components
         if (this.contextMenu) {
             const { contextMenu } = this;
@@ -500,9 +381,7 @@ export default class ImageConverterPlugin extends Plugin {
         }
 
         this.imageStateManager?.onunload();
-        for (const ownerDocument of this.getWorkspaceDocuments()) {
-            this.imageAlignment?.cleanup(ownerDocument);
-        }
+        this.imageAlignment?.cleanup();
         this.cloudImageHandler?.destroy();
         this.imageStateManager = null;
         this.imageAlignment = null;
@@ -521,11 +400,14 @@ export default class ImageConverterPlugin extends Plugin {
             loadedData = undefined;
         }
         const merged = mergeWithDefaults(DEFAULT_SETTINGS, loadedData);
+        const legacyVisualValidationMode = getLegacyVisualValidationMode(loadedData);
+        if (legacyVisualValidationMode !== undefined) {
+            merged.drawing.drawio.nextAi.visualValidationMode = legacyVisualValidationMode;
+        }
         const legacyConcurrency = getLegacyBatchConcurrency(loadedData);
         if (legacyConcurrency !== undefined) merged.global.batchConcurrency = legacyConcurrency;
         this.legacyUploadHistory = getLegacyUploadHistory(loadedData);
         this.settings = normalizeSettings(merged);
-        this.stripLegacyPresetSettings(this.settings);
         const migratedOcrSecrets = this.migrateLegacyOcrPasswords(loadedData);
 
         // Ensure critical sections exist even if deepMerge missed something (e.g. new sections)
@@ -603,7 +485,6 @@ export default class ImageConverterPlugin extends Plugin {
     async saveSettings(): Promise<void> {
         normalizeSettings(this.settings);
         const write = this.settingsSaveQueue.then(async () => {
-            this.stripLegacyPresetSettings(this.settings);
             await this.saveData(this.settings);
         });
         const reported = write.catch(error => {
@@ -620,57 +501,6 @@ export default class ImageConverterPlugin extends Plugin {
         return records;
     }
 
-    private stripLegacyPresetSettings(settings: unknown): void {
-        const legacyPresetKeys = new Set([
-            "conversionPresets",
-            "folderPresets",
-            "filenamePresets",
-            "linkFormatPresets",
-            "resizePresets",
-            "globalPresets",
-            "globalPresetConfig",
-            "activeConversionPreset",
-            "activeFolderPreset",
-            "activeFilenamePreset",
-            "activeLinkFormatPreset",
-            "activeResizePreset",
-            "activeGlobalPreset",
-            "selectedConversionPreset",
-            "selectedFolderPreset",
-            "selectedFilenamePreset",
-            "selectedLinkFormatPreset",
-            "selectedResizePreset",
-            "selectedGlobalPreset",
-            "defaultConversionPreset",
-            "defaultFolderPreset",
-            "defaultFilenamePreset",
-            "defaultLinkFormatPreset",
-            "defaultResizePreset",
-            "defaultGlobalPreset",
-            "showGlobalPresets",
-            "globalPresetsVisible",
-        ]);
-
-        const strip = (value: unknown): void => {
-            if (!value || typeof value !== "object") return;
-            if (Array.isArray(value)) {
-                value.forEach(strip);
-                return;
-            }
-
-            const record = value as Record<string, unknown>;
-            for (const key of Object.keys(record)) {
-                if (legacyPresetKeys.has(key)) {
-                    delete record[key];
-                } else {
-                    strip(record[key]);
-                }
-            }
-        };
-
-        strip(settings);
-    }
-
     /**
      * Update concurrent queue with new concurrency value
      * Called when upload concurrency setting is changed
@@ -682,16 +512,6 @@ export default class ImageConverterPlugin extends Plugin {
         }
 
         this.concurrentQueue = new ConcurrentQueue(concurrency);
-    }
-
-    public setInteractiveResizeEnabled(enabled: boolean): void {
-        this.settings.interactiveResize.enabled = enabled;
-        this.imageResizer?.updateSettings();
-        this.attachImageResizerToActiveView();
-    }
-
-    public updateInteractiveResizeSettings(): void {
-        this.imageResizer?.updateSettings();
     }
 
     public setContextMenuEnabled(enabled: boolean): void {
@@ -862,6 +682,7 @@ export default class ImageConverterPlugin extends Plugin {
      * 处理 OCR 转 LaTeX
      */
     private async handleOCRLatex(isMultiline: boolean) {
+        if (!this.settings.ocrSettings.enabled) return;
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {
@@ -898,6 +719,7 @@ export default class ImageConverterPlugin extends Plugin {
      * 处理 OCR 转 Markdown
      */
     private async handleOCRMarkdown() {
+        if (!this.settings.ocrSettings.enabled) return;
         try {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view) {

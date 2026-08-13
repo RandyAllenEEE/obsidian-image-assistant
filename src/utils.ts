@@ -1,45 +1,4 @@
-import { extname } from "path-browserify";
-import { Readable } from "stream";
 import { isHttpUrl } from "./utils/NetworkPolicy";
-
-export interface IStringKeyMap<T> {
-  [key: string]: T;
-}
-
-const IMAGE_EXT_LIST = [
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".bmp",
-  ".gif",
-  ".svg",
-  ".tiff",
-  ".webp",
-  ".avif",
-];
-
-export function isAnImage(ext: string) {
-  return IMAGE_EXT_LIST.includes(ext.toLowerCase());
-}
-export function isAssetTypeAnImage(path: string): Boolean {
-  return isAnImage(extname(path));
-}
-
-export async function streamToString(stream: Readable) {
-  const chunks: Uint8Array[] = [];
-
-  for await (const chunk of stream) {
-    chunks.push(Buffer.from(chunk));
-  }
-
-  return Buffer.concat(chunks).toString("utf-8");
-}
-
-export function getUrlAsset(url: string) {
-  return (url = url.substr(1 + url.lastIndexOf("/")).split("?")[0]).split(
-    "#"
-  )[0];
-}
 
 export function getLastImage(list: string[]) {
   for (let index = list.length - 1; index >= 0; index--) {
@@ -49,37 +8,9 @@ export function getLastImage(list: string[]) {
   return undefined;
 }
 
-interface AnyObj {
-  [key: string]: any;
-}
-
-export function arrayToObject<T extends AnyObj>(
-  arr: T[],
-  key: string
-): { [key: string]: T } {
-  const obj: { [key: string]: T } = {};
-  arr.forEach(element => {
-    obj[element[key]] = element;
-  });
-  return obj;
-}
-
 export function bufferToArrayBuffer(buffer: Buffer) {
   if (buffer.byteLength === buffer.buffer.byteLength && buffer.byteOffset === 0) {
     return buffer.buffer as ArrayBuffer;
   }
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
-}
-
-export function arrayBufferToBuffer(arrayBuffer: ArrayBuffer) {
-  const buffer = Buffer.alloc(arrayBuffer.byteLength);
-  const view = new Uint8Array(arrayBuffer);
-  for (let i = 0; i < buffer.length; ++i) {
-    buffer[i] = view[i];
-  }
-  return buffer;
-}
-
-export function uuid() {
-  return Math.random().toString(36).slice(2);
 }

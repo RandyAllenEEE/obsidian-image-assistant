@@ -1,7 +1,42 @@
 import { DEFAULT_SETTINGS } from "./defaults";
-import type { BlendMode, ImageAssistantSettings, SingleImageOperationDefaults, ToolPreset } from "./types";
+import type {
+    BlendMode,
+    ImageAssistantSettings,
+    SingleImageOperationDefaults,
+    ToolPreset,
+    VisualValidationMode
+} from "./types";
 
 const unsafeKeys = new Set(["__proto__", "constructor", "prototype"]);
+const retiredPresetKeys = new Set([
+    "conversionPresets",
+    "folderPresets",
+    "filenamePresets",
+    "linkFormatPresets",
+    "resizePresets",
+    "globalPresets",
+    "globalPresetConfig",
+    "activeConversionPreset",
+    "activeFolderPreset",
+    "activeFilenamePreset",
+    "activeLinkFormatPreset",
+    "activeResizePreset",
+    "activeGlobalPreset",
+    "selectedConversionPreset",
+    "selectedFolderPreset",
+    "selectedFilenamePreset",
+    "selectedLinkFormatPreset",
+    "selectedResizePreset",
+    "selectedGlobalPreset",
+    "defaultConversionPreset",
+    "defaultFolderPreset",
+    "defaultFilenamePreset",
+    "defaultLinkFormatPreset",
+    "defaultResizePreset",
+    "defaultGlobalPreset",
+    "showGlobalPresets",
+    "globalPresetsVisible"
+]);
 const blendModes: readonly BlendMode[] = [
     "source-over", "destination-over", "source-in", "destination-in", "source-out",
     "destination-out", "source-atop", "destination-atop", "xor", "lighter", "copy",
@@ -25,6 +60,20 @@ function cloneValue(value: unknown): unknown {
         if (!unsafeKeys.has(key)) clone[key] = cloneValue(nestedValue);
     }
     return clone;
+}
+
+function removeRetiredPresetSettings(value: unknown): void {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+        value.forEach(removeRetiredPresetSettings);
+        return;
+    }
+
+    const record = value as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+        if (retiredPresetKeys.has(key)) delete record[key];
+        else removeRetiredPresetSettings(record[key]);
+    }
 }
 
 export function mergeWithDefaults<T>(defaults: T, saved: unknown): T {
@@ -79,7 +128,9 @@ function normalizeOptionalDimension(value: unknown): number | undefined {
     if (typeof normalized === "string" && !/^\d+(?:\.\d+)?$/.test(normalized)) return undefined;
     const numeric = Number(normalized);
     if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
-    return Math.min(100_000, Math.round(numeric));
+    const rounded = Math.round(numeric);
+    if (!Number.isSafeInteger(rounded) || rounded <= 0) return undefined;
+    return Math.min(100_000, rounded);
 }
 
 function normalizeSecretId(value: unknown): string {
@@ -102,6 +153,69 @@ function normalizePresetArray(value: ToolPreset[], defaults: ToolPreset[]): Tool
 }
 
 export function normalizeSettings(settings: ImageAssistantSettings): ImageAssistantSettings {
+    removeRetiredPresetSettings(settings);
+    if (!isOneOf(settings.drawing.provider, ["disabled", "drawio", "excalidraw"] as const)) {
+        settings.drawing.provider = DEFAULT_SETTINGS.drawing.provider;
+    }
+    if (!isOneOf(settings.drawing.excalidraw.embedMode, ["source", "auto-export-preview"] as const)) {
+        settings.drawing.excalidraw.embedMode = DEFAULT_SETTINGS.drawing.excalidraw.embedMode;
+    }
+    if (typeof settings.drawing.excalidraw.manageCreatedFileLocation !== "boolean") {
+        settings.drawing.excalidraw.manageCreatedFileLocation =
+            DEFAULT_SETTINGS.drawing.excalidraw.manageCreatedFileLocation;
+    }
+    const drawio = settings.drawing.drawio;
+    if (!isOneOf(drawio.theme, ["kennedy", "atlas", "dark", "minimal", "sketch", "simple"] as const)) {
+        drawio.theme = DEFAULT_SETTINGS.drawing.drawio.theme;
+    }
+    if (typeof drawio.followObsidianTheme !== "boolean") {
+        drawio.followObsidianTheme = DEFAULT_SETTINGS.drawing.drawio.followObsidianTheme;
+    }
+    const nextAi = drawio.nextAi;
+    nextAi.accessCodeSecretId = normalizeSecretId(nextAi.accessCodeSecretId);
+    nextAi.apiKeySecretId = normalizeSecretId(nextAi.apiKeySecretId);
+    if (!isOneOf(nextAi.visualValidationMode, ["disabled", "user-model", "next-ai-server"] as const)) {
+        nextAi.visualValidationMode = DEFAULT_SETTINGS.drawing.drawio.nextAi.visualValidationMode;
+    }
+    if (nextAi.sendShortcut !== "enter" && nextAi.sendShortcut !== "mod-enter") {
+        nextAi.sendShortcut = DEFAULT_SETTINGS.drawing.drawio.nextAi.sendShortcut;
+    }
+    nextAi.promptTemplates = Array.isArray(nextAi.promptTemplates)
+        ? nextAi.promptTemplates.flatMap(value => {
+            if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+            const candidate = value as unknown as Record<string, unknown>;
+            if (typeof candidate.id !== "string") return [];
+            const id = candidate.id.trim().slice(0, 100);
+            const titleSource = typeof candidate.title === "string"
+                ? candidate.title
+                : typeof candidate.name === "string" ? candidate.name : "";
+            const bodySource = typeof candidate.body === "string"
+                ? candidate.body
+                : typeof candidate.prompt === "string" ? candidate.prompt : "";
+            const title = titleSource.trim().slice(0, 100);
+            const body = bodySource.trim().slice(0, 20_000);
+            const now = Date.now();
+            return id && title && body ? [{
+                id,
+                title,
+                description: typeof candidate.description === "string"
+                    ? candidate.description.trim().slice(0, 500)
+                    : "",
+                body,
+                pinned: candidate.pinned === true,
+                createdAt: typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
+                    ? Math.trunc(candidate.createdAt)
+                    : now,
+                updatedAt: typeof candidate.updatedAt === "number" && Number.isFinite(candidate.updatedAt)
+                    ? Math.trunc(candidate.updatedAt)
+                    : now,
+                useCount: typeof candidate.useCount === "number" && Number.isFinite(candidate.useCount)
+                    ? Math.max(0, Math.trunc(candidate.useCount))
+                    : 0
+            }] : [];
+        }).slice(0, 100)
+        : [];
+
     const paste = settings.pasteHandling;
     if (!isOneOf(paste.mode, ["local", "cloud", "disabled"] as const)) {
         paste.mode = DEFAULT_SETTINGS.pasteHandling.mode;
@@ -206,7 +320,6 @@ export function normalizeSettings(settings: ImageAssistantSettings): ImageAssist
     embedResize.longestEdge = normalizeOptionalDimension(embedResize.longestEdge);
     embedResize.shortestEdge = normalizeOptionalDimension(embedResize.shortestEdge);
     embedResize.editorMaxWidthValue = normalizeOptionalDimension(embedResize.editorMaxWidthValue);
-    if (typeof embedResize.customValue !== "string") embedResize.customValue = undefined;
 
     const batch = settings.operationDefaults.batchLocal;
     if (!isOneOf(batch.convertTo, ["disabled", "webp", "jpg", "png"] as const)) {
@@ -261,18 +374,6 @@ export function normalizeSettings(settings: ImageAssistantSettings): ImageAssist
     if (!isOneOf(settings.alignment.default, ["left", "center", "right"] as const)) {
         settings.alignment.default = DEFAULT_SETTINGS.alignment.default;
     }
-    if (!isOneOf(settings.interactiveResize.scrollModifier, ["None", "Shift", "Control", "Alt", "Meta"] as const)) {
-        settings.interactiveResize.scrollModifier = DEFAULT_SETTINGS.interactiveResize.scrollModifier;
-    }
-    if (!isOneOf(settings.resizeCursorLocation, ["front", "back", "below", "none"] as const)) {
-        settings.resizeCursorLocation = DEFAULT_SETTINGS.resizeCursorLocation;
-    }
-    settings.interactiveResize.sensitivity = clampNumber(
-        settings.interactiveResize.sensitivity,
-        DEFAULT_SETTINGS.interactiveResize.sensitivity,
-        0.01,
-        10
-    );
     if (!isOneOf(
         settings.cleanerSettings.trashMode,
         ["follow-obsidian", "system", "obsidian", "custom"] as const
@@ -386,4 +487,18 @@ export function getLegacyBatchConcurrency(saved: unknown): number | undefined {
 export function getLegacyUploadHistory(saved: unknown): unknown[] {
     if (!isPlainObject(saved) || !Array.isArray(saved.uploadedImages)) return [];
     return cloneValue(saved.uploadedImages) as unknown[];
+}
+
+/** Maps the former VLM toggle without mutating the raw persisted settings. */
+export function getLegacyVisualValidationMode(saved: unknown): VisualValidationMode | undefined {
+    if (!isPlainObject(saved)) return undefined;
+    const drawing = saved.drawing;
+    if (!isPlainObject(drawing)) return undefined;
+    const drawio = drawing.drawio;
+    if (!isPlainObject(drawio)) return undefined;
+    const nextAi = drawio.nextAi;
+    if (!isPlainObject(nextAi) || Object.hasOwn(nextAi, "visualValidationMode")) return undefined;
+    return typeof nextAi.visualValidationEnabled === "boolean"
+        ? nextAi.visualValidationEnabled ? "next-ai-server" : "disabled"
+        : undefined;
 }

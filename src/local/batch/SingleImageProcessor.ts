@@ -13,6 +13,7 @@ import { resolveProcessedImageFilename } from '../../utils/ProcessedImageFilenam
 import { createReferenceMutationScanPolicy } from '../../utils/ReferenceScanPolicy';
 import { detectImageBinaryType } from '../../utils/ImageBinaryType';
 import { captureImageFileRevision } from '../../utils/ImageFileRevision';
+import { isProtectedDrawingFile } from '../../drawing/DrawingFileSemantics';
 
 /**
  * SingleImageProcessor - Shared logic for processing a single image.
@@ -38,6 +39,9 @@ export class SingleImageProcessor {
         enlargeOrReduce: string,
         allowLargerFiles: boolean
     ): Promise<{ success: boolean; skipped?: boolean; error?: string }> {
+        if (isProtectedDrawingFile(this.plugin, file)) {
+            return { success: false, skipped: true, error: t("NOTICE_DRAWING_PROTECTED") };
+        }
         try {
             const sourceData = await this.app.vault.readBinary(file);
             const sourceRevision = await captureImageFileRevision(this.app, file, sourceData);
@@ -93,7 +97,8 @@ export class SingleImageProcessor {
                 ),
                 () => this.plugin.settings.localProcessing.link,
                 this.plugin.referenceIndexService,
-                () => this.plugin.settings.cleanerSettings
+                () => this.plugin.settings.cleanerSettings,
+                file => isProtectedDrawingFile(this.plugin, file)
             );
             await committer.commit(file, newFileName, processedImage.data, sourceRevision);
             return { success: true };
