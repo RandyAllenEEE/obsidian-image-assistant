@@ -293,7 +293,7 @@ beforeEach(() => {
   (global as any).Image = MockImage as any;
 
   // Reinstall FileReader mock each test (mockReset clears implementations)
-  (global as any).FileReader = vi.fn().mockImplementation(() => {
+  (global as any).FileReader = vi.fn(function () {
     const reader = {
       result: null as string | ArrayBuffer | null,
       error: null,

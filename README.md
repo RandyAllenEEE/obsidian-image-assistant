@@ -1,4 +1,4 @@
-# Image Assistant for Obsidian
+# Image Assistant
 
 **Image Assistant** is a powerful all-in-one image management plugin for Obsidian, deeply integrating **local image processing**, **cloud image hosting**, and **OCR recognition**. It seamlessly handles everything from paste to publish.
 
@@ -345,11 +345,11 @@ Secrets are stored by reference in Obsidian Secret Storage where supported, but 
 
 ## 📥 Installation
 
-Image Assistant 6.0.0 requires desktop Obsidian 1.13.4 or newer.
+Image Assistant requires desktop Obsidian 1.13.4 or newer.
 
-1. Download `main.js`, `styles.css`, and `manifest.json` from [Releases](https://github.com/RandyAllenEEE/obsidian-image-assistant/releases).
+1. Download `main.js`, `styles.css`, and `manifest.json` from [the latest release](https://github.com/RandyAllenEEE/obsidian-image-assistant/releases/latest).
 2. Place them in `.obsidian/plugins/obsidian-image-assistant/`.
-3. Restart Obsidian and enable the plugin.
+3. Restart Obsidian and enable Image Assistant. For upgrades, replace the three release files and keep `data.json` and the JSON sidecar files in the existing folder.
 
 *Or install via BRAT: search for `RandyAllenEEE/obsidian-image-assistant` in BRAT.*
 
@@ -363,6 +363,10 @@ npm run deploy:local -- --vault="E:\path\to\vault"
 The deploy command preserves plugin data, atomically replaces the three release
 artifacts, removes the legacy `image-assistant` enablement entries, and enables
 `obsidian-image-assistant`. Add `--dry-run` to validate without writing.
+
+### Publishing
+
+Run the checks in [the release workflow](.github/workflows/release.yml) and push the updated default branch. Once its checks pass, push only the `X.Y.Z` tag that matches `manifest.json`. The tag run rebuilds, packages, and verifies the attachments before publishing the GitHub Release.
 
 ---
 

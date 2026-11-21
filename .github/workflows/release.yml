@@ -1,0 +1,82 @@
+name: Build and release plugin
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Verify version
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          node .github/scripts/release.mjs verify "$TAG"
+          if [ -n "$TAG" ]; then
+            git merge-base --is-ancestor HEAD "refs/remotes/origin/$DEFAULT_BRANCH"
+          fi
+
+      - run: npm ci
+
+      - name: Run checks and build
+        run: |
+          npm run check
+
+      - name: Package and verify release attachments
+        run: |
+          node scripts/release-assets.cjs "$RUNNER_TEMP/plugin-release"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plugin-release
+          path: ${{ runner.temp }}/plugin-release
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: plugin-release
+          path: ${{ runner.temp }}/plugin-release
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: node .github/scripts/release.mjs publish "$TAG" "$RUNNER_TEMP/plugin-release"

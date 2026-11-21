@@ -5,6 +5,7 @@
 - Reuse open and deferred Draw.io tabs and avoid opening multiple editors for the same drawing.
 - Stop automatic retries after a failed Draw.io save while preserving the unsaved draft for manual retry or recovery on close.
 - Report file and editor load failures, settle editor readiness, and clean up failed Draw.io connections.
+- Updated the bundled AI SDK and related dependencies.
 
 ## 6.0.0 - 2026-08-10
 

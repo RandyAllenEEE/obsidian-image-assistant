@@ -14,10 +14,10 @@
 		"test:clean": "vitest run --reporter=tap",
 		"test:json": "vitest run --reporter=json",
 		"test:watch": "vitest",
-		"test:coverage": "vitest run --coverage",
+		"test:coverage": "vitest run --coverage --maxWorkers=4",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"typecheck:test": "tsc -p tsconfig.test.json --noEmit",
-		"check:scripts": "node --check scripts/obsidian-runtime-smoke.js && node --check scripts/obsidian-layout-diagnostic.js && node --check scripts/obsidian-native-resize-smoke.js && node --check scripts/verify-release-metadata.js && node --check scripts/prepare-release.js && node --check scripts/deploy-local.js",
+		"check:scripts": "node --check scripts/obsidian-runtime-smoke.js && node --check scripts/obsidian-layout-diagnostic.js && node --check scripts/obsidian-native-resize-smoke.js && node --check scripts/verify-release-metadata.js && node --check scripts/prepare-release.js && node --check scripts/deploy-local.js && node --check scripts/release-assets.cjs && node --check .github/scripts/release.mjs && node --check scripts/coverage-v8-lines.mjs",
 		"deploy:local": "npm run build && node scripts/deploy-local.js",
 		"smoke:obsidian": "node scripts/obsidian-runtime-smoke.js",
 		"smoke:obsidian-native-resize": "node scripts/obsidian-native-resize-smoke.js",
@@ -51,20 +51,21 @@
 		"@types/node": "^24.3.1",
 		"@types/path-browserify": "^1.0.3",
 		"@types/piexifjs": "^1.0.0",
-		"@typescript-eslint/eslint-plugin": "^8.65.0",
-		"@typescript-eslint/parser": "^8.65.0",
-		"@vitest/coverage-v8": "3.2.7",
+		"@typescript-eslint/eslint-plugin": "^8.73.0",
+		"@typescript-eslint/parser": "^8.73.0",
+		"@vitest/coverage-v8": "5.1.1",
 		"builtin-modules": "3.3.0",
-		"esbuild": "^0.25.9",
-		"eslint": "^10.8.0",
+		"esbuild": "^0.28.2",
+		"eslint": "^10.15.0",
 		"globals": "^16.3.0",
-		"happy-dom": "20.10.6",
+		"happy-dom": "21.0.4",
 		"obsidian": "1.13.1",
 		"typescript": "^5.9.2",
-		"vitest": "3.2.7"
+		"v8-to-istanbul": "9.3.0",
+		"vitest": "5.1.1"
 	},
 	"dependencies": {
-		"ai": "6.0.100",
+		"ai": "6.0.333",
 		"cross-spawn": "^7.0.6",
 		"fabric": "7.4.0",
 		"image-type": "^6.1.0",
@@ -72,8 +73,8 @@
 		"piexifjs": "^1.0.6"
 	},
 	"overrides": {
-		"@vitest/coverage-v8@3.2.7": {
-			"test-exclude": "8.0.0"
+		"obsidian@1.13.1": {
+			"moment": "2.31.0"
 		}
 	}
 }

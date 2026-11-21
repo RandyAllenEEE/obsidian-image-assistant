@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { UploadMode } from '../../../../../../src/ui/modals/batch/modes/UploadMode';
 import { CloudImageDeleter } from '../../../../../../src/cloud/CloudImageDeleter';
 import { Modal } from 'obsidian';
@@ -167,7 +167,9 @@ describe('UploadMode', () => {
     const app = fakeApp() as any;
     const plugin = makePlugin();
     plugin.settings.pasteHandling.cloud.uploader = 'PicGo';
-    const confirmSpy = vi.spyOn(window, 'confirm');
+    const confirmSpy = vi.fn(() => false);
+    vi.stubGlobal('confirm', confirmSpy);
+    onTestFinished(() => { vi.unstubAllGlobals(); });
     const mode = new UploadMode(app, plugin, null, 'vault');
 
     await mode.handleReviewAction('undo', {
@@ -178,7 +180,6 @@ describe('UploadMode', () => {
     });
 
     expect(confirmSpy).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 
   it('blocks undo when discovery was incomplete', async () => {

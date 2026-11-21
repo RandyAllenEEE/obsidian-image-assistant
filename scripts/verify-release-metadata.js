@@ -3,26 +3,15 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { noticeAssets, sourceArchives } = require("./release-assets.cjs");
 
 const root = process.cwd();
 const expectedPluginId = "obsidian-image-assistant";
 const expectedVersion = process.argv
     .slice(2)
-    .find(argument => argument !== "--build")
-    ?.replace(/^v/, "");
+    .find(argument => argument !== "--build");
 const verifyBuild = process.argv.includes("--build");
 const bundledDependencyInventoryPath = "third-party/bundled-dependencies.json";
-const thirdPartyAssets = [
-    "THIRD_PARTY_NOTICES.md",
-    bundledDependencyInventoryPath,
-    "licenses/Apache-2.0.txt",
-    "licenses/BSD-3-Clause.txt",
-    "licenses/GPL-3.0.txt",
-    "licenses/ISC.txt",
-    "licenses/LGPL-3.0.txt",
-    "licenses/MIT.txt",
-    "licenses/UTIF-MIT.txt"
-];
 
 function readJson(relativePath) {
     return JSON.parse(fs.readFileSync(path.join(root, relativePath), "utf8"));
@@ -69,7 +58,7 @@ if (packageJson.private !== true) {
     fail("package.json must keep the release package private");
 }
 
-for (const asset of thirdPartyAssets) {
+for (const asset of noticeAssets) {
     if (!fs.statSync(path.join(root, asset), { throwIfNoEntry: false })?.isFile()) {
         fail(`missing third-party compliance asset: ${asset}`);
     }
@@ -209,47 +198,12 @@ for (const [licensePath, requiredFragments] of Object.entries(licenseRequirement
     }
 }
 
-const releaseWorkflow = fs.readFileSync(
-    path.join(root, ".github/workflows/build-draft-release.yml"),
-    "utf8"
-);
-const releaseActionMarker = "uses: softprops/action-gh-release@v2";
-const releaseActionIndex = releaseWorkflow.indexOf(releaseActionMarker);
-const releaseUploadSection = releaseActionIndex >= 0
-    ? releaseWorkflow.slice(releaseActionIndex)
-    : "";
-if (!releaseUploadSection) {
-    fail(`draft release workflow is missing ${releaseActionMarker}`);
-}
-for (const requiredReleaseSetting of ["draft: true", "fail_on_unmatched_files: true"]) {
-    if (!releaseUploadSection.includes(requiredReleaseSetting)) {
-        fail(`draft release workflow is missing ${requiredReleaseSetting}`);
-    }
-}
 if (fs.existsSync(path.join(root, ".github/workflows/sync-manifest.yml"))) {
     fail("deprecated manifest-sync workflow must not be present");
 }
-for (const asset of ["LICENSE", ...thirdPartyAssets]) {
-    if (!releaseUploadSection.includes(asset)) {
-        fail(`draft release workflow does not publish ${asset}`);
-    }
-}
-for (const pinnedSourceArtifact of [
-    "heic-to-1.0.2.tgz",
-    "libheif-1.18.2.tar.gz",
-    "libde265-1.0.15.tar.gz"
-]) {
-    if (!releaseUploadSection.includes(pinnedSourceArtifact)) {
-        fail(`draft release workflow does not publish pinned source: ${pinnedSourceArtifact}`);
-    }
-}
-for (const pinnedSourceChecksum of [
-    "ac85610181bb8270faff5e7b5892da9b26131c476f823e695e5b0667675884e7",
-    "c4002a622bec9f519f29d84bfdc6024e33fd67953a5fb4dc2c2f11f67d5e45bf",
-    "00251986c29d34d3af7117ed05874950c875dd9292d016be29d3b3762666511d"
-]) {
-    if (!releaseWorkflow.includes(pinnedSourceChecksum)) {
-        fail(`draft release workflow is missing source checksum: ${pinnedSourceChecksum}`);
+for (const { name, sha256 } of sourceArchives) {
+    if (!thirdPartyNotices.includes(name) || !thirdPartyNotices.includes(sha256)) {
+        fail("THIRD_PARTY_NOTICES.md does not identify the pinned corresponding source: " + name);
     }
 }
 

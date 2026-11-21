@@ -4,14 +4,14 @@
   "packages": [
     {
       "name": "@ai-sdk/provider",
-      "version": "3.0.8",
+      "version": "3.0.19",
       "license": "Apache-2.0",
       "copyright": "Copyright 2023 Vercel, Inc.",
       "source": "https://github.com/vercel/ai"
     },
     {
       "name": "@ai-sdk/provider-utils",
-      "version": "4.0.15",
+      "version": "4.0.67",
       "license": "Apache-2.0",
       "copyright": "Copyright 2023 Vercel, Inc.",
       "source": "https://github.com/vercel/ai"
@@ -32,7 +32,7 @@
     },
     {
       "name": "ai",
-      "version": "6.0.100",
+      "version": "6.0.333",
       "license": "Apache-2.0",
       "copyright": "Copyright 2023 Vercel, Inc.",
       "source": "https://github.com/vercel/ai"
@@ -53,9 +53,9 @@
     },
     {
       "name": "eventsource-parser",
-      "version": "3.1.0",
+      "version": "3.1.1",
       "license": "MIT",
-      "copyright": "Copyright (c) 2026 Espen Hovlandsdal",
+      "copyright": "Copyright (c) 2026 Espen Hovlandsdal <espen@hovlandsdal.com>",
       "source": "https://github.com/rexxars/eventsource-parser"
     },
     {
@@ -71,13 +71,6 @@
       "license": "MIT",
       "copyright": "Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)",
       "source": "https://github.com/sindresorhus/file-type"
-    },
-    {
-      "name": "has-flag",
-      "version": "4.0.0",
-      "license": "MIT",
-      "copyright": "Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com)",
-      "source": "https://github.com/sindresorhus/has-flag"
     },
     {
       "name": "ieee754",
@@ -150,13 +143,6 @@
       "source": "https://github.com/Borewit/strtok3"
     },
     {
-      "name": "supports-color",
-      "version": "7.2.0",
-      "license": "MIT",
-      "copyright": "Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com)",
-      "source": "https://github.com/chalk/supports-color"
-    },
-    {
       "name": "token-types",
       "version": "6.1.2",
       "license": "MIT",
@@ -179,7 +165,7 @@
     },
     {
       "name": "zod",
-      "version": "4.4.3",
+      "version": "4.6.7",
       "license": "MIT",
       "copyright": "Copyright (c) 2025 Colin McDonnell",
       "source": "https://github.com/colinhacks/zod"

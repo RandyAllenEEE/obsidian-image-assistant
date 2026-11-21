@@ -1,11 +1,11 @@
+import type { MockInstance } from "vitest";
 import { DrawioEmbedPort } from "../../../../src/drawing/drawio/DrawioEmbedPort";
 
 describe("DrawioEmbedPort", () => {
     beforeEach(() => {
-        const descriptor = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src");
-        if (!descriptor?.set) throw new Error("The test DOM does not expose the iframe src setter.");
         vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function () {
-            descriptor.set!.call(this, "about:blank");
+            // Content stays inside the test DOM even when external iframe loading is disabled.
+            this.srcdoc = "<!doctype html><title>Draw.io fixture</title>";
         });
     });
 
@@ -435,7 +435,7 @@ function dispatch(source: Window, origin: string, data: unknown): void {
 async function createReadyPort(): Promise<{
     port: DrawioEmbedPort;
     frame: Window;
-    post: ReturnType<typeof vi.spyOn>;
+    post: MockInstance<Window["postMessage"]>;
 }> {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -448,6 +448,6 @@ async function createReadyPort(): Promise<{
     return { port, frame, post };
 }
 
-function readPostedMessages(post: ReturnType<typeof vi.spyOn>): Array<Record<string, unknown>> {
+function readPostedMessages(post: MockInstance<Window["postMessage"]>): Array<Record<string, unknown>> {
     return post.mock.calls.map(call => JSON.parse(String(call[0])) as Record<string, unknown>);
 }

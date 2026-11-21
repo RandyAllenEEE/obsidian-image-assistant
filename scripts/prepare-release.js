@@ -6,8 +6,8 @@
  * This script verifies committed release metadata and creates a git tag
  * without modifying any files. The GitHub Actions workflow will:
  * 1. Build the plugin
- * 2. Create a draft release with the compiled files
- * 3. Refuse to publish if tag, package, manifest, docs, and bundle disagree
+ * 2. Verify and package the compiled files and corresponding-source attachments
+ * 3. Publish the GitHub release after all checks pass
  * 
  * Usage: npm run pre-release -- X.Y.Z
  * Example: npm run pre-release -- 5.0.0
@@ -32,16 +32,14 @@ if (!version) {
     process.exit(1);
 }
 
-// Support both formats: 1.3.17 and v1.3.17
-const versionRegex = /^v?\d+\.\d+\.\d+$/;
+const versionRegex = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 if (!versionRegex.test(version)) {
-    console.error('❌ Version must be in format X.Y.Z or vX.Y.Z');
+    console.error('❌ Version must be in format X.Y.Z');
     process.exit(1);
 }
 
-// Normalize version (remove 'v' prefix if present for consistency)
-const cleanVersion = version.replace(/^v/, '');
-const tagName = cleanVersion;  // or use `v${cleanVersion}` if you prefer v-prefix
+const cleanVersion = version;
+const tagName = cleanVersion;
 let tagCreated = false;
 
 // Get current version from manifest.json for comparison
@@ -111,14 +109,12 @@ try {
     
     // Push the tag to trigger GitHub Actions
     console.log('\n📤 Pushing tag to remote...');
-    execSync(`git push origin ${tagName}`, { stdio: 'inherit' });
+    execSync(`git push origin refs/tags/${tagName}`, { stdio: 'inherit' });
     console.log(`✅ Pushed tag ${tagName} to remote`);
     
     console.log(`\n🎉 Release tag ${cleanVersion} created successfully!`);
     console.log('\n📝 Next steps:');
-    console.log('1. ⚙️  GitHub Actions will build and create a DRAFT release');
-    console.log('2. 👀 Review the draft release on GitHub');
-    console.log('3. 📢 Publish only after reviewing artifacts, notices, and release notes');
+    console.log('GitHub Actions will publish the release once the build, tests, audit, and attachment checks pass.');
     console.log('\n🔗 View the workflow at:');
     console.log(`   https://github.com/RandyAllenEEE/obsidian-image-assistant/actions`);
     

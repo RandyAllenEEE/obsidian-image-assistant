@@ -17,7 +17,8 @@ export default defineConfig({
     
     // Coverage configuration
     coverage: {
-      provider: 'v8',
+      provider: 'custom',
+      customProviderModule: './scripts/coverage-v8-lines.mjs',
       reporter: ['text', 'json', 'html', 'lcov'],
       reportsDirectory: './coverage',
       include: [

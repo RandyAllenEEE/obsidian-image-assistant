@@ -53,9 +53,9 @@ The vendored file differs from the upstream blob only by normalization of 1,762 
 
 The production bundle contains the following pinned packages:
 
-- `ai` 6.0.100
-- `@ai-sdk/provider` 3.0.8
-- `@ai-sdk/provider-utils` 4.0.15
+- `ai` 6.0.333
+- `@ai-sdk/provider` 3.0.19
+- `@ai-sdk/provider-utils` 4.0.67
 
 No local changes are made to their source before esbuild tree-shakes, bundles, and minifies the modules used by Image Assistant. The Apache License 2.0 text and upstream copyright notice are reproduced in `licenses/Apache-2.0.txt`.
 
@@ -69,10 +69,9 @@ The following pinned dependencies also have non-zero bytes in the production bun
 | `@tokenizer/inflate` | 0.4.1 | MIT |
 | `cross-spawn` | 7.0.6 | MIT |
 | `debug` | 4.4.3 | MIT |
-| `eventsource-parser` | 3.1.0 | MIT |
+| `eventsource-parser` | 3.1.1 | MIT |
 | `fabric` | 7.4.0 | MIT |
 | `file-type` | 21.3.4 | MIT |
-| `has-flag` | 4.0.0 | MIT |
 | `ieee754` | 1.2.1 | BSD-3-Clause |
 | `image-type` | 6.1.0 | MIT |
 | `isexe` | 2.0.0 | ISC |
@@ -83,11 +82,10 @@ The following pinned dependencies also have non-zero bytes in the production bun
 | `shebang-command` | 2.0.0 | MIT |
 | `shebang-regex` | 3.0.0 | MIT |
 | `strtok3` | 10.3.5 | MIT |
-| `supports-color` | 7.2.0 | MIT |
 | `token-types` | 6.1.2 | MIT |
 | `uint8array-extras` | 1.5.0 | MIT |
 | `which` | 2.0.2 | ISC |
-| `zod` | 4.4.3 | MIT |
+| `zod` | 4.6.7 | MIT |
 
 ## Obtaining source for a released build
 
