@@ -8,6 +8,8 @@ import { findFfmpegExecutablePath, normalizeExecutablePath } from "../../utils/f
 import { addInfoIcon } from "../../utils/settingInfo";
 import { AvailableVariablesModal } from "../SettingsModals";
 
+const localProcessingPanelId = "image-assistant-local-processing-panel";
+
 interface RenderContext {
     plugin: ImageConverterPlugin;
     containerEl: HTMLElement;
@@ -21,7 +23,14 @@ export function renderLocalProcessingSection(context: RenderContext): void {
 
     const wrapper = context.containerEl.createDiv("image-converter-tab-content-wrapper");
     renderTabs(wrapper, context);
-    const form = wrapper.createDiv("image-converter-local-processing-form");
+    const form = wrapper.createDiv({
+        cls: "image-converter-local-processing-form",
+        attr: {
+            id: localProcessingPanelId,
+            role: "tabpanel",
+            "aria-labelledby": `image-assistant-tab-${context.activeTab}`
+        }
+    });
 
     switch (context.activeTab) {
         case "folder":
@@ -43,7 +52,7 @@ export function renderLocalProcessingSection(context: RenderContext): void {
 }
 
 function renderTabs(container: HTMLElement, context: RenderContext): void {
-    const tabs = container.createDiv("image-converter-setting-tabs");
+    const tabs = container.createDiv({ cls: "image-converter-setting-tabs", attr: { role: "tablist" } });
     const tabDefs: Array<[RenderContext["activeTab"], string, string]> = [
         ["folder", "folder", t("TAB_FOLDER")],
         ["filename", "pencil", t("TAB_FILENAME")],
@@ -52,18 +61,55 @@ function renderTabs(container: HTMLElement, context: RenderContext): void {
         ["resize", "frame", t("TAB_EMBED_SIZE")],
     ];
 
-    for (const [id, icon, label] of tabDefs) {
-        const tab = tabs.createDiv(`image-converter-tab image-converter-tab-${id}`);
-        tab.setAttr("aria-label", label);
+    const selectTab = (id: RenderContext["activeTab"]): void => {
+        if (context.activeTab === id) return;
+        const doc = container.ownerDocument;
+        context.setActiveTab(id);
+        context.refreshDisplay();
+        doc.getElementById(`image-assistant-tab-${id}`)?.focus();
+    };
+
+    tabDefs.forEach(([id, icon, label], index) => {
+        const active = context.activeTab === id;
+        const tab = tabs.createEl("button", {
+            cls: `image-converter-tab image-converter-tab-${id}`,
+            attr: {
+                id: `image-assistant-tab-${id}`,
+                type: "button",
+                role: "tab",
+                tabindex: active ? "0" : "-1",
+                "aria-selected": String(active),
+                "aria-controls": localProcessingPanelId
+            }
+        });
         const iconEl = tab.createSpan({ cls: "image-converter-tab-icon" });
+        iconEl.setAttr("aria-hidden", "true");
         setIcon(iconEl, icon);
         tab.createSpan({ text: label, cls: "image-converter-tab-label" });
-        if (context.activeTab === id) tab.addClass("image-converter-tab-active");
-        tab.onclick = () => {
-            context.setActiveTab(id);
-            context.refreshDisplay();
-        };
-    }
+        tab.toggleClass("image-converter-tab-active", active);
+        tab.addEventListener("click", () => selectTab(id));
+        tab.addEventListener("keydown", event => {
+            let next: number;
+            switch (event.key) {
+                case "ArrowLeft":
+                    next = (index - 1 + tabDefs.length) % tabDefs.length;
+                    break;
+                case "ArrowRight":
+                    next = (index + 1) % tabDefs.length;
+                    break;
+                case "Home":
+                    next = 0;
+                    break;
+                case "End":
+                    next = tabDefs.length - 1;
+                    break;
+                default:
+                    return;
+            }
+            event.preventDefault();
+            selectTab(tabDefs[next][0]);
+        });
+    });
 }
 
 function renderFolder(container: HTMLElement, context: RenderContext): void {

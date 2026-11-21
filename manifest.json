@@ -1,7 +1,7 @@
 {
   "id": "obsidian-image-assistant",
   "name": "Image Assistant",
-  "version": "6.0.1",
+  "version": "6.0.2",
   "minAppVersion": "1.13.4",
   "description": "Process images and create editable Draw.io or Excalidraw drawings in Obsidian.",
   "author": "RandyAllen",

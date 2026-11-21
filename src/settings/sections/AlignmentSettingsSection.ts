@@ -1,3 +1,4 @@
+import { createSettingsList } from "../settings-list";
 import { Setting, setIcon, Notice } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
@@ -10,7 +11,7 @@ export function renderAlignmentSettingsSection(
     refreshDisplay: () => void
 ): void {
     // --- Image Alignment Settings Section ---
-    const imageAlignmentSection = containerEl.createDiv("image-converter-settings-section");
+    const imageAlignmentSection = createSettingsList(containerEl).createDiv("image-converter-settings-section");
     // Add marker class for potential CSS styling
     // imageAlignmentSection.addClass("image-alignment-settings-section");
 
@@ -42,7 +43,7 @@ export function renderAlignmentSettingsSection(
     imageAlignmentSection.prepend(headerSetting.settingEl);
 
     // Style the header
-    headerSetting.settingEl.addClass("settings-section-header");
+    headerSetting.settingEl.addClass("settings-section-header", "assistant-settings-section-header");
     headerSetting.settingEl.style.cursor = "pointer";
     headerSetting.settingEl.style.alignItems = "center"; // Force vertical center alignment
 

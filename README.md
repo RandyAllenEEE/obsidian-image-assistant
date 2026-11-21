@@ -22,6 +22,10 @@
 
 ---
 
+## What's New in v6.0.2
+
+Align the settings layout and keep short drawing dropdowns on the same row in narrow windows. Use Obsidian search in the variable browser and keep long variables within their columns. Support keyboard navigation of local-processing tabs and keyboard copying of variables.
+
 ## What's New in v6.0.1
 
 Draw.io reuses the same drawing tab during concurrent opens and reveals saved background tabs before accessing their editor. An export or save failure keeps the current draft available for manual retry. Drawing load failures show an error and release the editor iframe when one was created.

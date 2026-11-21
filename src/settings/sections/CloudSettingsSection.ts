@@ -1,3 +1,4 @@
+import { createSettingsList } from "../settings-list";
 import { Notice, Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
@@ -10,7 +11,7 @@ export function renderCloudSettingsSection(
     refreshDisplay: () => void
 ): HTMLElement {
     // --- Paste Handling Settings Section ---
-    const pasteHandlingSection = containerEl.createDiv("image-converter-settings-section");
+    const pasteHandlingSection = createSettingsList(containerEl).createDiv("image-converter-settings-section");
     pasteHandlingSection.addClass("paste-handling-settings-section");
 
     // Add Section Header with Dropdown
@@ -28,7 +29,7 @@ export function renderCloudSettingsSection(
                 refreshDisplay(); // Re-render to show/hide cloud settings
             })
         );
-    header.settingEl.addClass("settings-section-header");
+    header.settingEl.addClass("settings-section-header", "assistant-settings-section-header");
     header.settingEl.style.cursor = "pointer";
 
     // Add Chevron Icon

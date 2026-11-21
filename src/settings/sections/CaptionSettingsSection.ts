@@ -1,3 +1,4 @@
+import { createSettingsList } from "../settings-list";
 import { Notice, Setting, setIcon } from 'obsidian';
 import type ImageConverterPlugin from '../../main';
 import { t } from '../../lang/helpers';
@@ -49,7 +50,7 @@ export function renderCaptionSettingsSection(
     settingsUIState: SettingsUIState,
     refreshDisplay: () => void
 ): void {
-    const section = containerEl.createDiv('image-converter-settings-section');
+    const section = createSettingsList(containerEl).createDiv('image-converter-settings-section');
     section.addClass('image-caption-settings-section');
     const content = section.createDiv('settings-section-content');
 
@@ -66,7 +67,7 @@ export function renderCaptionSettingsSection(
             }));
 
     section.prepend(header.settingEl);
-    header.settingEl.addClass('settings-section-header');
+    header.settingEl.addClass('settings-section-header', 'assistant-settings-section-header');
     header.settingEl.style.cursor = 'pointer';
     const chevronContainer = header.nameEl.createSpan('settings-chevron-container');
     chevronContainer.style.marginRight = '8px';

@@ -1,4 +1,4 @@
-import { App, Modal, ButtonComponent, Notice } from "obsidian";
+import { App, Modal, ButtonComponent, Notice, SearchComponent } from "obsidian";
 import {
     VariableProcessor,
     type VariableInfo
@@ -85,7 +85,6 @@ export class ConfirmDialog extends Modal {
 export class AvailableVariablesModal extends Modal {
     private variableProcessor: VariableProcessor;
     private modalClass = "image-converter-available-variables-modal";
-    private searchInput: HTMLInputElement;
     private categorizedVariables: Record<string, VariableInfo[]>;
     private contentContainer: HTMLElement;
 
@@ -99,21 +98,11 @@ export class AvailableVariablesModal extends Modal {
         const { contentEl } = this;
         contentEl.createEl("h2", { text: t("AVAILABLE_VARIABLES_TITLE") });
 
-        // Create search container
-        const searchContainer = contentEl.createEl("div", { cls: "variable-search-container" });
-
-        // Create search input
-        this.searchInput = searchContainer.createEl("input", {
-            type: "text",
-            placeholder: t("SEARCH_VARIABLES_PLACEHOLDER"),
-            cls: "variable-search-input"
-        });
-
-        // Add search icon (optional visual enhancement)
-        searchContainer.createEl("span", {
-            text: "🔍",
-            cls: "variable-search-icon"
-        });
+        const searchLabel = t("SEARCH_VARIABLES_PLACEHOLDER");
+        const search = new SearchComponent(contentEl)
+            .setPlaceholder(searchLabel)
+            .onChange(value => this.renderVariables(value.trim()));
+        search.inputEl.setAttr("aria-label", searchLabel);
 
         // Create content container for the variables
         this.contentContainer = contentEl.createEl("div", { cls: "variable-content-container" });
@@ -124,13 +113,7 @@ export class AvailableVariablesModal extends Modal {
         // Initial render
         this.renderVariables();
 
-        // Add search functionality
-        this.searchInput.addEventListener("input", () => {
-            this.handleSearch();
-        });
-
-        // Focus on search input
-        this.searchInput.focus();
+        search.inputEl.focus();
     }
 
     private renderVariables(searchTerm = "") {
@@ -173,13 +156,17 @@ export class AvailableVariablesModal extends Modal {
 
                     // Highlight search term in the content
                     const nameCell = row.createEl("td", { cls: "variable-name" });
-                    nameCell.innerHTML = this.highlightSearchTerm(variable.name, searchTerm);
+                    const copyButton = nameCell.createEl("button", {
+                        cls: "variable-copy-button",
+                        attr: { type: "button", title: t("TOOLTIP_COPY_VARIABLE") }
+                    });
+                    this.renderHighlightedText(copyButton, variable.name, searchTerm);
 
                     const descCell = row.createEl("td", { cls: "variable-description" });
-                    descCell.innerHTML = this.highlightSearchTerm(variable.description, searchTerm);
+                    this.renderHighlightedText(descCell, variable.description, searchTerm);
                     const exampleCell = row.createEl("td", { cls: "variable-example" });
-                    exampleCell.innerHTML = this.highlightSearchTerm(variable.example, searchTerm);                    // Add click handler to copy variable name
-                    nameCell.addEventListener("click", async () => {
+                    this.renderHighlightedText(exampleCell, variable.example, searchTerm);
+                    copyButton.addEventListener("click", async () => {
                         try {
                             await navigator.clipboard.writeText(variable.name);
 
@@ -187,12 +174,11 @@ export class AvailableVariablesModal extends Modal {
                             nameCell.classList.add("variable-name-copied");
 
                             // Show "Copied!" text temporarily
-                            const originalText = nameCell.textContent;
-                            nameCell.textContent = t("MSG_COPIED");
+                            copyButton.setText(t("MSG_COPIED"));
 
                             setTimeout(() => {
                                 nameCell.classList.remove("variable-name-copied");
-                                nameCell.textContent = originalText;
+                                this.renderHighlightedText(copyButton, variable.name, searchTerm);
                             }, 800);
                         } catch (err) {
                             console.error("Failed to copy to clipboard:", err);
@@ -203,7 +189,6 @@ export class AvailableVariablesModal extends Modal {
                             }, 500);
                         }
                     });
-                    nameCell.title = t("TOOLTIP_COPY_VARIABLE");
                 }
             }
         }
@@ -217,16 +202,18 @@ export class AvailableVariablesModal extends Modal {
         }
     }
 
-    private highlightSearchTerm(text: string, searchTerm: string): string {
-        if (!searchTerm) return text;
+    private renderHighlightedText(element: HTMLElement, text: string, searchTerm: string): void {
+        if (!searchTerm) {
+            element.setText(text);
+            return;
+        }
 
         const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-        return text.replace(regex, '<mark>$1</mark>');
-    }
-
-    private handleSearch() {
-        const searchTerm = this.searchInput.value.trim();
-        this.renderVariables(searchTerm);
+        element.empty();
+        text.split(regex).forEach((part, index) => {
+            if (index % 2 === 0) element.appendText(part);
+            else element.createEl("mark", { text: part });
+        });
     }
 
     onClose() {

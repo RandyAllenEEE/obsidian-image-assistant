@@ -1,3 +1,4 @@
+import { createSettingsList } from "../settings-list";
 import { Setting, setIcon } from "obsidian";
 import ImageConverterPlugin from "../../main";
 import { t } from "../../lang/helpers";
@@ -9,7 +10,7 @@ export function renderOtherSettingsSection(
     settingsUIState: SettingsUIState,
     refreshDisplay: () => void
 ): void {
-    const otherSection = containerEl.createDiv("image-converter-settings-section");
+    const otherSection = createSettingsList(containerEl).createDiv("image-converter-settings-section");
     otherSection.addClass("other-settings-section");
 
     const settingsContentWrapper = otherSection.createDiv("settings-section-content");
@@ -23,7 +24,7 @@ export function renderOtherSettingsSection(
     otherSection.prepend(headerSetting.settingEl);
 
     // Style the header
-    headerSetting.settingEl.addClass("settings-section-header");
+    headerSetting.settingEl.addClass("settings-section-header", "assistant-settings-section-header");
     headerSetting.settingEl.style.cursor = "pointer";
 
     // Add Chevron Icon

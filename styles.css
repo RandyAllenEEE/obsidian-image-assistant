@@ -1,15 +1,6 @@
 /* --- Image Converter Settings --- */
-/* Remove X icon and get use all available space*/
 .image-assistant-settings-tab {
-    padding: 20px;
     position: relative;
-    /* Relative positioning for child elements */
-    height: 100%;
-    /* Occupy full height */
-    overflow: auto;
-    /* Enable scrolling if content overflows */
-    scrollbar-gutter: stable;
-    box-sizing: border-box;
 }
 
 .image-converter-setting-info-icon {
@@ -195,22 +186,24 @@
     font-weight: 600;
 }
 
-.image-converter-available-variables-modal td:first-child {
-    font-family: monospace;
-    font-weight: 600;
+.image-converter-available-variables-modal .variable-copy-button {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin: 0;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
     color: var(--text-accent);
-    white-space: nowrap;
+    font-family: var(--font-monospace);
+    font-size: var(--font-ui-small, 13px);
+    font-weight: var(--font-semibold);
+    text-align: start;
+    white-space: normal;
+    overflow-wrap: anywhere;
     cursor: pointer;
-    transition: all 0.15s ease;
-}
-
-.image-converter-available-variables-modal td:first-child:hover {
-    background-color: var(--background-modifier-hover);
-}
-
-.image-converter-available-variables-modal td:nth-child(2) {
-    /* width: 60%; */
-    /* Adjust width ratio as needed */
 }
 
 .image-converter-available-variables-modal td:last-child {
@@ -218,16 +211,15 @@
     color: var(--text-muted);
 }
 
-/* Variable copy feedback animations */
-.variable-name-copied {
-    background-color: var(--interactive-accent) !important;
-    color: var(--text-on-accent) !important;
-    transform: scale(1.05) !important;
+/* Variable copy feedback */
+.image-converter-available-variables-modal .variable-name-copied .variable-copy-button {
+    background-color: var(--interactive-accent);
+    color: var(--text-on-accent);
 }
 
-.variable-name-copy-error {
-    background-color: var(--background-modifier-error) !important;
-    color: var(--text-error) !important;
+.image-converter-available-variables-modal .variable-name-copy-error .variable-copy-button {
+    background-color: var(--background-modifier-error);
+    color: var(--text-error);
 }
 
 
@@ -2402,97 +2394,6 @@
 }
 
 
-/* ========================================================================== */
-/*               GENERIC SETTINGS SECTION STYLES (Refactored)                  */
-/* ========================================================================== */
-
-/* --- Main Section Container --- */
-.image-converter-settings-section {
-    margin-bottom: 20px;
-    border: 1px solid var(--background-modifier-border);
-    border-radius: 6px;
-    padding: 10px;
-    background-color: var(--background-primary-alt);
-}
-
-/* --- Collapsible Header --- */
-.image-converter-settings-section .settings-section-header {
-    margin: -10px -10px 10px -10px;
-    /* Offset padding to fill width */
-    padding: 10px 15px;
-    /* border-bottom: 1px solid transparent; */
-    border-bottom: 1px solid var(--background-modifier-border);
-    /* Always show border */
-    transition: background-color 0.2s ease;
-}
-
-/* Only add border if content is visible (not collapsed) */
-.image-converter-settings-section.settings-section-collapsed .settings-section-header {
-    border-bottom-color: transparent;
-    margin-bottom: -10px;
-    /* pull bottom up when collapsed */
-}
-
-/* Hover effect for header */
-.image-converter-settings-section .settings-section-header:hover {
-    background-color: var(--background-modifier-hover);
-}
-
-/* --- Header Flex Alignment (Fix for Chevron + Title) --- */
-.image-converter-settings-section .settings-section-header .setting-item-info {
-    flex: 1 1 auto;
-    display: flex;
-    align-items: center;
-    /* Vertical center alignment */
-}
-
-/* Ensure Name element (containing chevron + text) wraps nicely */
-.image-converter-settings-section .settings-section-header .setting-item-name {
-    display: inline-flex;
-    align-items: center;
-    font-size: 1.1em;
-    font-weight: 600;
-}
-
-/* --- Chevron Container --- */
-.image-converter-settings-section .settings-chevron-container {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    margin-right: 8px;
-}
-
-.image-converter-settings-section .settings-chevron-container .settings-section-chevron-icon {
-    /* Style defaults for setIcon result */
-    display: flex;
-}
-
-
-/* --- Content Wrapper & Indentation --- */
-.image-converter-settings-section .settings-section-content {
-    padding-left: 5px;
-    /* Slight indent for better hierarchy */
-    margin-top: 10px;
-}
-
-/* Clean up child settings items */
-.image-converter-settings-section .settings-section-content .setting-item {
-    border-bottom: 1px solid var(--background-modifier-border);
-}
-
-.image-converter-settings-section .settings-section-content .setting-item:last-child {
-    border-bottom: none;
-}
-
-/* --- SPECIFIC FIXES (Overriding previous disparate styles) --- */
-.other-settings-section,
-.unused-file-cleaner-settings-section,
-.ocr-settings-section {
-    /* Ensure they share the common styles */
-}
-
 /* --- Context Menu Alignment Buttons --- */
 .image-converter-alignment-group {
     /* padding-top: 5px; */
@@ -3123,4 +3024,258 @@
     .image-assistant-next-ai-settings-section input[type="text"] {
         min-width: 0;
     }
+}
+
+/* Assistant settings presentation */
+.image-assistant-settings-tab {
+  container: assistant-settings / inline-size;
+  --assistant-settings-radius: var(--radius-l, 12px);
+  --assistant-settings-background: var(--color-base-10, var(--background-secondary));
+  --assistant-settings-divider: var(--background-modifier-border);
+}
+
+.image-assistant-settings-tab .assistant-settings-group {
+  margin: 0 0 8px;
+}
+
+.image-assistant-settings-tab .assistant-settings-list {
+  background: var(--assistant-settings-background);
+  border: 0;
+  border-radius: var(--assistant-settings-radius);
+}
+
+.image-assistant-settings-tab :is(.setting-item:not(.setting-item-heading), .assistant-settings-section-header) {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 14px;
+}
+
+.image-assistant-settings-tab .assistant-settings-list .setting-item:not(.setting-item-heading) {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.image-assistant-settings-tab .assistant-settings-list .setting-item:not(.setting-item-heading) + .setting-item:not(.setting-item-heading) {
+  border-top: 1px solid var(--assistant-settings-divider);
+}
+
+.image-assistant-settings-tab .setting-item > .setting-item-info {
+  min-width: 0;
+}
+
+.image-assistant-settings-tab .setting-item > .setting-item-control {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  width: auto;
+  min-width: 0;
+  max-width: 50%;
+  gap: 6px;
+}
+
+.image-assistant-settings-tab .setting-item:not(.setting-item-heading):not(.assistant-settings-section-header) .setting-item-name {
+  color: var(--text-normal);
+  font-size: var(--font-ui-small, 13px);
+  font-weight: var(--font-normal, 400);
+}
+
+.image-assistant-settings-tab .setting-item-description {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 12px);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.image-assistant-settings-tab :is(h3, .assistant-settings-heading, .setting-item-heading:not(.assistant-settings-section-header)) {
+  margin: 16px 0 8px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium, 15px);
+  font-weight: var(--font-semibold, 600);
+}
+
+.image-assistant-settings-tab > :is(.assistant-settings-group, .assistant-settings-content):first-child > :is(.setting-item-heading, .assistant-settings-heading):first-child {
+  margin-block-start: 0;
+}
+
+.image-assistant-settings-tab .setting-item-heading:not(.assistant-settings-section-header) .setting-item-name {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.image-assistant-settings-tab .assistant-settings-section-header,
+.image-assistant-settings-tab .assistant-settings-section-header .setting-item-name {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium, 15px);
+  font-weight: var(--font-semibold, 600);
+}
+
+.image-assistant-settings-tab .assistant-settings-section-header {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  border: 0;
+  border-radius: var(--assistant-settings-radius);
+  background: transparent;
+}
+
+.image-assistant-settings-tab .assistant-settings-section-header:hover {
+  background: var(--background-modifier-hover);
+}
+
+.image-assistant-settings-tab summary.assistant-settings-section-header {
+  justify-content: flex-start;
+  list-style: none;
+  cursor: pointer;
+}
+
+.image-assistant-settings-tab summary.assistant-settings-section-header > :last-child:has(.checkbox-container) {
+  margin-inline-start: auto;
+}
+
+.image-assistant-settings-tab summary.assistant-settings-section-header::-webkit-details-marker {
+  display: none;
+}
+
+.image-assistant-settings-tab :is(summary.assistant-settings-section-header, .assistant-work-section-header .setting-item-name)::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  margin-inline-end: 2px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(-45deg);
+}
+
+.image-assistant-settings-tab details[open] > summary.assistant-settings-section-header::before,
+.image-assistant-settings-tab .assistant-work-section-header:has(+ .assistant-work-group-body[style*="display: block"]) .setting-item-name::before {
+  transform: rotate(45deg);
+}
+
+.image-assistant-settings-tab summary.assistant-settings-section-header .setting-item > .setting-item-control {
+  max-width: none;
+}
+
+.image-assistant-settings-tab .assistant-settings-section-header > :is(strong, .settings-section-title) {
+  flex: 1 1 auto;
+}
+
+.image-assistant-settings-tab .assistant-settings-section-header strong {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.image-assistant-settings-tab .assistant-module-frame {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.image-assistant-settings-tab .assistant-module-frame > div {
+  padding: 0 10px 8px;
+  border-top: 1px solid var(--assistant-settings-divider);
+}
+
+.image-assistant-settings-tab :is(input, textarea, select) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.image-assistant-settings-tab :is(button, input, select, textarea, summary, .clickable-icon, .checkbox-container):focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+@container assistant-settings (max-width: 450px) {
+  .image-assistant-settings-tab .setting-item:not(.image-assistant-drawing-settings-section > .settings-section-header):has(.setting-item-control :is(input[type="text"], input[type="password"], textarea, select:not(.is-measuring))) {
+    flex-wrap: wrap;
+  }
+
+  .image-assistant-settings-tab .setting-item:not(.image-assistant-drawing-settings-section > .settings-section-header):has(.setting-item-control :is(input[type="text"], input[type="password"], textarea, select:not(.is-measuring))) > .setting-item-control {
+    justify-content: flex-start;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .image-assistant-settings-tab .setting-item-control :is(input[type="text"], input[type="password"], textarea) {
+    flex: 1 1 120px;
+  }
+}
+
+.image-assistant-settings-tab .image-converter-settings-section > .settings-section-content {
+  padding: 0 10px 8px;
+  border-top: 1px solid var(--assistant-settings-divider);
+}
+
+.image-assistant-settings-tab .settings-section-header .setting-item-name {
+  display: flex;
+  align-items: center;
+}
+
+.image-assistant-settings-tab .settings-chevron-container svg {
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+}
+
+.image-assistant-settings-tab .image-converter-setting-tabs {
+  flex-wrap: wrap;
+}
+
+.image-assistant-settings-tab .image-converter-tab {
+  height: auto;
+  background: transparent;
+  box-shadow: none;
+  white-space: normal;
+}
+
+.image-assistant-settings-tab .image-converter-tab:focus-visible {
+  outline-offset: -2px;
+}
+
+.image-converter-available-variables-modal .search-input-container input {
+  width: 100%;
+}
+
+.image-converter-available-variables-modal .variable-table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.image-converter-available-variables-modal .variable-table :is(th, td) {
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+}
+
+.image-converter-available-variables-modal .variable-table td.variable-name {
+  padding: 0;
+}
+
+.image-converter-available-variables-modal .variable-table th:nth-child(2) {
+  width: 42%;
+}
+
+.image-converter-available-variables-modal .variable-table th:nth-child(3) {
+  width: 25%;
+}
+
+.image-converter-available-variables-modal input:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.image-converter-available-variables-modal .variable-copy-button:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
 }

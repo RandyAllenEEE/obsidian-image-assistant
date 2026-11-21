@@ -1,5 +1,11 @@
 # Changelog
 
+## 6.0.2 - 2026-11-22
+
+- Align the settings layout and keep short drawing dropdowns on the same row in narrow windows.
+- Use Obsidian search in the variable browser and keep long variables within their columns.
+- Support keyboard navigation of local-processing tabs and keyboard copying of variables.
+
 ## 6.0.1 - 2026-11-19
 
 - Reuse open and deferred Draw.io tabs and avoid opening multiple editors for the same drawing.

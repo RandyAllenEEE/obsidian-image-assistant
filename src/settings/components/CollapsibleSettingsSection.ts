@@ -1,3 +1,4 @@
+import { createSettingsList } from "../settings-list";
 import { Setting, setIcon } from "obsidian";
 
 export interface CollapsibleSettingsSectionOptions {
@@ -20,13 +21,13 @@ export function createCollapsibleSettingsSection(
     containerEl: HTMLElement,
     options: CollapsibleSettingsSectionOptions
 ): CollapsibleSettingsSection {
-    const sectionEl = containerEl.createDiv("image-converter-settings-section");
+    const sectionEl = createSettingsList(containerEl).createDiv("image-converter-settings-section");
     if (options.sectionClass) sectionEl.addClass(options.sectionClass);
 
     const header = new Setting(sectionEl)
         .setName(options.title)
         .setHeading();
-    header.settingEl.addClass("settings-section-header");
+    header.settingEl.addClass("settings-section-header", "assistant-settings-section-header");
     header.settingEl.style.cursor = "pointer";
 
     const chevronContainer = header.nameEl.createSpan("settings-chevron-container");
