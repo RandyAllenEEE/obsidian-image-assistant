@@ -103,46 +103,45 @@ export class DrawioEditorView extends FileView {
         this.contentEl.empty();
         this.contentEl.addClass("image-assistant-drawing-view");
         this.renderShell();
-        this.baseline = await this.app.vault.read(file);
-        let editorSource: string;
+        const readiness = this.editorReadyPromise;
+        const isCurrentLoad = () => this.editorReadyPromise === readiness
+            && this.resolveEditorReady !== null && !this.closing;
         try {
             if (!this.provider.supports(file)) throw new Error("This is not a supported Draw.io file.");
-            if (isDrawioSvgPath(file.path)) {
-                editorSource = extractDrawioModelFromSvg(this.baseline);
-            } else {
-                assertValidDiagramXml(this.baseline);
-                editorSource = this.baseline;
+            const baseline = await this.app.vault.read(file);
+            if (!isCurrentLoad()) return;
+
+            const isSvg = isDrawioSvgPath(file.path);
+            const editorSource = isSvg ? extractDrawioModelFromSvg(baseline) : baseline;
+            if (!isSvg) assertValidDiagramXml(editorSource);
+            this.baseline = baseline;
+            this.latestRawXml = editorSource;
+            this.latestRawXmlRevision = 0;
+            if (isSvg) {
+                this.lastValidatedSvg = baseline;
+                this.lastValidatedSvgRevision = 0;
             }
-        } catch (error) {
-            this.setStatus(t("DRAWING_STATUS_UNAVAILABLE"));
-            this.showFatalError(error);
-            this.resolveEditorReady?.(false);
-            this.resolveEditorReady = null;
-            return;
-        }
-        this.latestRawXml = editorSource;
-        this.latestRawXmlRevision = 0;
-        if (isDrawioSvgPath(file.path)) {
-            this.lastValidatedSvg = this.baseline;
-            this.lastValidatedSvgRevision = 0;
-        }
-        this.port = this.provider.createEditor(this.editorContainer?.ownerDocument);
-        this.appearanceKey = this.provider.getAppearanceKey?.(this.editorContainer?.ownerDocument) ?? "";
-        this.removeDirtyListener = this.bindDirtyListener(this.port);
-        try {
+
+            const ownerDocument = this.editorContainer?.ownerDocument;
+            const port = this.provider.createEditor(ownerDocument);
+            this.port = port;
+            this.appearanceKey = this.provider.getAppearanceKey?.(ownerDocument) ?? "";
             this.setStatus(t("DRAWING_STATUS_CONNECTING"));
-            await this.port.mount(this.editorContainer!);
+            await port.mount(this.editorContainer!);
+            if (!isCurrentLoad()) return;
             this.setStatus(t("DRAWING_STATUS_LOADING"));
-            await this.port.load(editorSource);
+            await port.load(editorSource);
+            if (!isCurrentLoad()) return;
+            this.removeDirtyListener = this.bindDirtyListener(port);
             this.setStatus(t("DRAWING_STATUS_SAVED"));
             this.refreshNextAi();
             this.resolveEditorReady?.(true);
             this.resolveEditorReady = null;
         } catch (error) {
+            if (!isCurrentLoad()) return;
+            this.disposeEditor();
             this.setStatus(t("DRAWING_STATUS_UNAVAILABLE"));
             this.showFatalError(error);
-            this.resolveEditorReady?.(false);
-            this.resolveEditorReady = null;
         }
     }
 
@@ -312,12 +311,16 @@ export class DrawioEditorView extends FileView {
         if (this.revision === this.savedRevision) return;
         const requestedRevision = this.revision;
         this.savePromise = this.performSave(requestedRevision)
-            .finally(() => {
-                this.savePromise = null;
-                if (!this.closing && !this.conflicted && this.revision !== this.savedRevision) {
+            .then(() => {
+                // Only queue edits that arrived during a successful save. An
+                // export or I/O failure leaves the draft available for a retry.
+                if (!this.closing && !this.conflicted
+                    && this.savedRevision >= requestedRevision
+                    && this.revision !== this.savedRevision) {
                     this.scheduleSave();
                 }
-            });
+            })
+            .finally(() => { this.savePromise = null; });
         return this.savePromise;
     }
 
@@ -328,7 +331,7 @@ export class DrawioEditorView extends FileView {
             attr: { "aria-label": t("DRAWING_SAVE") }
         });
         setIcon(saveButton, "save");
-        saveButton.addEventListener("click", () => void this.flush());
+        saveButton.addEventListener("click", () => this.saveFromUi());
         const exportButton = toolbar.createEl("button", {
             cls: "clickable-icon image-assistant-drawing-export",
             attr: { "aria-label": t("DRAWING_EXPORT_ACTION") }
@@ -366,8 +369,13 @@ export class DrawioEditorView extends FileView {
         if (this.saveTimer) clearTimeout(this.saveTimer);
         this.saveTimer = setTimeout(() => {
             this.saveTimer = null;
-            void this.flush();
+            this.saveFromUi();
         }, SAVE_DEBOUNCE_MS);
+    }
+
+    private saveFromUi(): void {
+        // performSave has already shown the failure in the toolbar and a Notice.
+        void this.flush().catch(() => undefined);
     }
 
     private async exportDrawing(format: DrawingNativeExportFormat): Promise<void> {

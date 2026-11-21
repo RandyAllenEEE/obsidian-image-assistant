@@ -140,6 +140,9 @@ export class ImageStateManager {
         this.plugin.registerEvent(
             this.app.workspace.on('layout-change', () => {
                 this.syncObservers();
+                // Switching modes can reveal Reading Mode DOM cached before
+                // this delayed plugin registered its Markdown postprocessor.
+                this.reconcileExistingReadingViews();
                 this.scheduleAllLayouts(2);
             })
         );

@@ -49,6 +49,7 @@ export class DrawingModuleController {
         cancelled: boolean;
     }>();
     private disablePromise: Promise<void> | null = null;
+    private readonly drawioOpens = new Map<TFile, Promise<DrawioEditorView | null>>();
 
     constructor(private readonly plugin: ImageConverterPlugin) {
         this.files = new DrawingFileService(plugin);
@@ -157,22 +158,35 @@ export class DrawingModuleController {
         }
     }
 
-    private async openDrawioFile(file: TFile): Promise<DrawioEditorView | null> {
-        if (!this.provider.supports(file)) return null;
-        const existing = this.plugin.app.workspace.getLeavesOfType(DRAWING_VIEW_TYPE)
+    private openDrawioFile(file: TFile): Promise<DrawioEditorView | null> {
+        if (!this.provider.supports(file)) return Promise.resolve(null);
+        const pending = this.drawioOpens.get(file);
+        if (pending) return pending;
+
+        const operation = this.revealDrawioFile(file)
+            .finally(() => { this.drawioOpens.delete(file); });
+        this.drawioOpens.set(file, operation);
+        return operation;
+    }
+
+    private async revealDrawioFile(file: TFile): Promise<DrawioEditorView | null> {
+        const workspace = this.plugin.app.workspace;
+        const existing = workspace.getLeavesOfType(DRAWING_VIEW_TYPE)
             .find(leaf => leaf.view instanceof DrawioEditorView
-                && leaf.view.file?.path === file.path);
+                ? leaf.view.file?.path === file.path
+                : leaf.isDeferred && leaf.getViewState().state?.file === file.path);
         if (existing) {
-            this.plugin.app.workspace.revealLeaf(existing);
-            return existing.view as DrawioEditorView;
+            await workspace.revealLeaf(existing);
+            return existing.view instanceof DrawioEditorView ? existing.view : null;
         }
-        const leaf = this.plugin.app.workspace.getLeaf("tab");
+
+        const leaf = workspace.getLeaf("tab");
         await leaf.setViewState({
             type: DRAWING_VIEW_TYPE,
             active: true,
             state: { file: file.path }
         });
-        this.plugin.app.workspace.revealLeaf(leaf);
+        await workspace.revealLeaf(leaf);
         return leaf.view instanceof DrawioEditorView ? leaf.view : null;
     }
 

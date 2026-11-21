@@ -432,6 +432,39 @@ describe('ImageStateManager pipe syntax integration', () => {
     manager.onunload();
   });
 
+  it('restores cached Reading Mode images after switching modes in the same leaf', () => {
+    const contentEl = document.body.appendChild(document.createElement('div'));
+    const image = contentEl.appendChild(document.createElement('img'));
+    image.setAttribute('alt', 'Cached caption|center');
+    let mode = 'source';
+    const view = {
+      contentEl,
+      getMode: () => mode,
+      editor: { getValue: vi.fn(() => ''), cm: { state: { field: vi.fn(() => false) } } }
+    };
+    const callbacks = new Map<string, () => void>();
+    const workspace = {
+      layoutReady: true,
+      getLeavesOfType: vi.fn(() => [{ view }]),
+      getActiveViewOfType: vi.fn(() => view),
+      on: vi.fn((event: string, callback: () => void) => {
+        callbacks.set(event, callback);
+        return {};
+      })
+    };
+    const manager = makeManager({ workspace });
+    (manager as any).plugin.registerEvent = vi.fn();
+    manager.start();
+    expect(manager.caption.renderImage).not.toHaveBeenCalled();
+
+    mode = 'preview';
+    callbacks.get('layout-change')?.();
+
+    expect(manager.caption.renderImage).toHaveBeenCalledWith(image, { captionText: 'Cached caption' });
+    manager.onunload();
+    contentEl.remove();
+  });
+
   it('delegates Source Mode cleanup without invoking image processing', () => {
     const contentEl = document.createElement('div');
     const image = contentEl.appendChild(document.createElement('img'));

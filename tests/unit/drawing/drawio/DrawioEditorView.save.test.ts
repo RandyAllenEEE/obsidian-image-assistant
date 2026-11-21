@@ -41,6 +41,32 @@ describe("DrawioEditorView atomic saves", () => {
         expect((view as any).savedRevision).toBe(2);
     });
 
+    it("stops after an autosave failure and saves the same draft on manual retry", async () => {
+        vi.useFakeTimers();
+        try {
+            const { view, files, port } = makeView();
+            port.export.mockRejectedValueOnce(new Error("temporary export failure"));
+
+            (view as any).scheduleSave();
+            await vi.advanceTimersByTimeAsync(2_300);
+
+            expect(port.export).toHaveBeenCalledOnce();
+            expect(files.save).not.toHaveBeenCalled();
+            expect((view as any).savedRevision).toBe(0);
+            expect((view as any).revision).toBe(1);
+
+            port.export.mockImplementation(async (format: string) =>
+                result(format === "xml" ? RAW_XML : SVG_2));
+            files.save.mockResolvedValue({ file: view.file, baseline: SVG_2, migrated: false });
+            await view.flush();
+
+            expect(files.save).toHaveBeenCalledOnce();
+            expect((view as any).savedRevision).toBe(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("creates a raw recovery when the first xmlsvg export fails during close", async () => {
         const { view, files, port } = makeView();
         port.export.mockImplementation(async (format: string) => {

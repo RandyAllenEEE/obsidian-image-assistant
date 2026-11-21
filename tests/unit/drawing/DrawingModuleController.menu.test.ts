@@ -78,6 +78,30 @@ describe("DrawingModuleController file menu fallback", () => {
         expect(commands.get("edit-drawio-diagram-at-cursor").editorCheckCallback(true, null, view)).toBe(true);
     });
 
+    it("reveals the saved deferred drawing instead of opening another editor", async () => {
+        const file = fakeTFile({ path: "assets/Flow.drawio.svg", extension: "svg" });
+        const state = { type: "image-assistant-drawing-view", state: { file: file.path } };
+        const view = Object.assign(Object.create(DrawioEditorView.prototype), { file });
+        const deferred = { view: {}, getViewState: () => state, isDeferred: true };
+        const revealLeaf = vi.fn(async () => { deferred.view = view; });
+        const getLeaf = vi.fn();
+        const workspace = fakeWorkspace() as any;
+        workspace.getLeavesOfType = vi.fn(() => [deferred]);
+        workspace.getLeaf = getLeaf;
+        workspace.revealLeaf = revealLeaf;
+        const settings = structuredClone(DEFAULT_SETTINGS);
+        settings.drawing.provider = "drawio";
+        const controller = new DrawingModuleController({
+            app: fakeApp({ workspace }),
+            settings
+        } as unknown as ConstructorParameters<typeof DrawingModuleController>[0]);
+
+        await expect(Promise.all([controller.openFile(file), controller.openFile(file)]))
+            .resolves.toEqual([view, view]);
+        expect(getLeaf).not.toHaveBeenCalled();
+        expect(revealLeaf).toHaveBeenCalledExactlyOnceWith(deferred);
+    });
+
     it("tests Draw.io with the standard embed init handshake", async () => {
         const workspace = fakeWorkspace() as any;
         const plugin = {

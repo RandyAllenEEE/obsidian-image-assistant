@@ -22,6 +22,10 @@
 
 ---
 
+## What's New in v6.0.1
+
+Draw.io reuses the same drawing tab during concurrent opens and reveals saved background tabs before accessing their editor. An export or save failure keeps the current draft available for manual retry. Drawing load failures show an error and release the editor iframe when one was created.
+
 ## What's New in v6.0.0
 
 Version 6.0.0 adds first-class drawing workflows and makes Obsidian's native image layout the single source of truth.
