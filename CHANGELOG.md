@@ -6,6 +6,8 @@
 - Use Obsidian search in the variable browser and keep long variables within their columns.
 - Support keyboard navigation of local-processing tabs and keyboard copying of variables.
 
+The release's `licenses-and-source.zip` contains the licenses, notices, and verified corresponding source for the bundled HEIC decoder.
+
 ## 6.0.1 - 2026-11-19
 
 - Reuse open and deferred Draw.io tabs and avoid opening multiple editors for the same drawing.

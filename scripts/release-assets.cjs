@@ -34,6 +34,8 @@ const sourceArchives = [
     }
 ];
 
+const complianceBundle = 'licenses-and-source.zip';
+
 function packageRelease(destination) {
     mkdirSync(dirname(destination), { recursive: true });
     const downloads = mkdtempSync(join(dirname(destination), 'image-release-sources-'));
@@ -51,9 +53,14 @@ function packageRelease(destination) {
         return file;
     });
 
+    const bundle = join(downloads, complianceBundle);
+    execFileSync('python', [
+        '.github/scripts/package-compliance.py', bundle, ...noticeAssets, ...verifiedSources
+    ], { stdio: 'inherit' });
+
     execFileSync(process.execPath, [
         '.github/scripts/release.mjs', 'stage', 'build', destination,
-        ...noticeAssets, ...verifiedSources
+        bundle
     ], { stdio: 'inherit' });
 }
 

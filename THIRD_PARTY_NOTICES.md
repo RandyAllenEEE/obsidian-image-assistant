@@ -26,7 +26,7 @@ heic-to 1.0.2 states that its embedded decoder was built from libheif 1.18.2. Th
 - libde265 1.0.15 corresponding source: https://github.com/strukturag/libde265/tree/v1.0.15
 - Image Assistant application source and build scripts: https://github.com/RandyAllenEEE/obsidian-image-assistant
 
-Each GitHub Release also attaches the following verified source archives beside the plugin binaries:
+The release's `licenses-and-source.zip` includes the following verified archives under `corresponding-source/`:
 
 - `heic-to-1.0.2.tgz`: SHA-256 `ac85610181bb8270faff5e7b5892da9b26131c476f823e695e5b0667675884e7`
 - `libheif-1.18.2.tar.gz`: SHA-256 `c4002a622bec9f519f29d84bfdc6024e33fd67953a5fb4dc2c2f11f67d5e45bf`

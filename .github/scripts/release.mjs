@@ -94,6 +94,10 @@ function publish(tag, directory) {
 
   const repo = process.env.GITHUB_REPOSITORY;
   const files = readdirSync(directory).sort();
+  const expected = [...pluginFiles, 'licenses-and-source.zip'].sort();
+  if (files.join('\n') !== expected.join('\n')) {
+    throw new Error('The release must contain the plugin files and licenses-and-source.zip');
+  }
   const localAssets = new Map(files.map((name) => {
     const bytes = readFileSync(join(directory, name));
     if (!bytes.length) throw new Error('Empty release attachment: ' + name);
